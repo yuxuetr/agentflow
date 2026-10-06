@@ -1,7 +1,7 @@
-# AgentFlow 项目深度评估报告 (2026-05-14)
+# Yanshi 项目深度评估报告 (2026-05-14)
 
 - 评估日期：2026-05-14
-- 评估范围：workspace 全部 15 个 Rust crate + 1 个 Web UI crate (`agentflow-ui`)，`docs/`、`RoadMap.md`、`TODOs.md`、CLI 执行路径、agent runtime、DAG 调度器、平台化（server/db/worker）、Web UI、插件/Skill/MCP/RAG/Tracing 全链路
+- 评估范围：workspace 全部 15 个 Rust crate + 1 个 Web UI crate (`yanshi-ui`)，`docs/`、`RoadMap.md`、`TODOs.md`、CLI 执行路径、agent runtime、DAG 调度器、平台化（server/db/worker）、Web UI、插件/Skill/MCP/RAG/Tracing 全链路
 - 与上一版报告 (`PROJECT_EVALUATION_2026-05-01.md`) 的关系：上一版评估在 2 周前定稿，记录的 14+2 crate 中 server/db 为 ~130/48 行骨架；本版基于 `main` HEAD 重新校核全部代码与测试，已覆盖：N7~N10 路线图收尾、P0 全部 7 项、P1.1–P1.5 安全/治理已完成
 - 编译/测试基线：未在本评估中重跑，但各 crate 现有测试统计如下（共 **1174** 个 test 标注，相对 5/1 报告的 479 测试翻倍以上）
 
@@ -9,11 +9,11 @@
 
 ## 0. TL;DR
 
-AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完整平台化骨架的双轨 AI 编排框架"**。在 2 周内完成了三件极具结构性意义的工作：
+Yanshi 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完整平台化骨架的双轨 AI 编排框架"**。在 2 周内完成了三件极具结构性意义的工作：
 
-1. **`agentflow-server` 从 130 行骨架 → 4.7K 行可用网关**（35× 增长），SSE / Run API / Skill API / Auth / 安全 profile / CORS / body limit 全部落地
-2. **`agentflow-db` 从 48 行 → 653 行 + 完整 schema/migrations/repos**
-3. **新增两个 crate**：`agentflow-worker`（分布式执行底座）+ `agentflow-ui`（React 19 + Vite 7 Web 调试器，编译期嵌入 server）
+1. **`yanshi-server` 从 130 行骨架 → 4.7K 行可用网关**（35× 增长），SSE / Run API / Skill API / Auth / 安全 profile / CORS / body limit 全部落地
+2. **`yanshi-db` 从 48 行 → 653 行 + 完整 schema/migrations/repos**
+3. **新增两个 crate**：`yanshi-worker`（分布式执行底座）+ `yanshi-ui`（React 19 + Vite 7 Web 调试器，编译期嵌入 server）
 
 | 维度 | 上次评级 (5/1) | 本次评级 (5/14) | 一句话判断 |
 | --- | --- | --- | --- |
@@ -39,27 +39,27 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
 
 | 层 | Crate | 角色 | LOC | 测试数 | 版本 | edition | 成熟度 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **L1 执行内核** | `agentflow-core` | DAG 引擎、AsyncNode、FlowValue、scheduler、checkpoint、retry、timeout、health、events、**expression engine**、**plugin host** | 12,157 | 204 | 0.2.0 | 2024 | ⭐⭐⭐ |
-| **L2 能力适配** | `agentflow-nodes` | 内置 16+ 节点（LLM/HTTP/File/Template/Map/While/RAG/MCP/多模态） | 5,099 | 45 | 0.2.0 | 2024 | ⭐⭐⭐ |
-| **L2 能力适配** | `agentflow-llm` | 6 provider + 多模态 + streaming + **provider-native tool_calls/tool_choice** + OTel traceparent | 10,612 | 104 | 0.2.0 | 2024 | ⭐⭐⭐ |
-| **L2 能力适配** | `agentflow-tools` | Tool/Registry/Policy/**OS Sandbox (macOS/Linux/no-op)**/**SSRF 防护**/**ToolIdempotency** | 3,996 | 69 | 0.1.0 | 2024 | ⭐⭐⭐ |
-| **L2 能力适配** | `agentflow-mcp` | MCP client/server/stdio transport，retry/timeout/重连 | 6,309 | 165 | 0.2.0 | 2024 | ⭐⭐⭐ |
-| **L2 能力适配** | `agentflow-rag` | chunk/embed/Qdrant/retrieval/rerank + **eval harness (Recall@K, MRR, nDCG@K)** | 8,444 | 139 | 0.3.0-alpha | 2024 | ⭐⭐⭐ |
-| **L2 能力适配** | `agentflow-memory` | MemoryStore + Session/SQLite/Semantic | 1,399 | 16 | 0.1.0 | 2024 | ⭐⭐ |
-| **L3 智能体/编排** | `agentflow-agents` | ReAct + PlanExecute + **Handoff/Blackboard/Debate Supervisor** + AgentNode + WorkflowTool + Reflection + MemorySummary | 9,860 | 121 | 0.2.0 | 2024 | ⭐⭐⭐ |
-| **L3 智能体/编排** | `agentflow-skills` | SKILL.md/skill.toml + SkillBuilder + Marketplace + MCP adapter + registry | 4,414 | 76 | 0.1.0 | 2024 | ⭐⭐⭐ |
-| **L3 智能体/编排** | `agentflow-cli` | workflow/skill/llm/image/audio/mcp/trace/rag/**plugin**/**doctor**/**rag eval** | 9,669 | 104 | 0.2.0 | 2024 | ⭐⭐⭐ |
-| **L4 运维/产品化** | `agentflow-tracing` | EventListener + JSONL/SQLite/Postgres + replay + TUI + **OTel OTLP + W3C traceparent 注入** + redaction | 4,301 | 34 | 0.1.0 | 2024 | ⭐⭐⭐ |
-| **L4 运维/产品化** | `agentflow-viz` | YAML → VisualGraph → Mermaid/DOT/JSON | 1,801 | 26 | 0.1.0 | 2024 | ⭐⭐ |
-| **L4 运维/产品化** | `agentflow-server` | **Axum gateway**：POST/GET `/v1/runs`，cancel，graph，SSE history，Skill API，Bearer auth，安全 profile，CORS+body limit，**embedded Web UI (`/ui`)**，**分布式 control plane (`scheduler/distributed.rs`)** | 4,698 | 59 | 0.1.0 | 2024 | ⭐⭐⭐ |
-| **L4 运维/产品化** | `agentflow-db` | **Postgres schema (6 表)** + `sqlx::migrate!()` + Run/Step/Event/Artifact/SkillInstall/McpSession repos | 653 | 4 | 0.1.0 | 2024 | ⭐⭐ |
-| **L4 运维/产品化** | `agentflow-worker` 🆕 | **分布式 worker** (in-memory + gRPC transport)，claim/heartbeat/execute/report 协议；目前支持 template/file/mock 三类 node | 720 | 8 | 0.1.0 | 2024 | ⭐ foundation |
-| **L4 运维/产品化** | `agentflow-ui` 🆕 | React 19 + Vite 7 + TypeScript 5.8 SPA；零运行时依赖；编译期 `include_str!` 嵌入 server | (前端) | n/a | n/a | n/a | ⭐ alpha |
+| **L1 执行内核** | `yanshi-core` | DAG 引擎、AsyncNode、FlowValue、scheduler、checkpoint、retry、timeout、health、events、**expression engine**、**plugin host** | 12,157 | 204 | 0.2.0 | 2024 | ⭐⭐⭐ |
+| **L2 能力适配** | `yanshi-nodes` | 内置 16+ 节点（LLM/HTTP/File/Template/Map/While/RAG/MCP/多模态） | 5,099 | 45 | 0.2.0 | 2024 | ⭐⭐⭐ |
+| **L2 能力适配** | `yanshi-llm` | 6 provider + 多模态 + streaming + **provider-native tool_calls/tool_choice** + OTel traceparent | 10,612 | 104 | 0.2.0 | 2024 | ⭐⭐⭐ |
+| **L2 能力适配** | `yanshi-tools` | Tool/Registry/Policy/**OS Sandbox (macOS/Linux/no-op)**/**SSRF 防护**/**ToolIdempotency** | 3,996 | 69 | 0.1.0 | 2024 | ⭐⭐⭐ |
+| **L2 能力适配** | `yanshi-mcp` | MCP client/server/stdio transport，retry/timeout/重连 | 6,309 | 165 | 0.2.0 | 2024 | ⭐⭐⭐ |
+| **L2 能力适配** | `yanshi-rag` | chunk/embed/Qdrant/retrieval/rerank + **eval harness (Recall@K, MRR, nDCG@K)** | 8,444 | 139 | 0.3.0-alpha | 2024 | ⭐⭐⭐ |
+| **L2 能力适配** | `yanshi-memory` | MemoryStore + Session/SQLite/Semantic | 1,399 | 16 | 0.1.0 | 2024 | ⭐⭐ |
+| **L3 智能体/编排** | `yanshi-agents` | ReAct + PlanExecute + **Handoff/Blackboard/Debate Supervisor** + AgentNode + WorkflowTool + Reflection + MemorySummary | 9,860 | 121 | 0.2.0 | 2024 | ⭐⭐⭐ |
+| **L3 智能体/编排** | `yanshi-skills` | SKILL.md/skill.toml + SkillBuilder + Marketplace + MCP adapter + registry | 4,414 | 76 | 0.1.0 | 2024 | ⭐⭐⭐ |
+| **L3 智能体/编排** | `yanshi-cli` | workflow/skill/llm/image/audio/mcp/trace/rag/**plugin**/**doctor**/**rag eval** | 9,669 | 104 | 0.2.0 | 2024 | ⭐⭐⭐ |
+| **L4 运维/产品化** | `yanshi-tracing` | EventListener + JSONL/SQLite/Postgres + replay + TUI + **OTel OTLP + W3C traceparent 注入** + redaction | 4,301 | 34 | 0.1.0 | 2024 | ⭐⭐⭐ |
+| **L4 运维/产品化** | `yanshi-viz` | YAML → VisualGraph → Mermaid/DOT/JSON | 1,801 | 26 | 0.1.0 | 2024 | ⭐⭐ |
+| **L4 运维/产品化** | `yanshi-server` | **Axum gateway**：POST/GET `/v1/runs`，cancel，graph，SSE history，Skill API，Bearer auth，安全 profile，CORS+body limit，**embedded Web UI (`/ui`)**，**分布式 control plane (`scheduler/distributed.rs`)** | 4,698 | 59 | 0.1.0 | 2024 | ⭐⭐⭐ |
+| **L4 运维/产品化** | `yanshi-db` | **Postgres schema (6 表)** + `sqlx::migrate!()` + Run/Step/Event/Artifact/SkillInstall/McpSession repos | 653 | 4 | 0.1.0 | 2024 | ⭐⭐ |
+| **L4 运维/产品化** | `yanshi-worker` 🆕 | **分布式 worker** (in-memory + gRPC transport)，claim/heartbeat/execute/report 协议；目前支持 template/file/mock 三类 node | 720 | 8 | 0.1.0 | 2024 | ⭐ foundation |
+| **L4 运维/产品化** | `yanshi-ui` 🆕 | React 19 + Vite 7 + TypeScript 5.8 SPA；零运行时依赖；编译期 `include_str!` 嵌入 server | (前端) | n/a | n/a | n/a | ⭐ alpha |
 
 **关键观察**：
 - **总 Rust LOC ≈ 84K**（不含 UI 前端），相对 5/1 评估 (~56K) 增长 ~50%；**总测试 ≈ 1174**（5/1 评估 479），翻倍以上
 - **workspace edition 已统一到 2024**（上次报告里 server/db 与其他 crate 不一致的问题已修复）
-- **`agentflow-cli` 单 crate 测试已达 104**（5/1 评估只有 "5+"），CLI 集成测试体系成型
+- **`yanshi-cli` 单 crate 测试已达 104**（5/1 评估只有 "5+"），CLI 集成测试体系成型
 
 ### 1.2 四层心智模型（与上次相同，仍然成立）
 
@@ -77,7 +77,7 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
 
 - L1 唯一执行核：`Flow::execute_*` 拥有节点状态池、拓扑、并发、checkpoint、事件、**表达式求值器**、**plugin host**
 - L2 全部以 `AsyncNode` / `Tool` / `EmbedClient` / `MemoryStore` 等抽象被 L3 使用，L1 不直接依赖任何外部能力
-- L3 双轨入口：`agentflow-agents` 承载 agent-native（自主循环、多智能体），`agentflow-nodes + agentflow-cli` 承载 DAG，二者通过 `AgentNode` × `WorkflowTool` 互通
+- L3 双轨入口：`yanshi-agents` 承载 agent-native（自主循环、多智能体），`yanshi-nodes + yanshi-cli` 承载 DAG，二者通过 `AgentNode` × `WorkflowTool` 互通
 - L4 横切面：`tracing` 非侵入接入 L1；`server` + `db` 提供平台化 API；`worker` 提供分布式底座；`ui` 提供 Web 调试器
 
 ---
@@ -86,7 +86,7 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
 
 ### 2.1 DAG 执行模型（成熟，本期主要补齐表达式与 checkpoint）
 
-**核心抽象（`agentflow-core/src/flow.rs`、`scheduler.rs`、`expression.rs`）：**
+**核心抽象（`yanshi-core/src/flow.rs`、`scheduler.rs`、`expression.rs`）：**
 
 - `FlowExecutionMode::{Serial, Concurrent}`，`Concurrent` 模式基于 `FuturesUnordered` + `max_concurrency` 的**依赖就绪滚动调度**
 - 三类节点形态：`Standard` / `Map { parallel }` / `While { condition, max_iterations }`
@@ -95,9 +95,9 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
   - 内置函数：`len()`、`contains()`、`is_null()`、`to_number()`、`to_string()`
   - 路径表达式：`nodes.X.outputs.Y`
   - 取代了 5/1 时还在用的"字符串比较"占位实现
-  - 在 `agentflow workflow validate --strict` 中可做静态检查
+  - 在 `yanshi workflow validate --strict` 中可做静态检查
 - **FlowValue checkpoint round-trip 已修复**（P0.2 DONE）：tagged-schema 反序列化保证 `Json | File | Url` 类型保真，并兼容旧 raw-JSON 格式
-- `run_dir` 通过 `--run-dir` / `AGENTFLOW_RUN_DIR` 已完全脱离 home 目录依赖
+- `run_dir` 通过 `--run-dir` / `YANSHI_RUN_DIR` 已完全脱离 home 目录依赖
 
 **仍需打磨：**
 
@@ -109,7 +109,7 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
 
 ### 2.2 Agent-native Runtime（接近 production-ready）
 
-**核心抽象（`agentflow-agents/src/runtime.rs`、`react/`、`plan_execute/`、`supervisor/`）：**
+**核心抽象（`yanshi-agents/src/runtime.rs`、`react/`、`plan_execute/`、`supervisor/`）：**
 
 - `AgentRuntime` trait + `AgentContext` + `RuntimeLimits`（max_steps / max_tool_calls / timeout_ms / token_budget）
 - `AgentStepKind` 6 种、`AgentEvent` 8 种、`AgentStopReason` 8 种（结构化 trace）
@@ -131,9 +131,9 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
 
 ### 2.3 工具与权限治理（从"声明式过滤"升级为"OS 级强制隔离"）
 
-**本期最大跃迁**：`agentflow-tools` 从 1.7K LOC / 6 测试 跃迁到 4.0K LOC / 69 测试。
+**本期最大跃迁**：`yanshi-tools` 从 1.7K LOC / 6 测试 跃迁到 4.0K LOC / 69 测试。
 
-**已落地（`agentflow-tools/src/tool.rs`、`policy.rs`、`sandbox/`、`builtin/`）：**
+**已落地（`yanshi-tools/src/tool.rs`、`policy.rs`、`sandbox/`、`builtin/`）：**
 
 - ✅ `ToolIdempotency::{ Idempotent | NonIdempotent | Undeclared }` 元数据（与 partial resume 决策耦合）
 - ✅ **OS-level sandbox 后端**：
@@ -156,7 +156,7 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
 ### 2.4 LLM 抽象（成熟，本期完成原生 tool calling）
 
 - 6 provider：OpenAI / Anthropic / Google / StepFun / Moonshot / Mock
-- **原生 `tool_calls` / `tool_choice` 全 provider 落地**（`agentflow-llm/src/tool_calling.rs` 定义类型，各 provider 在 `src/providers/*.rs` 实现 adapter，如 `parse_openai_tool_calls`、`tool_choice_to_openai_value`）
+- **原生 `tool_calls` / `tool_choice` 全 provider 落地**（`yanshi-llm/src/tool_calling.rs` 定义类型，各 provider 在 `src/providers/*.rs` 实现 adapter，如 `parse_openai_tool_calls`、`tool_choice_to_openai_value`）
 - 多模态 `MultimodalMessage`（text + image url/base64）
 - 流式 `StreamingResponse`
 - 模型注册和能力描述（`ModelCapabilities`、`ModelType`）
@@ -175,7 +175,7 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
 
 - chunk → embed → Qdrant → retrieval → rerank 全链路
 - **`eval/` 模块**：`MetricKind::{ Recall, Mrr, Ndcg }`，函数 `recall_at_k()` / `reciprocal_rank()` / `ndcg_at_k()`；支持 graded relevance
-- CLI 子命令 `agentflow rag eval`（`agentflow-cli/src/commands/rag/eval.rs`），目前 baseline 硬编码 BM25
+- CLI 子命令 `yanshi rag eval`（`yanshi-cli/src/commands/rag/eval.rs`），目前 baseline 硬编码 BM25
 - 数据集格式：JSONL（corpus/queries/qrels），配 paired sign test 做基线对比
 
 **仍需打磨：** baseline 数据集与 CI 集成（P4.1 / P4.2 TODO）；可插拔 retriever（目前 BM25 硬编码）。
@@ -184,7 +184,7 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
 
 - `Collector` + `EventListener` 非侵入采集
 - 持久化：JSONL / SQLite / Postgres
-- `agentflow trace replay <run_id>` + TUI
+- `yanshi trace replay <run_id>` + TUI
 - **OTel OTLP exporter + W3C `traceparent` 在 LLM HTTP 调用注入完成**（消除上次评估指出的"LLM hop 易断"问题）
 - 默认 redaction：API key / env secret / sensitive tool params
 
@@ -192,7 +192,7 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
 
 ### 2.7 Server / DB / Worker / UI（本期"平台化"全面起步）
 
-#### `agentflow-server` (4.7K LOC, 59 tests)
+#### `yanshi-server` (4.7K LOC, 59 tests)
 
 - 实际 endpoints：
   - `POST /v1/runs`, `GET /v1/runs`, `GET /v1/runs/{id}`, `POST /v1/runs/{id}:cancel`
@@ -200,30 +200,30 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
   - SSE：`GET /v1/runs/{id}/events`（支持 `after_seq` reconnect backfill）
   - `POST /v1/skills/{name}:run`, `GET /v1/skills`
   - `GET /ui/*`（编译期嵌入 Web UI）
-- Auth：Bearer token（`AGENTFLOW_API_TOKEN`），`src/auth.rs`
+- Auth：Bearer token（`YANSHI_API_TOKEN`），`src/auth.rs`
 - 安全 profile：`dev / local / production`（P1.1 DONE），production 模式缺 token 即 fail-closed（P1.2 DONE）
 - CORS / body limit：`tower-http`，环境变量可配（P1.3 DONE）
 - 分布式 control plane：`src/scheduler/distributed.rs` 定义 worker protocol（claim / heartbeat / execute / report）
 
-#### `agentflow-db` (653 LOC, 4 tests)
+#### `yanshi-db` (653 LOC, 4 tests)
 
 - 6 表 schema：`runs / steps / events / artifacts / skill_installs / mcp_sessions`
 - `sqlx::migrate!()` 嵌入 `migrations/0001_initial_schema.sql`
 - Trait + Pg 实现：`RunRepo` / `StepRepo` / `EventRepo` / `ArtifactRepo` / `SkillInstallRepo` / `McpSessionRepo`
 
-#### `agentflow-worker` 🆕 (720 LOC, 8 tests)
+#### `yanshi-worker` 🆕 (720 LOC, 8 tests)
 
 - **分布式执行底座**，支持两种 transport：
   - `memory://local`（in-process 测试）
   - `grpc://host:port`（远程 control plane）
 - 协议循环：`claim → execute → heartbeat → report`
-- **当前只支持 3 类 node**：template / file / mock（`agentflow-worker/src/lib.rs:198–210`）— foundation 完成，**生产化未到**
-- 与 `agentflow-server::scheduler::distributed` 配对工作
+- **当前只支持 3 类 node**：template / file / mock（`yanshi-worker/src/lib.rs:198–210`）— foundation 完成，**生产化未到**
+- 与 `yanshi-server::scheduler::distributed` 配对工作
 
-#### `agentflow-ui` 🆕 (React 19 + Vite 7 + TS 5.8)
+#### `yanshi-ui` 🆕 (React 19 + Vite 7 + TS 5.8)
 
 - 零运行时依赖（无 Redux/Next/Remix）
-- 编译期通过 `include_str!` 嵌入 server：`agentflow-server/src/ui.rs:19-21`
+- 编译期通过 `include_str!` 嵌入 server：`yanshi-server/src/ui.rs:19-21`
 - 当前页面：run 列表、DAG 图、状态、事件历史 SSE 回放
 - **形态**：调试器/控制台，非生产前端；`dist/` 已 check-in，无需 Node.js 即可运行 server
 
@@ -297,18 +297,18 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
 | memory | 16 | session/sqlite/semantic |
 | **合计** | **1174** | — |
 
-测试-LOC 比 ≈ **1 测试 / 70 LOC**（包含集成测试），属于 Rust 框架级合理范围。短板：`agentflow-db` 仅 4 个 smoke 测试，`agentflow-memory` 长期记忆 schema 测试稀疏。
+测试-LOC 比 ≈ **1 测试 / 70 LOC**（包含集成测试），属于 Rust 框架级合理范围。短板：`yanshi-db` 仅 4 个 smoke 测试，`yanshi-memory` 长期记忆 schema 测试稀疏。
 
 ### 4.3 Feature flag 治理
 
-- `agentflow-nodes`：`mcp`、`rag`、`audio`、`image_*` feature-gated
-- `agentflow-tracing`：`sqlite`、`postgres`、`otel` feature-gated
-- `agentflow-core`：`plugin` feature-gated
+- `yanshi-nodes`：`mcp`、`rag`、`audio`、`image_*` feature-gated
+- `yanshi-tracing`：`sqlite`、`postgres`、`otel` feature-gated
+- `yanshi-core`：`plugin` feature-gated
 - ⚠️ **CLI 的 feature 组合矩阵尚未在 CI 中全枚举**，单 feature 关闭后的可编译性需要持续维护
 
 ### 4.4 依赖分层与循环
 
-- L1 (`agentflow-core`) 不依赖任何 L2/L3/L4 crate
+- L1 (`yanshi-core`) 不依赖任何 L2/L3/L4 crate
 - L2 之间无相互依赖（除 `nodes` 可选依赖 `llm/mcp/rag`）
 - L3 依赖 L1 + L2
 - L4 横切：`tracing` 仅依赖 L1 抽象（EventListener）；`server` 依赖 L3
@@ -323,86 +323,86 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
 
 ## 5. 模块逐项评估
 
-### 5.1 `agentflow-core` ⭐⭐⭐ 成熟度：高
+### 5.1 `yanshi-core` ⭐⭐⭐ 成熟度：高
 
 - ✅ DAG / FlowValue / scheduler / checkpoint / retry / timeout / health / events
 - ✅ **表达式引擎**（新）：`expression.rs`，算术/比较/布尔/函数/路径
 - ✅ **plugin host**（新）：`plugin/host.rs` + `plugin/node.rs` + `plugin/registry.rs`（subprocess JSON-RPC）
 - 不足：节点依赖仍需显式声明；子 Flow 失败策略组合粒度有限
 
-### 5.2 `agentflow-nodes` ⭐⭐⭐ 成熟度：高
+### 5.2 `yanshi-nodes` ⭐⭐⭐ 成熟度：高
 
 - ✅ 16+ 内置节点，feature-gated
 - 不足：节点参数 schema 不统一；离线 mock 框架弱；错误码未标准化
 
-### 5.3 `agentflow-llm` ⭐⭐⭐ 成熟度：高
+### 5.3 `yanshi-llm` ⭐⭐⭐ 成熟度：高
 
 - ✅ 6 provider 原生 tool calling、多模态、流式、注册、能力描述
 - ✅ W3C traceparent 注入 HTTP
 - 不足：缺中心 provider matrix 文档；token 计数粗粒度
 
-### 5.4 `agentflow-tools` ⭐⭐⭐ 成熟度：从 ⭐⭐ 跃升
+### 5.4 `yanshi-tools` ⭐⭐⭐ 成熟度：从 ⭐⭐ 跃升
 
 - ✅ OS sandbox（macOS/Linux/no-op）、SSRF 防护、路径硬化、ToolIdempotency、多模态输出
 - 不足：sandbox 可见性输出（P1.6）、plugin 默认 policy（P1.8/P5.4）、ShellTool "受限子集"
 
-### 5.5 `agentflow-mcp` ⭐⭐⭐ 成熟度：高
+### 5.5 `yanshi-mcp` ⭐⭐⭐ 成熟度：高
 
 - ✅ client/server/stdio、retry/timeout/重连、165 测试
 - 不足：`client_old` 历史包袱仍在；server 标 experimental
 
-### 5.6 `agentflow-rag` ⭐⭐⭐ 成熟度：从 ⭐⭐ 跃升
+### 5.6 `yanshi-rag` ⭐⭐⭐ 成熟度：从 ⭐⭐ 跃升
 
 - ✅ 全链路 + **eval harness (Recall@K, MRR, nDCG@K) + paired sign test**
 - 不足：CI baseline 数据集（P4.1）、可插拔 retriever（目前 BM25 硬编码）
 
-### 5.7 `agentflow-memory` ⭐⭐ 成熟度：基础
+### 5.7 `yanshi-memory` ⭐⭐ 成熟度：基础
 
 - ✅ Session / SQLite / Semantic 三实现
 - 不足：长期记忆 schema、隐私/清理、跨 session 关联策略均较初级；memory layering design（P4.5 TODO）
 
-### 5.8 `agentflow-agents` ⭐⭐⭐ 成熟度：高
+### 5.8 `yanshi-agents` ⭐⭐⭐ 成熟度：高
 
 - ✅ ReAct / PlanExecute / 三种 Supervisor / AgentNode / WorkflowTool / Reflection / MemorySummary
 - 不足：`AgentRuntime` trait 与具体 agent 公共 API 并存；非幂等 tool resume CLI 可见性（P1.7）；agent eval harness（P4.3）
 
-### 5.9 `agentflow-skills` ⭐⭐⭐ 成熟度：高
+### 5.9 `yanshi-skills` ⭐⭐⭐ 成熟度：高
 
 - ✅ SKILL.md/skill.toml、SkillBuilder、Marketplace、MCP adapter、registry
 - ✅ 与 `agent`/`skill_agent` YAML 节点打通
 - 不足：Skill `security` × ToolPolicy × CLI flag 三方决策表（P3.5 待打磨）
 
-### 5.10 `agentflow-cli` ⭐⭐⭐ 成熟度：高
+### 5.10 `yanshi-cli` ⭐⭐⭐ 成熟度：高
 
 - ✅ workflow / skill / llm / image / audio / mcp / trace / rag / **plugin** / **doctor**（基础）/ **rag eval**
-- 不足：JSON 输出契约文档化（P3.3）、`agentflow doctor` 扩展（P3.4）、权限解释展示（P3.5）、`agentflow serve` 命令（P2.1）
+- 不足：JSON 输出契约文档化（P3.3）、`yanshi doctor` 扩展（P3.4）、权限解释展示（P3.5）、`yanshi serve` 命令（P2.1）
 
-### 5.11 `agentflow-tracing` ⭐⭐⭐ 成熟度：高
+### 5.11 `yanshi-tracing` ⭐⭐⭐ 成熟度：高
 
 - ✅ EventListener / JSONL / SQLite / Postgres / replay / TUI / **OTel + traceparent** / redaction
 - 不足：hybrid TUI 视图、trace 比较视图
 
-### 5.12 `agentflow-viz` ⭐⭐ 成熟度：基础
+### 5.12 `yanshi-viz` ⭐⭐ 成熟度：基础
 
 - ✅ Mermaid / DOT / JSON 静态可视化
-- 不足：未与 trace 实时联动；下次发布建议**与 `agentflow-ui` 合并**或建立联动协议
+- 不足：未与 trace 实时联动；下次发布建议**与 `yanshi-ui` 合并**或建立联动协议
 
-### 5.13 `agentflow-server` ⭐⭐⭐ 成熟度：从 ⭐ scaffold 跃升到 B
+### 5.13 `yanshi-server` ⭐⭐⭐ 成熟度：从 ⭐ scaffold 跃升到 B
 
 - ✅ Run / Cancel / Graph / Event History / SSE / Skill API / Bearer auth / 安全 profile / CORS / body limit / **embedded Web UI** / **distributed control plane**
-- 不足：retention/cleanup（P2.2）、tenant 边界（P2.6）、backup/restore（P2.7）、`agentflow serve` CLI（P2.1）
+- 不足：retention/cleanup（P2.2）、tenant 边界（P2.6）、backup/restore（P2.7）、`yanshi serve` CLI（P2.1）
 
-### 5.14 `agentflow-db` ⭐⭐ 成熟度：从 ⭐ scaffold 跃升
+### 5.14 `yanshi-db` ⭐⭐ 成熟度：从 ⭐ scaffold 跃升
 
 - ✅ 6 表 schema + sqlx migration + repos
 - 不足：仅 4 个 smoke 测试；retention/backup 策略；测试 LOC 比偏低
 
-### 5.15 `agentflow-worker` 🆕 ⭐ 成熟度：foundation
+### 5.15 `yanshi-worker` 🆕 ⭐ 成熟度：foundation
 
 - ✅ in-memory + gRPC transport、claim/heartbeat/execute/report 协议
 - 不足：仅支持 template/file/mock 三类 node（缺 LLM/HTTP/Agent），worker 认证/admission（P5.5）、资源限制（P5.6）、failure-domain（P5.7）全部 TODO
 
-### 5.16 `agentflow-ui` 🆕 ⭐ 成熟度：alpha
+### 5.16 `yanshi-ui` 🆕 ⭐ 成熟度：alpha
 
 - ✅ React 19 + Vite 7 + TS 5.8 SPA，零运行时依赖，编译期嵌入
 - ✅ run 列表 / DAG 图 / SSE 事件回放
@@ -416,8 +416,8 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
 
 | 主题维度 | 当前对齐情况 | 偏离风险 |
 | --- | --- | --- |
-| **DAG 底座** | ✅ `agentflow-core` Flow / 依赖就绪并发 / Map/While / Checkpoint / 表达式 | 无 |
-| **Native-Agent 底座** | ✅ `agentflow-agents` ReAct + PlanExecute + 三类 Supervisor + RuntimeLimits + Cancellation | 无 |
+| **DAG 底座** | ✅ `yanshi-core` Flow / 依赖就绪并发 / Map/While / Checkpoint / 表达式 | 无 |
+| **Native-Agent 底座** | ✅ `yanshi-agents` ReAct + PlanExecute + 三类 Supervisor + RuntimeLimits + Cancellation | 无 |
 | **LLM/VLM 组件** | ✅ 6 provider 原生 tool calling + 多模态（image/audio）+ streaming | 无 |
 | **Tools 组件** | ✅ Tool/Registry/Policy + OS Sandbox + SSRF + Idempotency | 无 |
 | **RAG 组件** | ✅ 全链路 + eval harness | 无 |
@@ -460,7 +460,7 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
 
 ### 8.1 v0.4.0 发布前（必做）
 
-1. **`agentflow serve` CLI 命令**（P2.1）— 把 server 从 cargo run 变成"一行起飞"
+1. **`yanshi serve` CLI 命令**（P2.1）— 把 server 从 cargo run 变成"一行起飞"
 2. **Sandbox enforcement 可见性**（P1.6）— trace / doctor 输出"现在用的是 macOS/Linux/no-op"，闭环安全姿态
 3. **Non-idempotent resume CLI 可见性**（P1.7）— 让用户看清楚为什么 resume 被拒
 4. **Plugin sandbox 默认 policy**（P1.8 / P5.4）— 第三方 plugin 默认沙箱姿态明确
@@ -471,7 +471,7 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
 6. **Server retention / tenant / backup**（P2.2 / P2.6 / P2.7）— production server 完整化
 7. **Worker 生产化**（P5.5 / P5.6 / P5.7）— auth / admission / resource limit / failure-domain
 8. **Worker node 类型扩展** — 至少加 LLM / HTTP / MCP 三类（目前仅 template/file/mock）
-9. **`agentflow doctor` 扩展**（P3.4）— config / providers / feature flags / MCP / sandbox / server / db / plugin / marketplace 全诊断
+9. **`yanshi doctor` 扩展**（P3.4）— config / providers / feature flags / MCP / sandbox / server / db / plugin / marketplace 全诊断
 10. **CLI JSON 输出契约文档**（P3.3）— 把 automation-friendly 输出固化下来
 11. **RAG eval CI baseline**（P4.1 / P4.2）— 防退化的版本化基线
 12. **Agent eval harness**（P4.3 / P4.4）— 端到端 agent 质量回归
@@ -487,7 +487,7 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
 
 ### 8.4 文档维护
 
-19. **更新 `CLAUDE.md`** — 当前内容已与最新现状基本一致，但需要把"`agentflow-worker`"和"`agentflow-ui`"补入 L4 描述，把"14+2 crate"改为"15+1 (含 Web UI)"
+19. **更新 `CLAUDE.md`** — 当前内容已与最新现状基本一致，但需要把"`yanshi-worker`"和"`yanshi-ui`"补入 L4 描述，把"14+2 crate"改为"15+1 (含 Web UI)"
 20. **建立中心 LLM provider matrix 文档** — 子代理报告"未找到"，应整理为 `docs/LLM_PROVIDERS_MATRIX.md`（路线图已提及）
 
 ---
@@ -498,7 +498,7 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
 | --- | --- | --- |
 | v0.3.0 | 平台骨架 + tool calling 原生 + checkpoint 保真 | ✅ **已发** |
 | v0.4.0 | 协作范式 + 沙箱强化 + OTel 端到端 + RAG eval | ✅ **已实质完成**，待发布动作 |
-| **v0.5.0** | Server 完整化（`agentflow serve` + retention） + sandbox 可见性 + provider 一致性矩阵 | 🟡 **进行中**（P0/P1 大部分完成，剩 P2.1/P1.6/P1.7） |
+| **v0.5.0** | Server 完整化（`yanshi serve` + retention） + sandbox 可见性 + provider 一致性矩阵 | 🟡 **进行中**（P0/P1 大部分完成，剩 P2.1/P1.6/P1.7） |
 | **v1.0.0-rc** | Worker 生产化 + Agent/Memory eval + Web UI 产品化 + CLI JSON 契约 | 🟡 P2-P5 |
 | v1.0 | 文档收敛、稳定承诺、CI 基线全绿 | — |
 
@@ -506,7 +506,7 @@ AgentFlow 已经从"DAG + Agent-native 双轨框架雏形"演进为**"具备完�
 
 ## 10. 最终结论
 
-AgentFlow 在 2 周内完成了一次结构性升级，已经从"框架级骨架"过渡到"**框架级 v1.0 候选**"。
+Yanshi 在 2 周内完成了一次结构性升级，已经从"框架级骨架"过渡到"**框架级 v1.0 候选**"。
 
 **确认对齐项目主题**：
 
@@ -527,7 +527,7 @@ AgentFlow 在 2 周内完成了一次结构性升级，已经从"框架级骨架
 
 **下一个评估窗口建议**：v0.5.0 发布后或本季度末（2026-08）。届时关注：
 
-1. `agentflow serve` 是否成为 server 的事实入口
+1. `yanshi serve` 是否成为 server 的事实入口
 2. Worker 是否支持 LLM/HTTP/MCP node 执行
 3. RAG/Agent eval 是否进入 CI baseline
 4. Web UI 是否进入"运营级 filter + provider 诊断"形态
@@ -536,16 +536,16 @@ AgentFlow 在 2 周内完成了一次结构性升级，已经从"框架级骨架
 > 评估签名：HEAD `738bf92` 之后（2026-05-14；有 4 个 unstaged 文件 `RoadMap.md` / `TODOs-archive-*` / `HARNESS_MODE_EVOLUTION.md` / 新归档；本评估不依赖未提交内容）
 >
 > 主要参考：
-> - `agentflow-core/src/{flow,scheduler,value,expression}.rs`
-> - `agentflow-core/src/plugin/{host,node,registry}.rs`
-> - `agentflow-agents/src/{runtime,react/agent,plan_execute,reflection}.rs`
-> - `agentflow-agents/src/supervisor/{handoff,blackboard,debate}.rs`
-> - `agentflow-tools/src/{tool,policy,sandbox/{macos,linux,noop},builtin/http}.rs`
-> - `agentflow-llm/src/{tool_calling,providers/*}.rs`
-> - `agentflow-server/src/{lib,auth,runs,skills,events_stream,ui,scheduler/distributed}.rs`
-> - `agentflow-db/src/{database,repo}.rs` + `migrations/0001_initial_schema.sql`
-> - `agentflow-worker/src/lib.rs`
-> - `agentflow-ui/{package.json,src/main.tsx}`
-> - `agentflow-rag/src/eval/{metrics,runner}.rs`
+> - `yanshi-core/src/{flow,scheduler,value,expression}.rs`
+> - `yanshi-core/src/plugin/{host,node,registry}.rs`
+> - `yanshi-agents/src/{runtime,react/agent,plan_execute,reflection}.rs`
+> - `yanshi-agents/src/supervisor/{handoff,blackboard,debate}.rs`
+> - `yanshi-tools/src/{tool,policy,sandbox/{macos,linux,noop},builtin/http}.rs`
+> - `yanshi-llm/src/{tool_calling,providers/*}.rs`
+> - `yanshi-server/src/{lib,auth,runs,skills,events_stream,ui,scheduler/distributed}.rs`
+> - `yanshi-db/src/{database,repo}.rs` + `migrations/0001_initial_schema.sql`
+> - `yanshi-worker/src/lib.rs`
+> - `yanshi-ui/{package.json,src/main.tsx}`
+> - `yanshi-rag/src/eval/{metrics,runner}.rs`
 > - `docs/{EXPRESSION_LANGUAGE,MULTI_AGENT,DISTRIBUTED,WEB_UI,MARKETPLACE,TOOL_PERMISSIONS,RAG_EVAL,API_COMPATIBILITY,STABILITY,CURRENT_STATUS}.md`
 > - `RoadMap.md`、`TODOs.md`

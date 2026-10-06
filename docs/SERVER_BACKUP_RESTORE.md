@@ -1,29 +1,29 @@
-# AgentFlow Server Backup & Restore
+# Yanshi Server Backup & Restore
 
-Status: stable as of `P2.7`; `agentflow restore` (T2.2) closes the
+Status: stable as of `P2.7`; `yanshi restore` (T2.2) closes the
 round trip described below.
-Scope: covers `agentflow serve` deployments in the `local` and
+Scope: covers `yanshi serve` deployments in the `local` and
 `production` security profiles. Workflow-only single-binary
 deployments back up the same state minus the Postgres bullet point.
 
-This document is the operator playbook for backing up an AgentFlow
-deployment and recovering from a fresh host. Use `agentflow doctor
+This document is the operator playbook for backing up an Yanshi
+deployment and recovering from a fresh host. Use `yanshi doctor
 --backup-check` to validate that a candidate host can actually receive
 a restore before swinging traffic at it (see
 [Validation](#validation) below).
 
 ## State surfaces
 
-AgentFlow persists state across four surfaces. Each one is described
+Yanshi persists state across four surfaces. Each one is described
 below in the order it must be backed up *and* restored — DB before
 filesystem, because the DB rows reference paths under run_dir and
 trace_dir.
 
-### 1. Postgres (`agentflow-db`)
+### 1. Postgres (`yanshi-db`)
 
 Required for the gateway, harness sessions, and the run console.
 Eight authoritative tables, all owned by the schema bundled with
-`agentflow-server`:
+`yanshi-server`:
 
 | Table | Owns |
 | --- | --- |
@@ -36,24 +36,24 @@ Eight authoritative tables, all owned by the schema bundled with
 | `harness_sessions` | Harness Agent Mode session rows |
 | `harness_session_events` | Harness event log (mirrors the SSE stream) |
 
-Backup with `pg_dump` (or `agentflow backup` — see below). Restore
+Backup with `pg_dump` (or `yanshi backup` — see below). Restore
 with `pg_restore`. Migrations are embedded via `sqlx::migrate!()`
 and run on first server start, so a restored DB at the target
 schema version Just Works; a restored DB at an *older* schema
-version is upgraded by `agentflow serve` before it accepts
+version is upgraded by `yanshi serve` before it accepts
 traffic.
 
-### 2. Run artifacts (`AGENTFLOW_RUN_DIR`)
+### 2. Run artifacts (`YANSHI_RUN_DIR`)
 
-Default: `<home>/.agentflow/runs`. Each run produces one UUID-named
+Default: `<home>/.yanshi/runs`. Each run produces one UUID-named
 subdirectory containing the node-level state files referenced by
 `artifacts` rows in Postgres. **Never restore filesystem before
 Postgres** — orphaned artifact directories with no owning `runs` row
 will be reaped by the next cleanup sweep (P2.2).
 
-### 3. Trace storage (`AGENTFLOW_TRACE_DIR`)
+### 3. Trace storage (`YANSHI_TRACE_DIR`)
 
-Default: `<home>/.agentflow/traces`. JSONL / SQLite / Postgres backend
+Default: `<home>/.yanshi/traces`. JSONL / SQLite / Postgres backend
 chosen at runtime via feature flags + env. The JSONL files are simple
 log lines and back up via straight `tar`. SQLite + Postgres tracing
 backends back up the same way as the main Postgres above.
@@ -62,17 +62,17 @@ backends back up the same way as the main Postgres above.
 
 | Path | Default | Notes |
 | --- | --- | --- |
-| Marketplace cache | `<home>/.agentflow/marketplace/cache` | Read-only artifact cache; safe to rebuild on demand, but restoring it avoids re-downloading and re-verifying signatures. |
-| Skills install dir | `<home>/.agentflow/skills` (override: `AGENTFLOW_SKILLS_DIR`) | Authoritative for installed skill manifests. Lose this and every skill needs to be reinstalled. |
-| Plugins install dir | `<home>/.agentflow/plugins` (override: `AGENTFLOW_PLUGINS_DIR`) | Same shape as skills, but holds subprocess plugin binaries + manifests. |
+| Marketplace cache | `<home>/.yanshi/marketplace/cache` | Read-only artifact cache; safe to rebuild on demand, but restoring it avoids re-downloading and re-verifying signatures. |
+| Skills install dir | `<home>/.yanshi/skills` (override: `YANSHI_SKILLS_DIR`) | Authoritative for installed skill manifests. Lose this and every skill needs to be reinstalled. |
+| Plugins install dir | `<home>/.yanshi/plugins` (override: `YANSHI_PLUGINS_DIR`) | Same shape as skills, but holds subprocess plugin binaries + manifests. |
 
-## `agentflow backup` (P10.15.1)
+## `yanshi backup` (P10.15.1)
 
-`agentflow backup --output <path>` orchestrates the four state
+`yanshi backup --output <path>` orchestrates the four state
 surfaces above into a single bundle directory in one command:
 
 ```bash
-agentflow backup --output /var/backups/agentflow/2026-05-20 \
+yanshi backup --output /var/backups/yanshi/2026-05-20 \
   --database-url "$DATABASE_URL"
 ```
 
@@ -82,8 +82,8 @@ Output layout:
 <output>/
   manifest.json          # schema version, timestamps, per-artifact bytes + sha256
   db.dump                # pg_dump --format=custom of $DATABASE_URL
-  run_dir.tar.gz         # tar -czf of $AGENTFLOW_RUN_DIR
-  trace_dir.tar.gz       # tar -czf of $AGENTFLOW_TRACE_DIR
+  run_dir.tar.gz         # tar -czf of $YANSHI_RUN_DIR
+  trace_dir.tar.gz       # tar -czf of $YANSHI_TRACE_DIR
   marketplace_cache.tar.gz
   skills_dir.tar.gz
   plugins_dir.tar.gz
@@ -91,7 +91,7 @@ Output layout:
 
 Each artifact entry in `manifest.json` records a `sha256:<hex>` of the
 artifact file (U0.2), computed right after `pg_dump`/`tar` writes it.
-`agentflow restore` recomputes this hash from the artifact on disk and
+`yanshi restore` recomputes this hash from the artifact on disk and
 compares it before running `pg_restore`/`tar` — see
 [Integrity verification](#integrity-verification) below.
 
@@ -112,7 +112,7 @@ Key flags:
 - `--force` — overwrite a non-empty `--output` directory.
 - `--format text|json|json-envelope` — output format for the
   per-step report. `json-envelope` is the canonical
-  `agentflow.cli/1` envelope; see `docs/CLI_JSON_OUTPUT.md`.
+  `yanshi.cli/1` envelope; see `docs/CLI_JSON_OUTPUT.md`.
 
 Failure handling: a missing source directory is `skipped` (not
 a failure); a tool not on PATH (`pg_dump` / `tar`) is `failed`
@@ -120,22 +120,22 @@ and the exit code is `2`. Each step's row in the manifest /
 report carries `status`, `bytes`, `duration_ms`, and a
 `reason` field for skipped or failed steps. The bundle
 manifest is written even on partial failure so a future
-`agentflow restore` can diff "what we got" against "what we
+`yanshi restore` can diff "what we got" against "what we
 wanted" instead of guessing.
 
 The `manifest_version` field on the bundle (currently
-`"agentflow.backup/1"`) is the wire-shape promise. Bumping it
+`"yanshi.backup/1"`) is the wire-shape promise. Bumping it
 is a breaking change for any future restore tooling that pins
 to the prior shape.
 
-`agentflow restore <bundle-dir>` consumes exactly this manifest and
-reverses each artifact back into the paths `agentflow backup` read
+`yanshi restore <bundle-dir>` consumes exactly this manifest and
+reverses each artifact back into the paths `yanshi backup` read
 them from — see [Restore sequencing](#restore-sequencing) below.
 
-## `agentflow restore` (T2.2)
+## `yanshi restore` (T2.2)
 
-`agentflow restore <input>` reads a bundle directory produced by
-`agentflow backup` and reverses each artifact it finds in
+`yanshi restore <input>` reads a bundle directory produced by
+`yanshi backup` and reverses each artifact it finds in
 `manifest.json`: `pg_restore` for `db.dump`, `tar -xzf` for the
 directory tarballs. It restores in a fixed order — Postgres first,
 then the independent caches, then trace storage, then run artifacts
@@ -143,19 +143,19 @@ last — regardless of `--include` order or the manifest's own artifact
 order, for the same reason backup/restore ordering matters below.
 
 ```bash
-agentflow restore /var/backups/agentflow/2026-05-20 \
+yanshi restore /var/backups/yanshi/2026-05-20 \
   --database-url "$DATABASE_URL"
 ```
 
-Key flags (mirror `agentflow backup`):
+Key flags (mirror `yanshi backup`):
 
 - `<input>` *(positional, required)* — bundle directory containing
-  `manifest.json` (as produced by `agentflow backup --output`).
+  `manifest.json` (as produced by `yanshi backup --output`).
 - `--database-url <URL>` — Postgres connection string to restore
   into. Falls back to `$DATABASE_URL`. Only consulted when the `db`
   include is active and the manifest has a `db` artifact.
 - `--include <NAME>` *(repeatable)* — restrict to one or more
-  includes, same names/aliases as `agentflow backup`. Empty = every
+  includes, same names/aliases as `yanshi backup`. Empty = every
   include present in the manifest.
 - `--dry-run` — parse the manifest and print what would run, mutate
   nothing (no DB writes, no target directories created).
@@ -169,9 +169,9 @@ Key flags (mirror `agentflow backup`):
   recovery from a bundle you already know is off-spec (e.g. testing);
   see [Integrity verification](#integrity-verification).
 - `--format text|json|json-envelope` — same three report formats as
-  `agentflow backup`.
+  `yanshi backup`.
 
-Failure handling mirrors `agentflow backup`: an artifact absent from
+Failure handling mirrors `yanshi backup`: an artifact absent from
 the manifest is `skipped`, a missing bundle/manifest file or a tool
 not on PATH (`pg_restore` / `tar`) is `failed`, and the process exits
 `2` if any step failed. A restore target directory is created fresh
@@ -181,14 +181,14 @@ has a different name than the directory that was originally backed
 up (different host, renamed env override, etc.). The safety guard
 that refuses a top-level/root restore target always runs before any
 destructive filesystem operation on that target (U0.1) — a
-misconfigured env override (e.g. `AGENTFLOW_RUN_DIR=/`) combined with
+misconfigured env override (e.g. `YANSHI_RUN_DIR=/`) combined with
 `--force` fails closed instead of deleting the target's parent
 directory tree.
 
 ## Integrity verification
 
-`agentflow restore` recomputes the SHA-256 of each artifact on disk
-and compares it against the hash `agentflow backup` recorded in
+`yanshi restore` recomputes the SHA-256 of each artifact on disk
+and compares it against the hash `yanshi backup` recorded in
 `manifest.json`, **before** running `pg_restore --clean --if-exists`
 (which deletes existing database objects unconditionally) or `tar`
 (which has no archive-entry sanity checks of its own — path traversal
@@ -197,8 +197,8 @@ mismatch — a corrupted transfer, or a bundle that was tampered with —
 fails that step without touching the target:
 
 ```text
-$ agentflow restore /var/backups/agentflow/2026-05-20
-  skills_dir         failed   /home/op/.agentflow/skills
+$ yanshi restore /var/backups/yanshi/2026-05-20
+  skills_dir         failed   /home/op/.yanshi/skills
     └─ artifact integrity check failed: manifest recorded sha256:ab12…, computed sha256:cd34… —
        the artifact may be corrupted or tampered with; pass --skip-integrity-check to restore
        anyway (not recommended)
@@ -207,19 +207,19 @@ $ agentflow restore /var/backups/agentflow/2026-05-20
 `--skip-integrity-check` overrides this per invocation (applies to
 every artifact restored in that run, not a per-artifact flag) and
 still surfaces a visible warning in the step's `reason` field rather
-than silently proceeding. A bundle produced by an `agentflow` build
+than silently proceeding. A bundle produced by an `yanshi` build
 that predates U0.2 has no recorded hash for its artifacts; restoring
 it is unaffected — such artifacts are treated as "cannot verify" (a
 warning, not a failure) rather than rejected outright.
 
 ## Restore sequencing
 
-`agentflow restore` already applies this order internally; it's
+`yanshi restore` already applies this order internally; it's
 listed here for operators restoring a surface manually (e.g. via raw
 `pg_restore` / `tar -xzf`) instead of through the command.
 
 1. **Postgres first.** `pg_restore` into a fresh database (or
-   `agentflow restore --include db`), then point `agentflow serve
+   `yanshi restore --include db`), then point `yanshi serve
    --database-url` at it.
 2. **Marketplace cache, skills, plugins.** These are independent of
    the DB and can restore in any order before the server starts.
@@ -228,7 +228,7 @@ listed here for operators restoring a surface manually (e.g. via raw
    `runs` is harmless but the rows will be unjoined.
 4. **Run artifacts.** Restore last. Restoring run_dir before Postgres
    produces orphan trees that the next cleanup sweep deletes.
-5. **Doctor smoke before traffic.** Run `agentflow doctor --profile
+5. **Doctor smoke before traffic.** Run `yanshi doctor --profile
    production --backup-check` (and `--server <url>` once the gateway
    is bound) before swinging traffic. The check refuses to pass if any
    of the five backup-relevant dirs are non-writable, and refuses to
@@ -236,20 +236,20 @@ listed here for operators restoring a surface manually (e.g. via raw
 
 ## Validation
 
-`agentflow doctor --backup-check` is the deployment-time smoke. It
+`yanshi doctor --backup-check` is the deployment-time smoke. It
 adds a `backup_check` section to the doctor report enumerating
 writability probes for run_dir, trace_dir, marketplace_cache,
 skills_dir, plugins_dir.
 
 ```text
-$ agentflow doctor --profile production --backup-check
+$ yanshi doctor --profile production --backup-check
 …
 Backup check:
-  run dir: ok (/var/agentflow/runs) [env]
-  trace dir: ok (/var/agentflow/traces) [env]
-  marketplace cache: ok (~/.agentflow/marketplace/cache) [default]
-  skills dir: ok (~/.agentflow/skills) [default]
-  plugins dir: ok (~/.agentflow/plugins) [default]
+  run dir: ok (/var/yanshi/runs) [env]
+  trace dir: ok (/var/yanshi/traces) [env]
+  marketplace cache: ok (~/.yanshi/marketplace/cache) [default]
+  skills dir: ok (~/.yanshi/skills) [default]
+  plugins dir: ok (~/.yanshi/plugins) [default]
 …
 Status: ok
 ```
@@ -273,20 +273,20 @@ Exit codes:
 For the v1.0 release dress rehearsal (`P7.4`), run this checklist on
 a freshly provisioned host before declaring the deployment ready:
 
-- [ ] Postgres restored from latest backup; `agentflow serve --check`
+- [ ] Postgres restored from latest backup; `yanshi serve --check`
   reports `db.reachable: true`.
-- [ ] Marketplace cache restored; `agentflow doctor --backup-check`
+- [ ] Marketplace cache restored; `yanshi doctor --backup-check`
   reports `marketplace cache: ok`.
-- [ ] Skills install dir restored; `agentflow skill list` enumerates
+- [ ] Skills install dir restored; `yanshi skill list` enumerates
   the expected skills.
 - [ ] Plugins install dir restored (if any plugins are installed);
-  `agentflow plugin list` enumerates them.
+  `yanshi plugin list` enumerates them.
 - [ ] Run artifacts restored (if required for the deployment's
   history retention policy).
 - [ ] Trace storage restored (if required for replay).
-- [ ] `agentflow doctor --profile production --backup-check --server
+- [ ] `yanshi doctor --profile production --backup-check --server
   http://127.0.0.1:8080` exits `0`.
-- [ ] One representative run replays cleanly via `agentflow trace
+- [ ] One representative run replays cleanly via `yanshi trace
   replay <run-id>`.
 
 If any line fails, **do not swing traffic**. Fix the gap, re-run
@@ -296,12 +296,12 @@ If any line fails, **do not swing traffic**. Fix the gap, re-run
 
 - `docs/CHECKPOINT_RECOVERY.md` — workflow-level resume semantics.
 - `docs/CURRENT_STATUS.md` — current state of the gateway and Web UI.
-- `agentflow-server::cleanup` (P2.2) — the retention sweep that prunes
+- `yanshi-server::cleanup` (P2.2) — the retention sweep that prunes
   orphaned run_dir subdirectories.
-- `agentflow doctor --backup-check` (P2.7) — the deployment-time
+- `yanshi doctor --backup-check` (P2.7) — the deployment-time
   smoke this document refers to.
-- `agentflow backup --output <path>` (P10.15.1) — the
+- `yanshi backup --output <path>` (P10.15.1) — the
   orchestrator that wraps `pg_dump` + `tar` into one command.
-- `agentflow restore <input>` (T2.2) — the counterpart orchestrator
+- `yanshi restore <input>` (T2.2) — the counterpart orchestrator
   that wraps `pg_restore` + `tar -xzf` into one command, consuming
-  the manifest `agentflow backup` writes.
+  the manifest `yanshi backup` writes.

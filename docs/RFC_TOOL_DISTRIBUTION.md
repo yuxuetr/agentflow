@@ -16,12 +16,12 @@ a boundary" (manifest serialization + sandbox-policy propagation + approval
 routing). Three previously-unrelated-looking gaps share this one root cause:
 
 **Gap A — skill runs execute with zero approval gating.**
-`agentflow-server/src/runs.rs::run_skill_agent` (lines 657–700+, invoked from
+`yanshi-server/src/runs.rs::run_skill_agent` (lines 657–700+, invoked from
 `skill_execute` at line 595, itself the backing for `POST
 /v1/skills/{name}:run`) builds a skill's agent via
 `SkillBuilder::build(&manifest, skill_dir)` (line 673) and runs it directly.
 Unlike every other tool-execution path in this codebase — the CLI's `harness
-run`/`chat` (`agentflow-cli/src/commands/harness/run.rs:190-199`), and the
+run`/`chat` (`yanshi-cli/src/commands/harness/run.rs:190-199`), and the
 server's own harness-session path (`harness_live.rs:510`/`616`) — nothing
 wraps the resulting registry with `wrap_registry`/`HookConfig`. A skill
 declaring `shell`/`script`/`code_exec` tools (real OS-level effect tools)
@@ -29,7 +29,7 @@ runs those tools ungated under `/v1/skills/{name}:run`, with no
 operator-visible record of what capabilities the run actually exercised.
 
 **Gap B — harness sessions can't use a skill's tools.**
-`agentflow-server`'s harness-session creation path accepts a `skill_name` on
+`yanshi-server`'s harness-session creation path accepts a `skill_name` on
 the session-creation request (`harness.rs:224`, `HarnessSessionContext.
 skill_name` at line 324) and threads it end-to-end
 (`harness.rs:496,509,516,824,835,985`) — but `harness_live.rs` only ever
@@ -43,7 +43,7 @@ skill's declared tools — only the hardcoded `FileTool::read_only` +
 `HttpTool` from `build_default_tool_registry` (`harness_live.rs:386`).
 
 **Gap C — distributed `agent` DAG nodes always get an empty registry.**
-`agentflow-worker/src/lib.rs::execute_agent_payload` (line 897) always
+`yanshi-worker/src/lib.rs::execute_agent_payload` (line 897) always
 constructs its `ReActAgent` with `Arc::new(ToolRegistry::new())` (line 915)
 — permanently empty. The worker is a genuinely separate process (possibly a
 separate machine); nothing today lets the DAG author declare which tools an
@@ -54,16 +54,16 @@ untrusted-origin config.
 
 | Item | Location | State |
 |---|---|---|
-| `ToolDefinition` | `agentflow-tool/src/tool.rs:129-135` | serde-ready (`name`, `description`, `parameters: Value`, `metadata`); describes **one** tool, no aggregate/registry-level DTO exists |
-| `Capability` / `EffectiveCapabilities` | `agentflow-tool/src/capability.rs:19,75,101,116` | serde-ready (`Serialize, Deserialize` derives present); multi-layer merge algorithm already implemented and used by the harness/hooks pipeline |
-| `ApprovalRequest` / `ApprovalDecision` | `agentflow-agent-spi` (re-exported via `agentflow_harness`) | serde-ready; **already crosses one process boundary today** via `ServerApprovalProvider` (`agentflow-server/src/harness_approval.rs:186-240`) parking requests on a `PendingApprovalRegistry` (line 56) that the `GET/POST /v1/harness/sessions/{id}/approvals*` routes (`harness_approval.rs:244,299`, registered at `lib.rs:590-597`) resolve from the HTTP side |
-| `SandboxPolicy` | `agentflow-tools/src/sandbox/policy.rs:29` | **not** serde-ready — `#[derive(Debug, Clone)]` only, no `Serialize`/`Deserialize` |
-| `ReActAgent::tools()` / `with_tools()` | `agentflow-agents/src/react/agent.rs:595,611` | already the registry-swap hook: snapshot the built agent's registry, wrap it, swap it back in. Already used in production by the CLI (`agentflow-cli/src/commands/harness/run.rs:194-199`): `let mut snapshot = ToolRegistry::new(); for tool in agent.tools().list() { snapshot.register(tool); } let wrapped = wrap_registry(snapshot, hook_config); agent = agent.with_tools(Arc::new(wrapped));` |
-| `execute_file_payload`'s `allowed_paths` | `agentflow-worker/src/lib.rs:792-813` | direct precedent for Gap C: a worker payload already reads a tool-shaping field (`allowed_paths`) out of `payload.parameters` (a plain JSON bag) rather than needing a `worker.proto` change |
-| `SkillCatalog::resolve` | `agentflow-server/src/skills.rs:109` | returns `Option<ResolvedSkillRegistryEntry { path: PathBuf, .. }>` (`agentflow-skills/src/index.rs:41-49`) — already used by the sibling `/v1/skills` route; directly reusable for Gap B's session-creation handler |
-| `SkillBuilder::build` / `build_with_project_root` | `agentflow-skills/src/builder.rs:46,78` | both already exist; `build_with_project_root` is the CLI-parity constructor (persona/knowledge/memory/project-memory all wired) |
-| `publish_through` (run-scoped event persistence) | `agentflow-server/src/events_stream.rs:184` | existing helper `skill_execute` already calls to write into the run's own `events` table — the natural destination for Gap A's tool-call/approval events, so they surface on the `/v1/runs/{id}/events` SSE stream operators already watch |
-| `AppState.approval_registry` | `agentflow-server/src/lib.rs:139` | `PendingApprovalRegistry`, keyed generically by `(session_id: String, request_id: String)` (`harness_approval.rs:65`) — nothing session-specific about the key shape, so `run_id.to_string()` works as the first element without any change to `PendingApprovalRegistry` itself |
+| `ToolDefinition` | `yanshi-tool/src/tool.rs:129-135` | serde-ready (`name`, `description`, `parameters: Value`, `metadata`); describes **one** tool, no aggregate/registry-level DTO exists |
+| `Capability` / `EffectiveCapabilities` | `yanshi-tool/src/capability.rs:19,75,101,116` | serde-ready (`Serialize, Deserialize` derives present); multi-layer merge algorithm already implemented and used by the harness/hooks pipeline |
+| `ApprovalRequest` / `ApprovalDecision` | `yanshi-agent-spi` (re-exported via `yanshi_harness`) | serde-ready; **already crosses one process boundary today** via `ServerApprovalProvider` (`yanshi-server/src/harness_approval.rs:186-240`) parking requests on a `PendingApprovalRegistry` (line 56) that the `GET/POST /v1/harness/sessions/{id}/approvals*` routes (`harness_approval.rs:244,299`, registered at `lib.rs:590-597`) resolve from the HTTP side |
+| `SandboxPolicy` | `yanshi-tools/src/sandbox/policy.rs:29` | **not** serde-ready — `#[derive(Debug, Clone)]` only, no `Serialize`/`Deserialize` |
+| `ReActAgent::tools()` / `with_tools()` | `yanshi-agents/src/react/agent.rs:595,611` | already the registry-swap hook: snapshot the built agent's registry, wrap it, swap it back in. Already used in production by the CLI (`yanshi-cli/src/commands/harness/run.rs:194-199`): `let mut snapshot = ToolRegistry::new(); for tool in agent.tools().list() { snapshot.register(tool); } let wrapped = wrap_registry(snapshot, hook_config); agent = agent.with_tools(Arc::new(wrapped));` |
+| `execute_file_payload`'s `allowed_paths` | `yanshi-worker/src/lib.rs:792-813` | direct precedent for Gap C: a worker payload already reads a tool-shaping field (`allowed_paths`) out of `payload.parameters` (a plain JSON bag) rather than needing a `worker.proto` change |
+| `SkillCatalog::resolve` | `yanshi-server/src/skills.rs:109` | returns `Option<ResolvedSkillRegistryEntry { path: PathBuf, .. }>` (`yanshi-skills/src/index.rs:41-49`) — already used by the sibling `/v1/skills` route; directly reusable for Gap B's session-creation handler |
+| `SkillBuilder::build` / `build_with_project_root` | `yanshi-skills/src/builder.rs:46,78` | both already exist; `build_with_project_root` is the CLI-parity constructor (persona/knowledge/memory/project-memory all wired) |
+| `publish_through` (run-scoped event persistence) | `yanshi-server/src/events_stream.rs:184` | existing helper `skill_execute` already calls to write into the run's own `events` table — the natural destination for Gap A's tool-call/approval events, so they surface on the `/v1/runs/{id}/events` SSE stream operators already watch |
+| `AppState.approval_registry` | `yanshi-server/src/lib.rs:139` | `PendingApprovalRegistry`, keyed generically by `(session_id: String, request_id: String)` (`harness_approval.rs:65`) — nothing session-specific about the key shape, so `run_id.to_string()` works as the first element without any change to `PendingApprovalRegistry` itself |
 
 **Conclusion from the inventory:** Gaps A and B need **no new wire protocol**
 — both are wiring problems solvable entirely with existing types
@@ -77,10 +77,10 @@ File+Http-only first cut.
 
 ## Decision
 
-**The manifest DTO lives in `agentflow-tools` (L2), not the L0
-`agentflow-tool` kernel crate.** All three surface crates that would consume
-it — `agentflow-cli`, `agentflow-server`, `agentflow-worker` — already
-depend on `agentflow-tools` directly (for the concrete `FileTool`/`HttpTool`
+**The manifest DTO lives in `yanshi-tools` (L2), not the L0
+`yanshi-tool` kernel crate.** All three surface crates that would consume
+it — `yanshi-cli`, `yanshi-server`, `yanshi-worker` — already
+depend on `yanshi-tools` directly (for the concrete `FileTool`/`HttpTool`
 implementations the manifest resolves into), so pushing the DTO into the
 kernel crate buys no isolation. The "which builtin does `kind: File` map to"
 logic is inherently impl-tier, matching why `RFC_TOOL_CONTRACT_SPLIT.md`'s
@@ -88,7 +88,7 @@ T3.3 moved concrete tools *out* of the kernel crate in the first place — a
 manifest resolver is exactly that kind of impl-tier logic, just running in
 reverse (DTO → concrete tool instead of concrete tool → DTO).
 
-Sketch, `agentflow-tools/src/manifest.rs` (new file, sibling to
+Sketch, `yanshi-tools/src/manifest.rs` (new file, sibling to
 `defaults.rs`):
 
 ```rust
@@ -98,9 +98,9 @@ pub enum BuiltinToolKind { File, Http }  // closed enum — File+Http only this 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolManifestEntry {
   pub kind: BuiltinToolKind,
-  pub definition: ToolDefinition,     // reused from agentflow_tool::tool
+  pub definition: ToolDefinition,     // reused from yanshi_tool::tool
   #[serde(default)]
-  pub required: Vec<Capability>,      // reused from agentflow_tool::capability; declared for audit only this pass, not merged against a policy layer (no skill/policy layer reaches the worker in this design yet)
+  pub required: Vec<Capability>,      // reused from yanshi_tool::capability; declared for audit only this pass, not merged against a policy layer (no skill/policy layer reaches the worker in this design yet)
   #[serde(default)]
   pub sandbox: Option<SandboxPolicy>,
 }
@@ -132,7 +132,7 @@ investigate → implement → test → commit → `TODOs.md`-update cycle:
 
 1. **W4.1a** (this document) — RFC only, no code.
 2. **W4.1b — Gap A: skill-run approval wrapping.**
-   `agentflow-server/src/runs.rs` (`run_skill_agent`, `skill_execute`,
+   `yanshi-server/src/runs.rs` (`run_skill_agent`, `skill_execute`,
    `RunContext`): thread `approval_registry: PendingApprovalRegistry` +
    an approval-timeout `Duration` into `run_skill_agent` (sourced the same
    way `LiveHarnessExecutor::new` does, `harness_live.rs:151,172`); after
@@ -144,14 +144,14 @@ investigate → implement → test → commit → `TODOs.md`-update cycle:
    pattern. Add `GET /v1/runs/{id}/approvals` + `POST
    /v1/runs/{id}/approvals/{request_id}` routes, handlers mirroring
    `list_pending_approvals`/`decide_approval`
-   (`agentflow-server/src/harness_approval.rs:244,299`) but keyed by
+   (`yanshi-server/src/harness_approval.rs:244,299`) but keyed by
    `run_id` against the same `AppState::approval_registry`.
 3. **W4.1c — Gap B: harness-session skill-dir resolution.**
-   `agentflow-server/src/harness.rs` (session-creation handler): when
+   `yanshi-server/src/harness.rs` (session-creation handler): when
    `req.skill_name` is `Some`, call `state.skills.resolve(name)` to get a
    `PathBuf`; add `skill_dir: Option<PathBuf>` to `HarnessSessionContext`,
    threaded the same way `skill_name` already is. In
-   `agentflow-server/src/harness_live.rs`'s registry-construction sites
+   `yanshi-server/src/harness_live.rs`'s registry-construction sites
    (lines 510 and 616): when `inputs.skill_dir` is `Some`, load+validate the
    manifest and call `SkillBuilder::build_with_project_root`, then apply the
    same snapshot → `wrap_registry` → `with_tools` pattern as W4.1b instead
@@ -159,20 +159,20 @@ investigate → implement → test → commit → `TODOs.md`-update cycle:
    behavior unchanged.
 4. **W4.1d — Gap C.1+C.2: worker tool manifest (File+Http).**
    C.1: add `Serialize`/`Deserialize` derives to `SandboxPolicy`
-   (`agentflow-tools/src/sandbox/policy.rs:29`) + a round-trip test. C.2:
-   new `agentflow-tools/src/manifest.rs` per the sketch above; in
-   `agentflow-worker/src/lib.rs::execute_agent_payload` (line 897), read an
+   (`yanshi-tools/src/sandbox/policy.rs:29`) + a round-trip test. C.2:
+   new `yanshi-tools/src/manifest.rs` per the sketch above; in
+   `yanshi-worker/src/lib.rs::execute_agent_payload` (line 897), read an
    optional `payload.parameters["tools"]`, deserialize as `ToolManifest`
    when present, call `build_registry_from_manifest` instead of
    `ToolRegistry::new()` (line 915); absent field keeps today's
    empty-registry behavior. Confirm
-   `agentflow-server/src/scheduler/distributed.rs::dispatch_node` needs no
+   `yanshi-server/src/scheduler/distributed.rs::dispatch_node` needs no
    change (forwards `parameters` verbatim) — verify directly rather than
    trust this note, it is a one-line grep.
 
 Each sub-item keeps `cargo test`/`clippy -D warnings`/`fmt --check` green for
 every crate it touches, plus `cargo xtask check-arch` (the manifest DTO
-living in `agentflow-tools`, an L2 crate, is not expected to trip any
+living in `yanshi-tools`, an L2 crate, is not expected to trip any
 dependency law, but the gate is re-run to confirm) and a full `cargo build
 --workspace --all-targets` before each commit.
 

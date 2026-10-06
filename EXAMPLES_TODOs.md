@@ -1,4 +1,4 @@
-# AgentFlow Applications TODOs
+# Yanshi Applications TODOs
 
 Last updated: 2026-05-17
 
@@ -9,14 +9,14 @@ Last updated: 2026-05-17
   - `examples/README.md` — **SDK feature 矩阵**（每个能力一个最小 demo，maintainer-facing）。
   - `examples/ecosystem/` — **生态形态样本**（skills / plugins / marketplace
     标准结构示范，contributor-facing）。
-- 这里的 application 必须是「**真实业务场景**」，跨越多个 agentflow 子系统，
-  目的是验证「agentflow 真能搭出可用产品」并发现实际使用中的缺口。
+- 这里的 application 必须是「**真实业务场景**」，跨越多个 yanshi 子系统，
+  目的是验证「yanshi 真能搭出可用产品」并发现实际使用中的缺口。
 - 每个 application 一个目录 `examples/applications/<name>/`，必含：
   - `README.md` — 业务描述 + 架构 + 外部依赖 + 所需 API key
   - 至少一个 `workflow.yml` 或 `skill.toml`（如果用 skill 形态）
   - 自定义 Rust 节点（如需）放 `src/`
   - smoke 测试（若需要 live API 必须 self-skip）
-- Dogfooding 过程中发现 agentflow 缺陷，写到本文件对应 application 的 `Findings`
+- Dogfooding 过程中发现 yanshi 缺陷，写到本文件对应 application 的 `Findings`
   段；积够再回填 `TODOs.md` 的下一批 segment（例如「P8 Dogfooding-Driven
   Refinements」）。
 
@@ -29,7 +29,7 @@ Last updated: 2026-05-17
 
 ## Active Queue
 
-| # | Application | Status | 验证 agentflow 哪些面 | 外部依赖 |
+| # | Application | Status | 验证 yanshi 哪些面 | 外部依赖 |
 | --- | --- | --- | --- | --- |
 | A1 | [blog-to-podcast](examples/applications/blog-to-podcast/) | WIP — live smoke ✅ (1st run 2026-05-18) | custom Rust node, LLM, HTTP, file, trace, skill | phonon-podcast (path dep), Moonshot LLM + MiniMax TTS (default) / Edge TTS (free) |
 | A1.5 | [podcast-mastering](examples/applications/podcast-mastering/) | WIP — live smoke ✅ (1st run 2026-05-18) | **L3 validation**: skill + `[[mcp_servers]]` + ReAct agent + native tool calling driving phonon-mcp subprocess | phonon-mcp binary (`cargo build --release -p phonon-mcp`), Moonshot LLM |
@@ -48,17 +48,17 @@ Last updated: 2026-05-17
 字幕；可选 BGM / intro / outro / chapter 切分。
 
 **为什么是第一个**: phonon-podcast 已经把 script_gen + TTS + 拼接 + BGM + 字幕
-都做完了，agentflow 主要工作是把它包成可观测的 DAG，验证「agentflow + 外部
-Rust 库」的集成路径是否顺滑。同时这是个 phonon 作者 + agentflow 作者都会自己
+都做完了，yanshi 主要工作是把它包成可观测的 DAG，验证「yanshi + 外部
+Rust 库」的集成路径是否顺滑。同时这是个 phonon 作者 + yanshi 作者都会自己
 用的真实工具。
 
-**验证 agentflow 哪些面**:
+**验证 yanshi 哪些面**:
 - 自定义 Rust 节点（`PodcastNode` 包 `phonon_podcast::PodcastPipeline`）
 - LLM 节点做 blog → outline 提炼
 - HTTP 节点拉 blog 原文
 - File 节点写产物
 - Trace 看每段 TTS 耗时 + LLM token
-- 可选包成 skill（`podcast-producer`）让 `agentflow skill run` 触发
+- 可选包成 skill（`podcast-producer`）让 `yanshi skill run` 触发
 
 **外部依赖**:
 - `phonon-podcast` 0.7（path dep 到 `/Users/hal/rustspace/phonon/phonon-podcast`）
@@ -88,7 +88,7 @@ HTTP fetch → LLM outline → PodcastScriptNode (phonon::OpenAiScriptGenerator)
       tts → assemble → subtitle）。触发条件：dogfooding 中遇到
       「想中间编辑脚本再继续」「单段 TTS 失败想 retry」之类。
 - [ ] 决定是否包成 skill（`SKILL.md` + persona + tool admission），
-      让 `agentflow skill run podcast-producer` 直接触发
+      让 `yanshi skill run podcast-producer` 直接触发
 - [ ] 加 medium / long 两个 blog fixture（多场景测试）
 - [ ] phonon-podcast 上游 PR：`OpenAiScriptGenerator::generate` 的
       `#[instrument]` 在 trace fields 里 dump 全文 `topic`，长 blog
@@ -103,8 +103,8 @@ HTTP fetch → LLM outline → PodcastScriptNode (phonon::OpenAiScriptGenerator)
   映射、9 种 emotion 白名单。Streaming SSE 留 follow-up。
 - [x] **Plan A 薄壳实现** — standalone Cargo project at
   `examples/applications/blog-to-podcast/`：
-  - `Cargo.toml`：empty `[workspace]` 跳出 agentflow workspace；path
-    dep 到 agentflow-core + phonon-ai + phonon-podcast + phonon-io +
+  - `Cargo.toml`：empty `[workspace]` 跳出 yanshi workspace；path
+    dep 到 yanshi-core + phonon-ai + phonon-podcast + phonon-io +
     phonon-core
   - `src/podcast_node.rs`：`PodcastNode` impl `AsyncNode`，内部串
     `OpenAiScriptGenerator`（Moonshot）+ `PodcastPipeline` +
@@ -123,7 +123,7 @@ HTTP fetch → LLM outline → PodcastScriptNode (phonon::OpenAiScriptGenerator)
   - 8 unit tests in `podcast_node` 模块 + 3 hermetic integration
     tests + 1 ignored live test。`cargo check` / `cargo clippy
     --all-targets -- -D warnings` / `cargo fmt --check` 全绿。
-  - 集成路径已验证：agentflow `Flow` orchestrate + 自定义 `AsyncNode`
+  - 集成路径已验证：yanshi `Flow` orchestrate + 自定义 `AsyncNode`
     包外部 Rust 库（phonon-podcast）的 path-dep 跨 workspace 集成
     端到端编译 + 测试都通。
 
@@ -146,24 +146,24 @@ HTTP fetch → LLM outline → PodcastScriptNode (phonon::OpenAiScriptGenerator)
   EXAMPLES_TODOs.md / README 应该改 `--segments` 描述为
   "approximate, not strict"。
 - **2026-05-18 — `.env` 自动加载是 dogfooding 必需**。第一版只读
-  process env vars，每次 `cargo run` 都得 `source ~/.agentflow/.env`，
-  太烦。加了 `dotenvy::from_path("~/.agentflow/.env")` 在 main 开头
+  process env vars，每次 `cargo run` 都得 `source ~/.yanshi/.env`，
+  太烦。加了 `dotenvy::from_path("~/.yanshi/.env")` 在 main 开头
   silently no-op-when-missing。**这条经验值得提到所有 application
-  examples 的 convention**：默认从 `~/.agentflow/.env` 加载，但允许
+  examples 的 convention**：默认从 `~/.yanshi/.env` 加载，但允许
   process env vars 覆盖（dotenvy 默认行为）。
 - **2026-05-18 — phonon trace 太冗长**。每次 `OpenAiScriptGenerator
   ::generate` / `MiniMaxTts::synthesize` 的 `#[instrument(fields(topic
   = %...))]` 都把整个 `topic`（即整篇 blog）dump 进 trace 一行。
   Terminal 输出基本不可读，需要 grep 才能看 trace 流程。phonon 侧的
   PR：截断长 instrument field（>= 80 字符就 `... (N chars)`）。
-- **2026-05-18 — agentflow `ConsoleListener` events 干净好用**。
+- **2026-05-18 — yanshi `ConsoleListener` events 干净好用**。
   `[workflow.started] / [node.started] / [node.output.captured] /
   [node.completed] / [workflow.completed]` 自动打，per-node 耗时
   立即可见（read_blog: 189µs vs produce_podcast: 18.78s）。这是
-  agentflow 的明显 win。
+  yanshi 的明显 win。
 - **2026-05-18 — `FlowValue::File { mime_type, .. }` 字段叫
   `mime_type` 不是 `media_type`**。第一版我猜错，编译报错才发现。
-  Lesson: agentflow public types 的 field naming 可以更早在 SDK 文档
+  Lesson: yanshi public types 的 field naming 可以更早在 SDK 文档
   里固化（已有 `docs/AGENT_SDK.md`，可加一节 "FlowValue field
   reference"）。
 - **2026-05-18 — `ConsoleListener` 是 unit struct 没 `default()`**。
@@ -177,7 +177,7 @@ HTTP fetch → LLM outline → PodcastScriptNode (phonon::OpenAiScriptGenerator)
 - **2026-05-18 — guest voice 选错（HK 口音）**。我默认配的
   `Chinese (Mandarin)_HK_Flight_Attendant` 名字里 "HK" 是港式国语
   口音，听上去跟纯普通话 host 不协调（用户反馈"一个普通话一个方言"
-  的真因）。这不是 phonon 或 agentflow 的问题 —— 是 default config
+  的真因）。这不是 phonon 或 yanshi 的问题 —— 是 default config
   的 voice_id 挑错。1-line fix：换成 MiniMax 另一个纯 Mandarin
   `Chinese (Mandarin)_*` voice。Lesson：**default voice 选择前
   应该试听 MiniMax 提供的 sample audio**（MiniMax console 里有
@@ -206,7 +206,7 @@ mastered 版本：LUFS 归一化到目标响度、淡入淡出、上传平台可
 可以靠 ReAct + native tool calling 串起 6 个独立 MCP 工具完成端到端
 工作流，零项目特定 Rust 代码。
 
-**验证 agentflow 哪些面**:
+**验证 yanshi 哪些面**:
 - `[[mcp_servers]]` 启动 native binary 子进程
 - `security.mcp_command_allowlist` 安全门把关
 - `McpClientPool` + `McpToolAdapter` 自动暴露 14 个 `mcp_phonon_*` tool
@@ -216,8 +216,8 @@ mastered 版本：LUFS 归一化到目标响度、淡入淡出、上传平台可
 **外部依赖**:
 - `phonon-mcp` binary（path: `/Users/hal/.target/release/phonon-mcp`）—
   `cd /Users/hal/rustspace/phonon && cargo build --release -p phonon-mcp`
-- Moonshot key（已有，via `~/.agentflow/.env`）
-- agentflow CLI release build
+- Moonshot key（已有，via `~/.yanshi/.env`）
+- yanshi CLI release build
 
 **TODO 子项**:
 - [ ] 听 `/tmp/episode-mastered.wav` 主观评估 master 质量
@@ -243,12 +243,12 @@ mastered 版本：LUFS 归一化到目标响度、淡入淡出、上传平台可
 
 - **2026-05-18 — SKILL.md 不支持 `model:` 字段**。SKILL.md 的
   frontmatter `model` 始终被 `Default::default()` 覆盖（默认 `gpt-4o`）。
-  Bug or feature？SKILL.md 跨工具 portable 不带 agentflow 特定字段
+  Bug or feature？SKILL.md 跨工具 portable 不带 yanshi 特定字段
   是合理 design，但 doc / error message 没说明白；用户配了 model
   但被静默忽略很迷惑。**改进方向**：要么 SKILL.md 加 model 支持，
   要么 validate 时 warn "ignoring frontmatter.model in SKILL.md;
   use skill.toml for model config"。
-- **2026-05-18 — `agentflow skill validate` 错误信息不够具体**。
+- **2026-05-18 — `yanshi skill validate` 错误信息不够具体**。
   报 `Error: Validation failed` 没说哪一条 validation 失败。
   实际是 `[[mcp_servers]] command '/.../phonon-mcp' executable
   name 'phonon-mcp' is not in security.mcp_command_allowlist`，
@@ -261,13 +261,13 @@ mastered 版本：LUFS 归一化到目标响度、淡入淡出、上传平台可
   （强迫 operator 显式审批每个 native binary），但 docs/AGENT_SDK.md
   或 SKILL_FORMAT.md 里要明写「想跑 compiled binary MCP 一定要加
   `security.mcp_command_allowlist`」。
-- **2026-05-18 — `mcp_phonon_*` 命名 convention 干净**。agentflow
+- **2026-05-18 — `mcp_phonon_*` 命名 convention 干净**。yanshi
   自动用 `mcp_<server_name>_<tool_name>` 命名，14 个 phonon tool
   全自动暴露 `mcp_phonon_audio_load` 等，agent 看到的名字一致、
   好预测。
 - **2026-05-18 — Moonshot tool calling first-shot 工作正常**。`moonshot-v1-128k`
   对 native tool calling 支持稳定，按 persona 写的步骤严格走 6 步，
-  不乱用 tool、不跳步、handle 串接正确。这是 agentflow ↔ Moonshot
+  不乱用 tool、不跳步、handle 串接正确。这是 yanshi ↔ Moonshot
   集成的额外验证点。
 - **2026-05-18 — phonon-mcp `AssetRegistry` 在 multi-tool-call
   pattern 下完全正常**。每个 `normalize_lufs` / `fade` 返回新 UUID
@@ -292,7 +292,7 @@ mastered 版本：LUFS 归一化到目标响度、淡入淡出、上传平台可
   对比 A1 用 L1 同进程直接调，PodcastPipeline 走完 12 段 TTS 才 19s。
 - **2026-05-18 — `--trace` 输出 `RuntimeTrace` JSON 极其清晰**。
   每个 `plan` / `tool_call` / `tool_result` / `final_answer` 都
-  带 timestamp + index，是 dogfooding / debug 利器。这是 agentflow
+  带 timestamp + index，是 dogfooding / debug 利器。这是 yanshi
   的明显 win。
 - **2026-05-18 — L1 vs L3 的真实工程取舍数据点**：A1 (L1) 19s 出
   2.5 分钟播客；A1.5 (L3) 37s 对同一文件 mastering。L3 慢的是
@@ -306,11 +306,11 @@ mastered 版本：LUFS 归一化到目标响度、淡入淡出、上传平台可
 **业务**: 输入 PR URL（GitHub）或本地 diff 文件，输出结构化评审评论（按文件
 分组、按严重度排序），可选直接推到 GitHub。
 
-**为什么有价值**: 验证 agentflow 的 ReAct agent + MCP（GitHub server）组合是否
-真能搭出可用 reviewer；skill 包装让团队能 `agentflow skill install
+**为什么有价值**: 验证 yanshi 的 ReAct agent + MCP（GitHub server）组合是否
+真能搭出可用 reviewer；skill 包装让团队能 `yanshi skill install
 code-reviewer` 后立即用。
 
-**验证 agentflow 哪些面**:
+**验证 yanshi 哪些面**:
 - `ReActAgent` 主循环（读 diff → 思考 → 调 tool → 回答）
 - MCP 集成（GitHub MCP server 提供 `get_pr_diff` / `add_comment`）
 - Skill 包装 + persona + 工具白名单（admission）
@@ -349,7 +349,7 @@ code-reviewer` 后立即用。
 
 **Findings** (2026-05-18, A2 first dogfooding pass):
 
-- **F-A2-1 — `agentflow skill run` 顶层 `🤖 Agent:` 行打印空字符串
+- **F-A2-1 — `yanshi skill run` 顶层 `🤖 Agent:` 行打印空字符串
   即便 answer 已 produce** —— **DONE 2026-05-18**。深入调查后发现
   根因不是 `result.answer` 没被填充（实际填了），而是 **LLM 响应被
   `max_tokens` 截断时，`serde_json::from_str` 在不完整 JSON 上失败，
@@ -364,7 +364,7 @@ code-reviewer` 后立即用。
   empty answer field stays empty Answer。19 parser tests + 168 agents
   lib tests 全绿。"empty agent line" 的初始观察可能是 LLM 偶发返回
   `{"answer":""}` 的非确定性（这种情况下 println 正确显示空，是
-  LLM-side 问题，不是 agentflow bug）。
+  LLM-side 问题，不是 yanshi bug）。
 - **F-A2-2 — L3 skill 在 "agent-decides" 任务上工作得很好**。跟
   A1.5 一起验证：当 agent 真有决策（不是 pass-through）时，kimi-k2.6
   能按 persona 步骤走 2-3 个 tool call、做合理决定、输出结构化结果。
@@ -401,7 +401,7 @@ code-reviewer` 后立即用。
   automated gates; don't try to make LLM judgement deterministic
   — use `cargo clippy`/linters for that complementary surface.
 - **F-A2-6 — `--trace` 的 JSON 输出 schema 易解析但 stdout 既有
-  人类格式又夹 JSON**。`agentflow skill run --trace` 把人类摘要
+  人类格式又夹 JSON**。`yanshi skill run --trace` 把人类摘要
   + JSON trace 混在 stdout，从中抽 answer 需要小段 python 找 brace
   匹配（README 里有 snippet）。**改进**：分两路输出 —— 人类格式
   到 stderr，JSON 到 stdout，便于 pipe parsing。或加 `--output json`
@@ -428,10 +428,10 @@ code-reviewer` 后立即用。
   调远程 GitHub 不在本仓库 demo 范围内。**侧面 finding**：dogfooding
   跑了一段后开始模拟"如果有 PR 流程会怎样"才能更有意义。下次可能
   在另一个有真 PR 流的仓库做。
-- **F-A2-11 — `agentflow harness run` CLI doesn't wrap registry with
+- **F-A2-11 — `yanshi harness run` CLI doesn't wrap registry with
   HookedTool / ApprovalProvider**.
   ✅ **CLOSED 2026-05-18** via the `--approve {none,cli,auto-allow,
-  auto-deny}` flag on `agentflow harness run`. Default `none`
+  auto-deny}` flag on `yanshi harness run`. Default `none`
   preserves pre-existing behaviour; the other modes install a
   `HookConfig` + matching `ApprovalProvider` around the agent's
   registry. With `--approve cli --profile production` (or
@@ -443,14 +443,14 @@ code-reviewer` 后立即用。
   New `ReActAgent::with_tools` helper enabled the CLI to swap the
   registry after `SkillBuilder::build` without duplicating
   manifest/persona/memory wiring. Trying to use the CLI for the
-  write-side validation surfaced that `agentflow-cli/src/commands/
+  write-side validation surfaced that `yanshi-cli/src/commands/
   harness/run.rs` builds a bare `ReActAgent` from the skill but never
-  calls `agentflow_harness::wrap_registry(...)`. Only the server's
+  calls `yanshi_harness::wrap_registry(...)`. Only the server's
   `LiveHarnessExecutor` wires it. So Harness Mode's approval flow is
   only reachable today via (a) the HTTP gateway or (b) hand-rolled
   binaries (which is what `code-reviewer-write` had to do). **Action**:
   promote the registry-wrap + approval-provider-injection step into
-  `agentflow harness run` (probably gated on a `--profile` flag or
+  `yanshi harness run` (probably gated on a `--profile` flag or
   on the skill's manifest declaring write tools). Until then the CLI
   ≠ production Harness contract, and that asymmetry needs a doc fix
   at minimum.
@@ -463,7 +463,7 @@ code-reviewer` 后立即用。
   callout + an inline comment in the canonical snippet + a pointer
   to `code-reviewer-write` as a reference binary.
   Spent ~15min debugging "why does the approval prompt never fire?"
-  before reading `agentflow-harness/src/hooks_runtime.rs::
+  before reading `yanshi-harness/src/hooks_runtime.rs::
   resolve_proceed_decision` (~line 369). The escalation rule is:
   `Production` profile auto-escalates NonIdempotent → RequireApproval,
   but `Local` profile only fires when a pre-hook explicitly returns
@@ -501,14 +501,14 @@ code-reviewer` 后立即用。
     both 404 on this account today.
   - (d) (not tried this run): wrap the script in `PlanExecuteAgent`
     for a hard pre-committed 2-step plan.
-  **Adjacent agentflow gap**: ReAct's anti-loop heuristic could
+  **Adjacent yanshi gap**: ReAct's anti-loop heuristic could
   detect "same tool + same params, twice in a row" and synthesise
   a stronger steering message ("you already ran this; analyse the
   prior observation instead"). Today it just lets the model loop
   until budget exhausts.
   ✅ **The adjacent gap is CLOSED 2026-05-18**: `ReActAgent::
   run_with_context` now tracks the prior `(tool, params)` and
-  appends an `[agentflow steering note (F-A2-13): ...]` to the
+  appends an `[yanshi steering note (F-A2-13): ...]` to the
   tool-result memory message when iteration N+1 matches N. Trace
   stays clean; tool still runs (advisory, not blocking). With
   this nudge the moonshot loop pathology should self-correct
@@ -522,15 +522,15 @@ code-reviewer` 后立即用。
 **业务**: 配置感兴趣的 arxiv 主题（如 "LLM agents", "Rust async"）+ 关键词，
 agent 周期性抓新论文、读摘要、与已索引文献做对比、产出周报 markdown。
 
-**为什么有价值**: 验证 agentflow 的 Arxiv node + RAG + memory（"已读过哪些论文"
+**为什么有价值**: 验证 yanshi 的 Arxiv node + RAG + memory（"已读过哪些论文"
 持久化）+ scheduled run（CronCreate / `/schedule`）的组合。
 
-**验证 agentflow 哪些面**:
+**验证 yanshi 哪些面**:
 - `arxiv` node 抓论文 metadata + 摘要
 - RAG ingest 持久索引 + retrieve 做新旧对比
 - `MemoryStore`（`SqlitePreferenceStore` 存「关注的主题列表」+
   `SqliteEntityFactStore` 存「这篇我读过」）
-- 调度（手动 cron 或 agentflow 自己的 schedule 机制）
+- 调度（手动 cron 或 yanshi 自己的 schedule 机制）
 - LLM 写周报
 
 **外部依赖**:
@@ -539,9 +539,9 @@ agent 周期性抓新论文、读摘要、与已索引文献做对比、产出�
 - 可选 Qdrant（如果用 vector RAG）；不用也能跑 BM25
 
 **TODO 子项**（iteration 2+）:
-- [ ] **跨 paper 引用**：用 `agentflow-rag` 索引 paper abstracts，让 briefing
+- [ ] **跨 paper 引用**：用 `yanshi-rag` 索引 paper abstracts，让 briefing
   能 surface "this builds on paper X from last week"
-- [ ] **scheduled run**：决定走 OS cron / systemd timer / agentflow 自己
+- [ ] **scheduled run**：决定走 OS cron / systemd timer / yanshi 自己
   的 `/schedule`；当前一次性 binary，定时部分待定
 - [ ] **per-user preference store**：用 `SqlitePreferenceStore` 持久化关注
   主题列表（多 category 一次跑完）
@@ -579,12 +579,12 @@ agent 周期性抓新论文、读摘要、与已索引文献做对比、产出�
   共享 `Vec<Paper>`。`FlowValue::Json` 路由能传值但需要 serialize +
   parse（成本 + 类型丢失）。**改进方向**：`FlowValue` 加一个
   `Rust(Arc<dyn Any + Send + Sync>)` 变体让节点直接传 Rust object
-  without serialize？或者 `agentflow-core` 文档 / 例子化"shared bus
+  without serialize？或者 `yanshi-core` 文档 / 例子化"shared bus
   pattern" 作为同进程 Vec/struct 传递的 idiom。Today 是隐式 idiom。
 - **F-A3-4 — arxiv Atom XML 解析靠 quick-xml + serde 直接 work**。
   没遇到 schema drift / 命名空间 quirks 之类。Atom 字段稳定。dep
   size +1 个 crate (quick-xml)。Alternative: `roxmltree` 也 work。
-- **F-A3-5 — `agentflow-memory` 的 in_memory() 测试 helper 干净**。
+- **F-A3-5 — `yanshi-memory` 的 in_memory() 测试 helper 干净**。
   `SqliteEntityFactStore::in_memory().await` 让 4 个 dedup tests
   hermetic 跑（共 0.01s），没有 tempdir / file cleanup boilerplate。
   P4.7 testing convenience design correct。**Positive**。
@@ -598,7 +598,7 @@ agent 周期性抓新论文、读摘要、与已索引文献做对比、产出�
   在 prompt 里是 schema placeholder，但模型把它当成 markdown link
   text。**Iteration 1 acceptable**（链接还是 click 得到），prompt
   下次改成 "Link: \\<http://...\\>" 之类避歧义。
-- **F-A3-8 — `agentflow-core` 多 node DAG 通过 dependencies 串行
+- **F-A3-8 — `yanshi-core` 多 node DAG 通过 dependencies 串行
   + shared bus 传 in-mem Vec 工作良好**。`fetch_arxiv` →
   `diff_seen` → `briefing` 全部从顺序运行，每个节点的 `info!` 日志
   跟 `[node.completed] ... in <duration>` 配合让性能瓶颈一眼看出
@@ -619,10 +619,10 @@ agent 周期性抓新论文、读摘要、与已索引文献做对比、产出�
 **业务**: 输入会议录音（.wav / .mp3 / .m4a），输出转录 markdown +
 按 speaker 切分 + 行动项列表（"X 负责 Y，DDL Z"）+ 可选会议纪要。
 
-**为什么有价值**: 验证 agentflow 的 ASR node（StepFun 或 OpenAI Whisper）+
+**为什么有价值**: 验证 yanshi 的 ASR node（StepFun 或 OpenAI Whisper）+
 LLM 后处理的组合；典型「音频 → 结构化输出」流程。
 
-**验证 agentflow 哪些面**:
+**验证 yanshi 哪些面**:
 - `asr` node（现有）
 - LLM 多轮做摘要 + action item 提取
 - 长输入分块（如果会议超过 ASR 上下文限制）
@@ -649,10 +649,10 @@ LLM 后处理的组合；典型「音频 → 结构化输出」流程。
 **业务**: 每周固定时间，从 RAG 索引（前面 A3 / 自己博客 / 收藏夹）查最近一周
 新增内容，LLM 生成 digest，通过 SMTP/SendGrid 发邮件给指定收件人。
 
-**为什么有价值**: 验证 agentflow 的 scheduled run + RAG + LLM + HTTP（往外
+**为什么有价值**: 验证 yanshi 的 scheduled run + RAG + LLM + HTTP（往外
 发请求）完整业务回路；测「无人值守」可靠性。
 
-**验证 agentflow 哪些面**:
+**验证 yanshi 哪些面**:
 - 长期 scheduled run（不是 dev 期间手动触发）
 - RAG `search` query
 - LLM 写长文
@@ -681,10 +681,10 @@ LLM 后处理的组合；典型「音频 → 结构化输出」流程。
 "ja", "zh"]`），输出按语言分目录的翻译版本，保留 markdown 结构 + code fence
 不翻译。
 
-**为什么有价值**: 验证 agentflow 的 `batch` / `map`（并行）+ template +
+**为什么有价值**: 验证 yanshi 的 `batch` / `map`（并行）+ template +
 LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场景。
 
-**验证 agentflow 哪些面**:
+**验证 yanshi 哪些面**:
 - `map` 节点并行（每个文件 × 每个语言）
 - Template 节点做 system prompt 渲染
 - 并发上限 / rate limit 应对
@@ -703,10 +703,10 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
 
 **DONE 子项 (iteration 1, 2026-05-18)**:
 - iter 1 workflow.yml ships in `examples/applications/doc-translator/`
-- Validated end-to-end: `agentflow workflow run` produces 4 sub-flows
+- Validated end-to-end: `yanshi workflow run` produces 4 sub-flows
   in parallel, returns a fan-in result with 3 OK + 1 ERR translations
 - N=3 baseline confirms the failure mode is provider rate-limit, not
-  agentflow logic
+  yanshi logic
 
 **DONE 子项 (iteration 2, 2026-05-18)**:
 - iter 2 workflow-iter2.yml ships with real file I/O end-to-end
@@ -739,7 +739,7 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
 **Findings (iteration 1)**:
 
 - **F-A6-1 — `map parallel: true` has NO concurrency cap**.
-  `agentflow-core::Flow::execute_map_node_parallel` does
+  `yanshi-core::Flow::execute_map_node_parallel` does
   `for item in input_list { tokio::spawn(...) }` unbounded. With
   Moonshot's org concurrency limit of 3, N=4 fan-out hits 429 on
   the 4th item. Real A6 use case (100+ files × N langs = 300+
@@ -757,15 +757,15 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
   practice (probe node tracks high-water mark) and (b) zero is
   rejected. Live re-run of the A6 workflow with `max_concurrent: 3`
   on N=4 produced 4/4 successes (was 3/4 before the cap).
-- **F-A6-2 — `agentflow workflow validate` warns that `input_list`
+- **F-A6-2 — `yanshi workflow validate` warns that `input_list`
   isn't in the map schema**, even though the factory accepts it
   (via the generic `initial_inputs` dump path). False-positive
   warning hurts the validate UX. **Action**: declare `input_list`
   / `parallel` / `template` as first-class fields on map nodes in
-  `agentflow-cli/src/config/schema.rs`.
+  `yanshi-cli/src/config/schema.rs`.
   ✅ **CLOSED 2026-05-18**: map ParamSpec list bumped to include
   `input_list` (optional Sequence) and `max_concurrent` (optional
-  Integer). `agentflow workflow validate` now reports `✅ Schema
+  Integer). `yanshi workflow validate` now reports `✅ Schema
   validation passed` on the A6 workflow instead of 2 false
   warnings.
 - **F-A6-3 — per-sub-flow Err is buried inside the results array**,
@@ -795,7 +795,7 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
   that signal without changing semantics.
 - **F-A6-6 — template node parameters trigger false validator
   warnings** when used as initial_inputs for Tera context. The
-  template ParamSpec in `agentflow-cli/src/config/schema.rs` only
+  template ParamSpec in `yanshi-cli/src/config/schema.rs` only
   declares `template`, `output_key`, `output_format`; any
   workflow-author-defined parameter (e.g. `file_list`, `lang_list`)
   validates as `... is not defined in the CLI schema for node type
@@ -809,7 +809,7 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
   arbitrary Tera context). Surfaced during A6 iter 3.
   ✅ **CLOSED 2026-05-18**: validator now exempts `template`
   nodes from the unknown-parameter check (the whole point of
-  template is arbitrary Tera context). `agentflow workflow
+  template is arbitrary Tera context). `yanshi workflow
   validate` on the A6 iter 3 workflow now reports
   `✅ Schema validation passed`. Existing typo-detection test
   switched to use an `llm` node (closed ParamSpec) so the
@@ -817,7 +817,7 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
 
 - **F-A6-7 — template node requires explicit `output_format: "json"`
   even when the rendered output starts with `[` or `{`**. The
-  parser at `agentflow-nodes/src/nodes/template.rs:97` branches on
+  parser at `yanshi-nodes/src/nodes/template.rs:97` branches on
   `output_format` rather than auto-detecting from the rendered
   shape. Without the explicit hint, a JSON-array-rendering template
   lands as `FlowValue::Json(String)` and downstream map nodes
@@ -839,14 +839,14 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
   refactored to drop the explicit hint; live re-run still produces
   8/8 successes with the auto-detect log line confirming
   `(auto-detected JSON array via leading '[')`. All 25
-  agentflow-nodes tests + 39 agentflow-cli tests pass.
+  yanshi-nodes tests + 39 yanshi-cli tests pass.
 
 - **F-A6-8 — Tera `loop.parent.*` introspection doesn't work in
   this Tera version**, so cross-product comma logic via
   `{% if not loop.first or not loop.parent.first %},{% endif %}`
   emits a comma right after the opening `[`, producing invalid
   JSON. Workaround: an explicit `needs_comma` flag manipulated via
-  `set_global`. **Not an agentflow bug** but worth recording as a
+  `set_global`. **Not an yanshi bug** but worth recording as a
   templating convention: prefer `set_global` accumulators over
   Tera loop introspection for any list-of-N rendering pattern.
   Documented in the A6 iter 3 workflow comments. Surfaced during
@@ -859,7 +859,7 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
   `input_mapping: { path: "{{ item.read_path }}" }` doesn't work
   on non-template nodes — the factory parser only matches
   `{{ nodes.X.outputs.Y }}` literals (see
-  `agentflow-cli/src/executor/factory.rs:298`). The workaround in
+  `yanshi-cli/src/executor/factory.rs:298`). The workaround in
   A6 iter 2 is a 2-node-per-path detour (`render_read_path`
   template → file:read with input_mapping pulling from it),
   which doubles the sub-flow line count for what should be a
@@ -878,7 +878,7 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
   dotted path against the seeded `item` initial input and inserts
   the resolved value. A6 iter 2 refactored from 6-node sub-flows
   to 4-node sub-flows; 8/8 still succeed, files still land on
-  disk. 2 new unit tests in `agentflow-core::flow::tests` cover
+  disk. 2 new unit tests in `yanshi-core::flow::tests` cover
   flat + nested item lookups + missing-path error reporting.
   130 lib tests pass (was 128; +2).
 
@@ -886,7 +886,7 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
   is already English produces unrelated language output**.
   Workflow-author trap: validate `source_lang != target_lang`
   before dispatching. Easy guard at the `build_prompt` template
-  step (Tera `{% if %}`). **Not an agentflow bug**, but worth
+  step (Tera `{% if %}`). **Not an yanshi bug**, but worth
   documenting in examples conventions: "translation workflows
   should always check source != target before LLM dispatch".
   ✅ **CLOSED 2026-05-18**: added a translation-specific bullet
@@ -906,10 +906,10 @@ LLM 大量调用 + file batch write；典型「输入扇出、输出扇入」场
 拿提交，LLM 按 conventional-commits 分类（feat/fix/docs/chore），生成
 markdown changelog 段。
 
-**为什么有价值**: **agentflow 给自己用** —— 每次 release 时跑一遍，验证基础
+**为什么有价值**: **yanshi 给自己用** —— 每次 release 时跑一遍，验证基础
 工具链；纯本地无外部依赖，最适合频繁 dogfood。
 
-**验证 agentflow 哪些面**:
+**验证 yanshi 哪些面**:
 - `shell` node 跑 `git log --pretty=...`（验证 shell admission + sandbox）
 - LLM 分类 + 改写
 - File 节点写 / append CHANGELOG.md
@@ -921,7 +921,7 @@ markdown changelog 段。
 **TODO 子项**:
 - [ ] 写 `README.md`
 - [ ] 设计 prompt（conventional commits 分类规则）
-- [ ] 决定要不要把它包成 `agentflow changelog` CLI 子命令（升级成 P3.x）
+- [ ] 决定要不要把它包成 `yanshi changelog` CLI 子命令（升级成 P3.x）
 - [x] 把 `max_tokens` 在 templates/default_models.yml 里调高
   （F-A7-8，2026-05-18 commit；94 个 text 模型从 4096 → 32768，
   multimodal/tts 不动）
@@ -934,9 +934,9 @@ markdown changelog 段。
   (one-shot LlmInit::prompt) + 2-node Flow + CLI
 - [x] live 跑通：`v0.2.0..HEAD` 399 commits → 11k 字符 markdown
   到 `/tmp/CHANGELOG-v0.2.0-to-HEAD.md`，~117s wall clock
-- [x] 给 agentflow 自己生成 CHANGELOG（dogfood 完成）
+- [x] 给 yanshi 自己生成 CHANGELOG（dogfood 完成）
 - [x] 沉 10 个 Finding 到本文件
-- [x] 顺手在 `agentflow-llm/templates/default_models.yml` 加
+- [x] 顺手在 `yanshi-llm/templates/default_models.yml` 加
   `kimi-k2.5` + `kimi-k2.6` 进 registry（带 `temperature: 1.0`
   for k2.6）
 
@@ -959,7 +959,7 @@ markdown changelog 段。
   仍然是有信息量的）但加显式 note：
   "not wired into the CLI workflow factory; use the shell tool from
   a skill / harness instead, or shell out from a custom AsyncNode
-  binary"。这样 `agentflow workflow validate --explain-permissions`
+  binary"。这样 `yanshi workflow validate --explain-permissions`
   对 `type: shell` 节点诚实告知它在 YAML 不能直接跑。Full ShellNode
   factory wrap 需要设计 SandboxPolicy 注入、allowed_commands YAML
   schema、`Arc<SandboxPolicy>` 从 workflow config 到 Tool 的串接 ——
@@ -972,8 +972,8 @@ markdown changelog 段。
   updated to assert the new note。
   ✅ **FULLY CLOSED 2026-05-18** (real factory add this time): A6
   iter 3's reach for file discovery surfaced the need. New
-  `ShellWorkflowNode` in `agentflow-cli/src/executor/shell.rs`
-  wraps `agentflow_tools::ShellTool` with a `SandboxPolicy` built
+  `ShellWorkflowNode` in `yanshi-cli/src/executor/shell.rs`
+  wraps `yanshi_tools::ShellTool` with a `SandboxPolicy` built
   from YAML params; `allowed_commands` is a REQUIRED schema field
   so workflows fail validate at parse time if missing (no
   permissive-by-default arbitrary code execution). `command` can
@@ -987,7 +987,7 @@ markdown changelog 段。
 - **F-A7-3 — Model registry 加载：per-provider `config/models/*.yml`
   是死代码** —— **DONE 2026-05-18**。删了 6 个 dead 文件
   (`anthropic.yml`/`dashscope.yml`/`google.yml`/`moonshot.yml`/
-  `openai.yml`/`step.yml`)。背景：`agentflow-llm/src/config/vendor_configs.rs`
+  `openai.yml`/`step.yml`)。背景：`yanshi-llm/src/config/vendor_configs.rs`
   是一个 split 工具（把 monolithic config.yml 切成 per-vendor 文件），
   但 split 输出从来没被 runtime registry 读取，是 misleading dead
   artefact。同时 update 3 个误导性文档（`AGENTS.md` × 2 处，
@@ -996,30 +996,30 @@ markdown changelog 段。
   contributor（包括我）改错地方。现在统一指向真实源
   `templates/default_models.yml`。`config/config.yml` + vendor_configs
   split 工具本身保留（独立用途，跟 registry 加载是两回事）。
-- **F-A7-4 — 用户级 `~/.agentflow/models.yml` 静默覆盖 built-in
-  registry**。`AgentFlow::init()` 优先级是 AGENTFLOW_MODELS_CONFIG
-  > `~/.agentflow/models.yml` > built-in。意味着：往
+- **F-A7-4 — 用户级 `~/.yanshi/models.yml` 静默覆盖 built-in
+  registry**。`Yanshi::init()` 优先级是 YANSHI_MODELS_CONFIG
+  > `~/.yanshi/models.yml` > built-in。意味着：往
   `templates/default_models.yml` 加 model 对已有 user-level
-  models.yml 的用户不起作用。lib.rs rustdoc 里写了但 `agentflow
+  models.yml 的用户不起作用。lib.rs rustdoc 里写了但 `yanshi
   doctor` 不 surface 当前用的是哪个 source。应该显眼报告
   "models config source: <path>"。
 - **F-A7-5 — `kimi-k2.6` 强制 `temperature: 1.0`**。Moonshot 拒绝
   其它值，HTTP 400 `invalid temperature: only 1 is allowed for
   this model`。可能是 reasoning-model 约定。已在
   `templates/default_models.yml` 修正并带注释。手动 copy kimi-k2.6
-  到自己的 models.yml 但没读注释的用户会撞墙。值得在 agentflow-llm
+  到自己的 models.yml 但没读注释的用户会撞墙。值得在 yanshi-llm
   provider 文档里 surface。
-- **F-A7-6 — `agentflow-llm` registry 滞后 Moonshot 实际 model 列表**。
+- **F-A7-6 — `yanshi-llm` registry 滞后 Moonshot 实际 model 列表**。
   `kimi-k2.5` 和 `kimi-k2.6` 在真实 Moonshot 账号的 `/v1/models`
-  里有，但 agentflow registry 直到这次 commit 才加。agentflow 没有
+  里有，但 yanshi registry 直到这次 commit 才加。yanshi 没有
   auto-detect drift 的机制。任何 provider 发新 model 时模式会
-  重现。可能的改进：`agentflow llm models --refresh-from-api`
+  重现。可能的改进：`yanshi llm models --refresh-from-api`
   子命令，拉各 provider 的 `/v1/models` 报告 add/drop。低优先级
   但值得记。
-- **F-A7-7 — agentflow-cli 有 P9.3 dotenvy auto-load；A7 binary
-  又复制了一份**。binary 有自己的 `load_agentflow_dotenv()` 因为
-  它是 standalone Cargo project，不通过 agentflow CLI 调用。模式
-  能用但 duplication 是 smell。长期：抽 `agentflow-dotenv` helper
+- **F-A7-7 — yanshi-cli 有 P9.3 dotenvy auto-load；A7 binary
+  又复制了一份**。binary 有自己的 `load_yanshi_dotenv()` 因为
+  它是 standalone Cargo project，不通过 yanshi CLI 调用。模式
+  能用但 duplication 是 smell。长期：抽 `yanshi-dotenv` helper
   crate，或在 `docs/AGENT_SDK.md` 文档化标准 snippet。低优先级。
 - **F-A7-8 — moonshot-v1-128k 在 4096 max_tokens 下大输出被截断**
   —— **DONE 2026-05-18**。`templates/default_models.yml` 里把所有
@@ -1032,7 +1032,7 @@ markdown changelog 段。
   指 context window；输出 cap 通常 16-64k，32k 是 90 分位 safe
   default；(c) 配 F-A2-1 truncation recovery 是双保险。Registry
   tests 全绿。
-- **F-A7-9 — `agentflow-llm` 对 354k-char 输入在 moonshot-v1-128k
+- **F-A7-9 — `yanshi-llm` 对 354k-char 输入在 moonshot-v1-128k
   花了 117s**。不是 bug —— 长 context inference 在 Moonshot 这边
   本来就慢。但 long-context dogfooding 真的烧 wall clock；workflow
   需要迭代长 context 时 batch / cache / smaller-model 策略重要。
@@ -1046,7 +1046,7 @@ markdown changelog 段。
 
 ## Cross-References
 
-- `TODOs.md` — agentflow 主任务队列；从 dogfooding 涌出的缺陷回填到这里
+- `TODOs.md` — yanshi 主任务队列；从 dogfooding 涌出的缺陷回填到这里
 - `examples/README.md` — SDK feature 矩阵（性质不同，互补）
 - `examples/ecosystem/` — 生态形态样本（性质不同，互补）
 - `docs/RELEASE_NOTES_v1.0.0-rc.1.md` — release notes draft，dogfooding 阶段

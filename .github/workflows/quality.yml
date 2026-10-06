@@ -57,7 +57,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      # Q3.3.3: agentflow-worker-proto's build.rs invokes tonic-build,
+      # Q3.3.3: yanshi-worker-proto's build.rs invokes tonic-build,
       # which shells out to protoc to compile worker.proto (transitively
       # pulled in by the workspace). ubuntu-latest does not preinstall
       # protoc, so install it before clippy compiles the workspace.
@@ -68,7 +68,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Check lints
         # R0.4 (2026-07-28): was `--all-targets` only, so feature-gated code
-        # that isn't in any crate's default set (e.g. agentflow-rag's `html`
+        # that isn't in any crate's default set (e.g. yanshi-rag's `html`
         # feature, which is exactly where the R0.1 invalid-regex panic
         # lived) never got compiled here and clippy's `invalid_regex` lint
         # never saw it. `--all-features` closes that blind spot.
@@ -76,11 +76,11 @@ jobs:
 
   redaction-lint:
     # Q5.2: workspace redaction audit. Scans every
-    # `agentflow-*/src/**/*.rs` file for `(debug|info|warn|error)!(...)`
+    # `yanshi-*/src/**/*.rs` file for `(debug|info|warn|error)!(...)`
     # macro calls that interpolate raw user prompt / response / content /
     # body / params without going through
-    # `agentflow_tracing::redaction::redact_text` (for plain strings) or
-    # `agentflow_llm::prompt_fingerprint` (for opaque correlation IDs).
+    # `yanshi_tracing::redaction::redact_text` (for plain strings) or
+    # `yanshi_llm::prompt_fingerprint` (for opaque correlation IDs).
     # `trace!` is intentionally exempt because production deployments
     # exclude it. Suppress a known-false-positive with
     # `// allow-redaction-lint: <reason>` on the same line.
@@ -93,8 +93,8 @@ jobs:
         run: cargo xtask redaction-lint
 
   println-lint:
-    # V1.7: production log normalization. Scans agentflow-core/
-    # agentflow-nodes/agentflow-nodes-ai for println!/eprintln! used as
+    # V1.7: production log normalization. Scans yanshi-core/
+    # yanshi-nodes/yanshi-nodes-ai for println!/eprintln! used as
     # logging outside test code — those crates route diagnostics through
     # `tracing` instead so nothing pollutes stdout/stderr (including
     # JSON-output CLI modes) by default. Suppress a documented, reviewed
@@ -126,11 +126,11 @@ jobs:
         run: cargo xtask check-changelog
 
   ui-tests:
-    # W5.5: agentflow-ui's 6 hand-written *.test.ts(x) suites were
+    # W5.5: yanshi-ui's 6 hand-written *.test.ts(x) suites were
     # previously only tsc-checked (never actually executed) — this job
     # runs them for real via vitest, plus the typecheck they always had.
     # Mirrors ui-e2e.yml's actions/setup-node@v4 pattern.
-    name: agentflow-ui typecheck + unit tests
+    name: yanshi-ui typecheck + unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -138,15 +138,15 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: agentflow-ui/package-lock.json
+          cache-dependency-path: yanshi-ui/package-lock.json
       - name: Install dependencies
-        working-directory: agentflow-ui
+        working-directory: yanshi-ui
         run: npm ci
       - name: Typecheck
-        working-directory: agentflow-ui
+        working-directory: yanshi-ui
         run: npm run typecheck
       - name: Unit tests
-        working-directory: agentflow-ui
+        working-directory: yanshi-ui
         run: npm test
 
   clippy-lib-deny:
@@ -176,10 +176,10 @@ jobs:
             -D clippy::expect_used
 
   proto-validate:
-    # Q3.3.3: the `agentflow-worker-proto` build script generates prost
+    # Q3.3.3: the `yanshi-worker-proto` build script generates prost
     # message structs from
-    # `agentflow-worker-proto/proto/agentflow/scheduler/v1/worker.proto`
-    # (the proto + tonic-build moved out of `agentflow-server` in P-A2.3
+    # `yanshi-worker-proto/proto/yanshi/scheduler/v1/worker.proto`
+    # (the proto + tonic-build moved out of `yanshi-server` in P-A2.3
     # so the gateway crate is no longer the source of truth).
     # This standalone job validates the .proto file syntax with
     # `protoc` so a malformed .proto fails CI with a precise error
@@ -198,19 +198,19 @@ jobs:
       - name: Validate worker.proto syntax
         run: |
           protoc \
-            --proto_path=agentflow-worker-proto/proto \
-            agentflow-worker-proto/proto/agentflow/scheduler/v1/worker.proto \
+            --proto_path=yanshi-worker-proto/proto \
+            yanshi-worker-proto/proto/yanshi/scheduler/v1/worker.proto \
             --descriptor_set_out=/dev/null
       - name: Reject hand-written prost drift
         # Belt-and-braces: the Rust path consumes the .proto via
-        # `tonic::include_proto!` in `agentflow-worker-proto/src/lib.rs`.
+        # `tonic::include_proto!` in `yanshi-worker-proto/src/lib.rs`.
         # If a future PR replaces it with a hand-written
         # `pub mod pb { ... }` block again, fail loudly here so the
         # audit-found drift cannot silently reappear.
         run: |
-          if ! grep -q 'tonic::include_proto!("agentflow.scheduler.v1")' \
-               agentflow-worker-proto/src/lib.rs; then
-            echo "::error::Q3.3.3: agentflow-worker-proto/src/lib.rs must use" \
+          if ! grep -q 'tonic::include_proto!("yanshi.scheduler.v1")' \
+               yanshi-worker-proto/src/lib.rs; then
+            echo "::error::Q3.3.3: yanshi-worker-proto/src/lib.rs must use" \
                  "tonic::include_proto! so worker.proto stays the source of truth"
             exit 1
           fi
@@ -234,7 +234,7 @@ jobs:
         run: cargo audit
 
   linux-sandbox-check:
-    # P7.4-FU1: the Linux seccomp backend in agentflow-tools/src/sandbox/linux.rs
+    # P7.4-FU1: the Linux seccomp backend in yanshi-tools/src/sandbox/linux.rs
     # is `#[cfg(target_os = "linux")]`-gated, so macOS dev builds skip it. This
     # dedicated check pins a quick cargo-check pass on the Linux target so a
     # PR that re-introduces a Linux-only compile error fails fast (~2 min)
@@ -247,49 +247,49 @@ jobs:
         with:
           targets: x86_64-unknown-linux-gnu
       - name: cargo check linux sandbox backend
-        run: cargo check --target x86_64-unknown-linux-gnu -p agentflow-tools --all-targets
+        run: cargo check --target x86_64-unknown-linux-gnu -p yanshi-tools --all-targets
 
   test:
     name: cargo test (${{ matrix.package }})
     runs-on: ubuntu-latest
     # R0.3 (2026-07-28): a postgres service for the whole job (not just a
-    # dedicated e2e workflow) so agentflow-db / agentflow-server's DB-backed
+    # dedicated e2e workflow) so yanshi-db / yanshi-server's DB-backed
     # tests — which self-skip with an eprintln when
-    # AGENTFLOW_DATABASE_TEST_URL is unset — actually run here instead of
+    # YANSHI_DATABASE_TEST_URL is unset — actually run here instead of
     # silently no-op'ing. Mirrors ui-e2e.yml's service block. Harmless for
     # the matrix legs that don't touch a database.
     services:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: agentflow
-          POSTGRES_PASSWORD: agentflow
-          POSTGRES_DB: agentflow
+          POSTGRES_USER: yanshi
+          POSTGRES_PASSWORD: yanshi
+          POSTGRES_DB: yanshi
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U agentflow -d agentflow"
+          --health-cmd "pg_isready -U yanshi -d yanshi"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
     env:
-      AGENTFLOW_DATABASE_TEST_URL: postgres://agentflow:agentflow@localhost:5432/agentflow
+      YANSHI_DATABASE_TEST_URL: postgres://yanshi:yanshi@localhost:5432/yanshi
     strategy:
       fail-fast: false
       matrix:
         package:
-          - agentflow-core
-          - agentflow-tools
-          - agentflow-mcp
-          - agentflow-memory
-          - agentflow-skills
-          - agentflow-agents
-          - agentflow-cli
-          - agentflow-llm
+          - yanshi-core
+          - yanshi-tools
+          - yanshi-mcp
+          - yanshi-memory
+          - yanshi-skills
+          - yanshi-agents
+          - yanshi-cli
+          - yanshi-llm
           # R0.3 (2026-07-28): the remaining 15 workspace members this
           # matrix never covered — `cargo test` for these crates had never
           # run in CI. Found via an independent engineering-readiness audit
-          # after an agentflow-rag regression (an HTML-loader regex that
+          # after an yanshi-rag regression (an HTML-loader regex that
           # panicked on every call, see the R0.1 fix) shipped invisibly
           # because this job never touched the crate. `xtask test-gate`
           # looked like the ready-made fix but turned out to be a wall-clock
@@ -297,56 +297,56 @@ jobs:
           # (`capture_test_timings` records the elapsed time even when
           # `output.status.success()` is false) — expanding this matrix is
           # the actual correctness gate.
-          - agentflow-value
-          - agentflow-graph
-          - agentflow-store-spi
-          - agentflow-agent-spi
-          - agentflow-async-util
-          - agentflow-nodes
-          - agentflow-nodes-ai
-          - agentflow-config
-          - agentflow-rag
-          - agentflow-tracing
-          - agentflow-db
-          - agentflow-server
-          - agentflow-worker
-          - agentflow-worker-proto
-          - agentflow-harness
+          - yanshi-value
+          - yanshi-graph
+          - yanshi-store-spi
+          - yanshi-agent-spi
+          - yanshi-async-util
+          - yanshi-nodes
+          - yanshi-nodes-ai
+          - yanshi-config
+          - yanshi-rag
+          - yanshi-tracing
+          - yanshi-db
+          - yanshi-server
+          - yanshi-worker
+          - yanshi-worker-proto
+          - yanshi-harness
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # Q3.3.3 / R0.3: agentflow-worker-proto's build.rs needs protoc to
-      # compile worker.proto. agentflow-cli, agentflow-server and
-      # agentflow-worker all transitively pull it in too.
+      # Q3.3.3 / R0.3: yanshi-worker-proto's build.rs needs protoc to
+      # compile worker.proto. yanshi-cli, yanshi-server and
+      # yanshi-worker all transitively pull it in too.
       - name: Install protoc
-        if: contains(fromJSON('["agentflow-cli","agentflow-server","agentflow-worker","agentflow-worker-proto"]'), matrix.package)
+        if: contains(fromJSON('["yanshi-cli","yanshi-server","yanshi-worker","yanshi-worker-proto"]'), matrix.package)
         uses: arduino/setup-protoc@v3
         with:
           version: "27.x"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build agentflow-server for CLI integration tests
-        if: matrix.package == 'agentflow-cli'
-        # `agentflow serve --check` shells out to the agentflow-server
-        # binary. `cargo test -p agentflow-cli` doesn't pull it in, so we
+      - name: Build yanshi-server for CLI integration tests
+        if: matrix.package == 'yanshi-cli'
+        # `yanshi serve --check` shells out to the yanshi-server
+        # binary. `cargo test -p yanshi-cli` doesn't pull it in, so we
         # build it up front; tests that need it would otherwise fail with
         # an empty-stdout panic instead of running the readiness probe.
-        run: cargo build -p agentflow-server
+        run: cargo build -p yanshi-server
       - name: Run package tests
-        # R0.3: agentflow-rag's default features (just `qdrant`) never
+        # R0.3: yanshi-rag's default features (just `qdrant`) never
         # compile sources/html.rs, which is exactly how the R0.1 regex
         # panic went uncaught — opt into pdf/html/code-chunking too
         # (local-embeddings excluded: it pulls the `ort` crate, which
         # downloads ONNX Runtime binaries at build time, the same reason
         # the `features` job's feature-combo matrix excludes it below).
-        # agentflow-nodes-ai's mcp/rag node adapters are similarly
+        # yanshi-nodes-ai's mcp/rag node adapters are similarly
         # feature-gated to nothing by default.
         run: |
           case "${{ matrix.package }}" in
-            agentflow-rag)
-              cargo test -p agentflow-rag --all-targets --features pdf,html,code-chunking
+            yanshi-rag)
+              cargo test -p yanshi-rag --all-targets --features pdf,html,code-chunking
               ;;
-            agentflow-nodes-ai)
-              cargo test -p agentflow-nodes-ai --all-targets --features mcp,rag
+            yanshi-nodes-ai)
+              cargo test -p yanshi-nodes-ai --all-targets --features mcp,rag
               ;;
             *)
               cargo test -p ${{ matrix.package }} --all-targets
@@ -359,7 +359,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # Q3.3.3: `cargo test --workspace --doc` compiles agentflow-server,
+      # Q3.3.3: `cargo test --workspace --doc` compiles yanshi-server,
       # whose build.rs needs protoc.
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -377,64 +377,64 @@ jobs:
       matrix:
         include:
           # Existing combinations.
-          # W0.7: `core-observability` removed — agentflow-core's
+          # W0.7: `core-observability` removed — yanshi-core's
           # `observability` feature was deleted (tracing is now an
           # unconditional dependency; nothing ever enabled the feature).
           - name: mcp-local-transports
-            command: cargo check -p agentflow-mcp --features client,server,stdio
+            command: cargo check -p yanshi-mcp --features client,server,stdio
           - name: cli-mcp
-            command: cargo check -p agentflow-cli --no-default-features --features mcp
+            command: cargo check -p yanshi-cli --no-default-features --features mcp
           - name: cli-rag
-            command: cargo check -p agentflow-cli --no-default-features --features rag
+            command: cargo check -p yanshi-cli --no-default-features --features rag
           - name: cli-plugin
-            command: cargo check -p agentflow-cli --no-default-features --features plugin
+            command: cargo check -p yanshi-cli --no-default-features --features plugin
           - name: core-plugin
-            command: cargo check -p agentflow-core --features plugin --all-targets
+            command: cargo check -p yanshi-core --features plugin --all-targets
           # P3.9 expansion (working combinations as of v0.3.0):
           - name: cli-no-default
-            command: cargo check -p agentflow-cli --no-default-features
+            command: cargo check -p yanshi-cli --no-default-features
           - name: cli-mcp-rag-plugin
-            command: cargo check -p agentflow-cli --no-default-features --features mcp,rag,plugin
+            command: cargo check -p yanshi-cli --no-default-features --features mcp,rag,plugin
           - name: cli-all-features
-            command: cargo check -p agentflow-cli --all-features
+            command: cargo check -p yanshi-cli --all-features
           # P-A2.4 — the extracted workflow-assembly crate's own feature gating.
           - name: config-default
-            command: cargo check -p agentflow-config --all-targets
+            command: cargo check -p yanshi-config --all-targets
           - name: config-all-features
-            command: cargo check -p agentflow-config --features mcp,rag,plugin --all-targets
+            command: cargo check -p yanshi-config --features mcp,rag,plugin --all-targets
           # W4.4: the `postgres` feature (a dead flag gating an
           # unreferenced `sqlx` dep — no code in the crate ever consumed
           # it) was removed. `otlp-http` is the crate's first real
           # optional feature; check it compiles on its own matrix leg
           # since it pulls in the opentelemetry dependency chain.
           - name: tracing-otlp-http
-            command: cargo check -p agentflow-tracing --features otlp-http --all-targets
+            command: cargo check -p yanshi-tracing --features otlp-http --all-targets
           - name: mcp-all-transports
-            command: cargo check -p agentflow-mcp --features client,server,stdio,http
+            command: cargo check -p yanshi-mcp --features client,server,stdio,http
           - name: nodes-default
-            command: cargo check -p agentflow-nodes
+            command: cargo check -p yanshi-nodes
           # M.7 fixes — these previously failed and are now wired in:
           - name: llm-openai-only
-            command: cargo check -p agentflow-llm --no-default-features --features openai
+            command: cargo check -p yanshi-llm --no-default-features --features openai
           - name: nodes-batch-conditional
-            command: cargo check -p agentflow-nodes --features batch,conditional
-          # P3.9 close-out — agentflow-rag feature surface. The crate ships
+            command: cargo check -p yanshi-nodes --features batch,conditional
+          # P3.9 close-out — yanshi-rag feature surface. The crate ships
           # four independent feature flags (qdrant default, plus
           # local-embeddings / pdf / html). Each one pulls a different
           # heavy dep tree, so breakage tends to be flag-specific.
           - name: rag-no-default
-            command: cargo check -p agentflow-rag --no-default-features
+            command: cargo check -p yanshi-rag --no-default-features
           - name: rag-pdf
-            command: cargo check -p agentflow-rag --no-default-features --features pdf
+            command: cargo check -p yanshi-rag --no-default-features --features pdf
           - name: rag-html
-            command: cargo check -p agentflow-rag --no-default-features --features html
+            command: cargo check -p yanshi-rag --no-default-features --features html
           # local-embeddings is intentionally NOT in the matrix: it
           # pulls `ort`, which downloads ONNX Runtime binaries at build
           # time. CI on a clean network would work but is fragile, and
           # the operator-facing flag is already exercised by the rag
           # eval CI job downstream. Track as a manual-validation flag.
           - name: rag-pdf-html
-            command: cargo check -p agentflow-rag --no-default-features --features pdf,html
+            command: cargo check -p yanshi-rag --no-default-features --features pdf,html
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -459,8 +459,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # Q3.3.3 follow-up: `agentflow-cli --features rag` transitively
-      # depends on `agentflow-worker-proto`, whose `build.rs` shells out
+      # Q3.3.3 follow-up: `yanshi-cli --features rag` transitively
+      # depends on `yanshi-worker-proto`, whose `build.rs` shells out
       # to protoc to compile `worker.proto`. ubuntu-latest does not
       # preinstall protoc, so install it before any `cargo` invocation
       # below tries to build the workspace.
@@ -470,38 +470,38 @@ jobs:
           version: "27.x"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run RAG eval CI fixture (BM25, schema gate)
-        run: cargo test -p agentflow-cli --features rag --test rag_eval_cli_tests
+        run: cargo test -p yanshi-cli --features rag --test rag_eval_cli_tests
       - name: Run RAG eval gate-logic unit tests
-        run: cargo test -p agentflow-cli --features rag --bin agentflow commands::rag::eval
+        run: cargo test -p yanshi-cli --features rag --bin yanshi commands::rag::eval
       - name: Run RAG eval against checked-in BM25 baseline
         run: |
-          cargo run -p agentflow-cli --features rag --bin agentflow -- \
+          cargo run -p yanshi-cli --features rag --bin yanshi -- \
             rag eval \
-              --dataset agentflow-rag/eval_datasets/ci_offline \
-              --compare-baseline agentflow-rag/eval_baselines/ci_offline/bm25.json
+              --dataset yanshi-rag/eval_datasets/ci_offline \
+              --compare-baseline yanshi-rag/eval_baselines/ci_offline/bm25.json
       - name: Run RAG eval against checked-in dense baseline
         if: ${{ env.OPENAI_API_KEY != '' }}
         run: |
-          cargo run -p agentflow-cli --features rag --bin agentflow -- \
+          cargo run -p yanshi-cli --features rag --bin yanshi -- \
             rag eval \
-              --dataset agentflow-rag/eval_datasets/ci_offline \
+              --dataset yanshi-rag/eval_datasets/ci_offline \
               --retriever dense \
               --embedding-model text-embedding-3-small \
-              --compare-baseline agentflow-rag/eval_baselines/ci_offline/dense.json
+              --compare-baseline yanshi-rag/eval_baselines/ci_offline/dense.json
       - name: Run RAG eval against checked-in hybrid baseline
         if: ${{ env.OPENAI_API_KEY != '' }}
         run: |
-          cargo run -p agentflow-cli --features rag --bin agentflow -- \
+          cargo run -p yanshi-cli --features rag --bin yanshi -- \
             rag eval \
-              --dataset agentflow-rag/eval_datasets/ci_offline \
+              --dataset yanshi-rag/eval_datasets/ci_offline \
               --retriever hybrid \
               --embedding-model text-embedding-3-small \
-              --compare-baseline agentflow-rag/eval_baselines/ci_offline/hybrid.json
+              --compare-baseline yanshi-rag/eval_baselines/ci_offline/hybrid.json
 
   agent-eval-smoke:
     name: agent eval schema + baseline regression
     runs-on: ubuntu-latest
-    # T2.1: mirrors rag-eval-smoke's shape for `agentflow-agents/src/eval`
+    # T2.1: mirrors rag-eval-smoke's shape for `yanshi-agents/src/eval`
     # (dataset/assertion/runner/pricing + T2.1's baseline module), which
     # had a complete framework but no CI job exercising it. Uses the
     # mock LLM provider only — no API key, no network, no DB — so it
@@ -509,7 +509,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # agentflow-cli transitively depends on agentflow-worker-proto,
+      # yanshi-cli transitively depends on yanshi-worker-proto,
       # whose build.rs shells out to protoc.
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -517,18 +517,18 @@ jobs:
           version: "27.x"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Run agent eval CI fixture + baseline-gate tests
-        run: cargo test -p agentflow-cli --test eval_cli_tests
+        run: cargo test -p yanshi-cli --test eval_cli_tests
       - name: Run agent eval baseline-comparison unit tests
-        run: cargo test -p agentflow-agents --lib eval::baseline
+        run: cargo test -p yanshi-agents --lib eval::baseline
       - name: Run agent eval against checked-in ci_offline baseline
         env:
           # Registers the two mock model ids the `ci_offline` fixture's
           # cases.jsonl references. Keep in sync with
-          # `agentflow-cli/tests/eval_cli_tests.rs::write_eval_mock_models_config`.
-          AGENTFLOW_MODELS_CONFIG: /tmp/agent-eval-smoke-models.yml
+          # `yanshi-cli/tests/eval_cli_tests.rs::write_eval_mock_models_config`.
+          YANSHI_MODELS_CONFIG: /tmp/agent-eval-smoke-models.yml
           # Keep in sync with `eval_cli_tests.rs::mock_responses()` — the
           # checked-in baseline was generated against this exact sequence.
-          AGENTFLOW_MOCK_RESPONSES: '["{\"thought\":\"answer directly\",\"answer\":\"hello there\"}", "{\"thought\":\"answer directly\",\"answer\":\"done\"}"]'
+          YANSHI_MOCK_RESPONSES: '["{\"thought\":\"answer directly\",\"answer\":\"hello there\"}", "{\"thought\":\"answer directly\",\"answer\":\"done\"}"]'
         run: |
           cat > /tmp/agent-eval-smoke-models.yml <<'EOF'
           models:
@@ -544,9 +544,9 @@ jobs:
             mock:
               api_key_env: MOCK_API_KEY
           EOF
-          cargo run -p agentflow-cli --bin agentflow -- \
-            eval run agentflow-agents/eval_datasets/ci_offline \
-              --compare-baseline agentflow-agents/eval_baselines/ci_offline/baseline.json
+          cargo run -p yanshi-cli --bin yanshi -- \
+            eval run yanshi-agents/eval_datasets/ci_offline \
+              --compare-baseline yanshi-agents/eval_baselines/ci_offline/baseline.json
 
   examples:
     name: examples compile and smoke
@@ -559,7 +559,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       # Q3.3.3: workspace examples + smoke tests transitively compile
-      # agentflow-server, whose build.rs needs protoc.
+      # yanshi-server, whose build.rs needs protoc.
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -571,23 +571,23 @@ jobs:
         run: cargo xtask examples-smoke
       - name: Run no-API example smoke tests
         run: |
-          cargo run -p agentflow-core --example fixed_dag_workflow
-          cargo run -p agentflow-agents --example agent_native_react
-          cargo run -p agentflow-agents --example plan_execute_agent
-          cargo run -p agentflow-cli -- workflow run agentflow-cli/examples/workflows/fixed_dag_basic.yml --dry-run
-          cargo run -p agentflow-cli -- workflow run agentflow-cli/examples/workflows/skill_agent_hybrid.yml --dry-run
-          cargo run -p agentflow-cli --features rag -- workflow run agentflow-cli/examples/workflows/rag_skill_assistant.yml --dry-run
-          cargo run -p agentflow-cli -- skill index validate agentflow-skills/examples/skills.index.toml
-          cargo run -p agentflow-cli -- skill index list agentflow-skills/examples/skills.index.toml
-          cargo run -p agentflow-cli -- skill index resolve agentflow-skills/examples/skills.index.toml mcp-demo
-          cargo run -p agentflow-cli -- skill validate agentflow-skills/examples/skills/mcp-basic
-          cargo run -p agentflow-cli -- skill list-tools agentflow-skills/examples/skills/mcp-basic
-          cargo run -p agentflow-skills --example skill_calls_mcp_tool
-          cargo run -p agentflow-agents --example hybrid_workflow_agent
-          cargo build -p agentflow-core --features plugin --bin agentflow-echo-plugin
-          cargo run -p agentflow-core --features plugin --example plugin_host_demo
-          cargo test -p agentflow-cli --features plugin --test workflow_tests plugin_node_tests
-          cargo test -p agentflow-cli --features plugin --test marketplace_cli_tests marketplace_install_plugin_package_from_verified_cache
+          cargo run -p yanshi-core --example fixed_dag_workflow
+          cargo run -p yanshi-agents --example agent_native_react
+          cargo run -p yanshi-agents --example plan_execute_agent
+          cargo run -p yanshi-cli -- workflow run yanshi-cli/examples/workflows/fixed_dag_basic.yml --dry-run
+          cargo run -p yanshi-cli -- workflow run yanshi-cli/examples/workflows/skill_agent_hybrid.yml --dry-run
+          cargo run -p yanshi-cli --features rag -- workflow run yanshi-cli/examples/workflows/rag_skill_assistant.yml --dry-run
+          cargo run -p yanshi-cli -- skill index validate yanshi-skills/examples/skills.index.toml
+          cargo run -p yanshi-cli -- skill index list yanshi-skills/examples/skills.index.toml
+          cargo run -p yanshi-cli -- skill index resolve yanshi-skills/examples/skills.index.toml mcp-demo
+          cargo run -p yanshi-cli -- skill validate yanshi-skills/examples/skills/mcp-basic
+          cargo run -p yanshi-cli -- skill list-tools yanshi-skills/examples/skills/mcp-basic
+          cargo run -p yanshi-skills --example skill_calls_mcp_tool
+          cargo run -p yanshi-agents --example hybrid_workflow_agent
+          cargo build -p yanshi-core --features plugin --bin yanshi-echo-plugin
+          cargo run -p yanshi-core --features plugin --example plugin_host_demo
+          cargo test -p yanshi-cli --features plugin --test workflow_tests plugin_node_tests
+          cargo test -p yanshi-cli --features plugin --test marketplace_cli_tests marketplace_install_plugin_package_from_verified_cache
 
   release-gate:
     name: release gate

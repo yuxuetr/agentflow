@@ -21,18 +21,18 @@
 #
 # Usage:
 #   # Review a local commit's diff (no GitHub network needed):
-#   agentflow skill run examples/applications/code-reviewer \
+#   yanshi skill run examples/applications/code-reviewer \
 #     --message "Review commit 9302e7a"
 #
 #   # Review the diff between two refs:
-#   agentflow skill run examples/applications/code-reviewer \
+#   yanshi skill run examples/applications/code-reviewer \
 #     --message "Review changes in HEAD~3..HEAD"
 #
 #   # Review a GitHub PR (needs gh auth setup):
-#   agentflow skill run examples/applications/code-reviewer \
+#   yanshi skill run examples/applications/code-reviewer \
 #     --message "Review PR #42 in owner/repo"
 #
-# Requires: MOONSHOT_API_KEY (auto-loaded from ~/.agentflow/.env via
+# Requires: MOONSHOT_API_KEY (auto-loaded from ~/.yanshi/.env via
 # P9.3). `gh` CLI must be authenticated for GitHub PR reviews
 # (run `gh auth status` to check).
 

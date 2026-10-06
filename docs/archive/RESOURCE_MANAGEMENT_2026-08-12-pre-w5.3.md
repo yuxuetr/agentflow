@@ -13,7 +13,7 @@
 > safe predicates, no eviction) survived and is now wired into `Flow` as
 > an **advisory-only** `WorkflowEvent::ResourceWarning` — see
 > `FlowExecutionConfig::resource_limits` in
-> `agentflow-core/src/scheduler.rs` and the wiring in `flow.rs`'s
+> `yanshi-core/src/scheduler.rs` and the wiring in `flow.rs`'s
 > `notify_state_size`. It never evicts, rejects, or otherwise acts on the
 > state pool; it only emits a warning event when the configured
 > `max_state_size` is exceeded. There is no current replacement for the
@@ -22,7 +22,7 @@
 >
 > The rest of this document is retained for historical reference only.
 
-# AgentFlow Resource Management
+# Yanshi Resource Management
 
 **Version**: 0.1.0
 **Status**: Production Ready ✅ (SUPERSEDED — see banner above)
@@ -43,7 +43,7 @@
 
 ## Overview
 
-AgentFlow's resource management system provides configurable limits and real-time monitoring to prevent unbounded memory growth during workflow execution. It includes automatic cleanup strategies, least-recently-used (LRU) tracking, and comprehensive alerting.
+Yanshi's resource management system provides configurable limits and real-time monitoring to prevent unbounded memory growth during workflow execution. It includes automatic cleanup strategies, least-recently-used (LRU) tracking, and comprehensive alerting.
 
 ### Key Features
 
@@ -85,7 +85,7 @@ Use resource management when:
 ### Basic Usage
 
 ```rust
-use agentflow_core::{ResourceLimits, StateMonitor};
+use yanshi_core::{ResourceLimits, StateMonitor};
 
 // Create default limits (100MB state, 10MB per value)
 let limits = ResourceLimits::default();
@@ -382,7 +382,7 @@ let limits = ResourceLimits::builder()
 ### Example 1: Basic Tracking
 
 ```rust
-use agentflow_core::{ResourceLimits, StateMonitor};
+use yanshi_core::{ResourceLimits, StateMonitor};
 
 let limits = ResourceLimits::default();
 let monitor = StateMonitor::new(limits);
@@ -731,7 +731,7 @@ for key in lru {
 ### Workflow Integration
 
 ```rust
-use agentflow_core::{Flow, ResourceLimits, StateMonitor};
+use yanshi_core::{Flow, ResourceLimits, StateMonitor};
 
 struct WorkflowExecutor {
     flow: Flow,
@@ -769,7 +769,7 @@ impl WorkflowExecutor {
 ### Node-Level Integration
 
 ```rust
-use agentflow_core::{AsyncNode, StateMonitor};
+use yanshi_core::{AsyncNode, StateMonitor};
 
 struct MonitoredNode {
     inner: Box<dyn AsyncNode>,
@@ -783,7 +783,7 @@ impl AsyncNode for MonitoredNode {
 
         // Check before execution
         if !self.monitor.record_allocation("inputs", input_size) {
-            return Err(AgentFlowError::ResourceLimitExceeded);
+            return Err(YanshiError::ResourceLimitExceeded);
         }
 
         let result = self.inner.execute(inputs).await;
@@ -840,4 +840,4 @@ Planned improvements:
 **Version**: 0.1.0
 **Status**: Production Ready ✅
 
-For questions or issues, please visit: https://github.com/anthropics/agentflow/issues
+For questions or issues, please visit: https://github.com/anthropics/yanshi/issues

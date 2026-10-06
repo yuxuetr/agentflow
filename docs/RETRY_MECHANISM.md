@@ -1,11 +1,11 @@
 # Retry Mechanism
 
 **Status**: ✅ Implemented (v0.2.0)
-**Module**: `agentflow-core::retry`
+**Module**: `yanshi-core::retry`
 
 ## Overview
 
-AgentFlow provides a comprehensive retry mechanism for handling transient failures in workflow execution. The retry system supports multiple strategies, selective error matching, and detailed error context tracking.
+Yanshi provides a comprehensive retry mechanism for handling transient failures in workflow execution. The retry system supports multiple strategies, selective error matching, and detailed error context tracking.
 
 ## Features
 
@@ -19,7 +19,7 @@ AgentFlow provides a comprehensive retry mechanism for handling transient failur
 ## Quick Start
 
 ```rust
-use agentflow_core::{RetryPolicy, RetryStrategy, execute_with_retry};
+use yanshi_core::{RetryPolicy, RetryStrategy, execute_with_retry};
 
 let policy = RetryPolicy::builder()
     .max_attempts(3)
@@ -39,7 +39,7 @@ let result = execute_with_retry(&policy, "my_operation", || async {
 Constant delay between retry attempts.
 
 ```rust
-use agentflow_core::RetryStrategy;
+use yanshi_core::RetryStrategy;
 
 let strategy = RetryStrategy::fixed(1000); // 1 second delay
 ```
@@ -82,7 +82,7 @@ let strategy = RetryStrategy::linear(
 ### Basic Configuration
 
 ```rust
-use agentflow_core::{RetryPolicy, RetryStrategy};
+use yanshi_core::{RetryPolicy, RetryStrategy};
 use std::time::Duration;
 
 let policy = RetryPolicy::builder()
@@ -97,7 +97,7 @@ let policy = RetryPolicy::builder()
 Only retry specific error types:
 
 ```rust
-use agentflow_core::ErrorPattern;
+use yanshi_core::ErrorPattern;
 
 let policy = RetryPolicy::builder()
     .max_attempts(3)
@@ -134,7 +134,7 @@ ErrorPattern::MessageContains {
 Get detailed error information with context:
 
 ```rust
-use agentflow_core::execute_with_retry_and_context;
+use yanshi_core::execute_with_retry_and_context;
 
 let result = execute_with_retry_and_context(
     &policy,
@@ -244,7 +244,7 @@ needed). Wire up a `tracing` subscriber in your binary to see them.
 
 ## Examples
 
-See [`examples/retry_example.rs`](../agentflow-core/examples/retry_example.rs) for comprehensive usage examples:
+See [`examples/retry_example.rs`](../yanshi-core/examples/retry_example.rs) for comprehensive usage examples:
 
 ```bash
 cargo run --example retry_example
@@ -282,7 +282,7 @@ cargo run --example retry_example
 ### With Workflow Nodes
 
 ```rust
-use agentflow_core::{AsyncNode, AsyncNodeInputs, AsyncNodeResult};
+use yanshi_core::{AsyncNode, AsyncNodeInputs, AsyncNodeResult};
 
 struct HttpNode {
     url: String,
@@ -334,7 +334,7 @@ async fn test_retry_on_transient_failure() {
         async move {
             let attempt = counter.fetch_add(1, Ordering::SeqCst);
             if attempt < 2 {
-                Err(AgentFlowError::NodeExecutionFailed {
+                Err(YanshiError::NodeExecutionFailed {
                     message: "Transient failure".into()
                 })
             } else {
@@ -374,12 +374,12 @@ async fn test_retry_on_transient_failure() {
 
 ## API Reference
 
-See [API docs](https://docs.rs/agentflow-core) for complete reference:
+See [API docs](https://docs.rs/yanshi-core) for complete reference:
 
-- [`RetryPolicy`](https://docs.rs/agentflow-core/latest/agentflow_core/retry/struct.RetryPolicy.html)
-- [`RetryStrategy`](https://docs.rs/agentflow-core/latest/agentflow_core/retry/enum.RetryStrategy.html)
-- [`RetryContext`](https://docs.rs/agentflow-core/latest/agentflow_core/retry/struct.RetryContext.html)
-- [`ErrorContext`](https://docs.rs/agentflow-core/latest/agentflow_core/error_context/struct.ErrorContext.html)
+- [`RetryPolicy`](https://docs.rs/yanshi-core/latest/yanshi_core/retry/struct.RetryPolicy.html)
+- [`RetryStrategy`](https://docs.rs/yanshi-core/latest/yanshi_core/retry/enum.RetryStrategy.html)
+- [`RetryContext`](https://docs.rs/yanshi-core/latest/yanshi_core/retry/struct.RetryContext.html)
+- [`ErrorContext`](https://docs.rs/yanshi-core/latest/yanshi_core/error_context/struct.ErrorContext.html)
 
 ## Changelog
 

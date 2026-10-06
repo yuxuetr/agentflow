@@ -1,4 +1,4 @@
-# RFC: `agentflow-mcp` Protocol Modernization
+# RFC: `yanshi-mcp` Protocol Modernization
 
 - Status: **Proposed** — design only, no code changed yet. Written per
   `TODOs.md` W5.7's instruction (itself split out of W5.6 for being
@@ -12,12 +12,12 @@
   covers everything W5.6 explicitly deferred: Streamable HTTP transport
   and connection-level reconnect, **plus** a materially bigger finding
   surfaced while researching the transport work (below).
-- Scope: research and a phased implementation plan. No `agentflow-mcp`
+- Scope: research and a phased implementation plan. No `yanshi-mcp`
   code changes are proposed to land alongside this document.
 
 ## tl;dr
 
-`agentflow-mcp` targets MCP protocol version `2024-11-05` exclusively —
+`yanshi-mcp` targets MCP protocol version `2024-11-05` exclusively —
 the *first* released revision, using a transport (HTTP+SSE) that has been
 **deprecated** since `2025-03-26`. The real spec has since shipped three
 more revisions, and the **current stable version as of this writing is
@@ -26,7 +26,7 @@ more revisions, and the **current stable version as of this writing is
 modern flow, replacing it with a stateless, per-request design (every
 request self-describes its version and identity; a mandatory
 `server/discover` RPC replaces `initialize` for capability discovery; no
-persistent sessions). `agentflow-mcp`'s entire client/server architecture
+persistent sessions). `yanshi-mcp`'s entire client/server architecture
 — `MCPClient::connect()`/`initialize()`, `ClientCapabilities`/
 `ServerCapabilities`, the very `require_server_capability` gate W5.6 just
 added — is what the spec now calls the **"Legacy" era** (`2025-11-25` and
@@ -36,7 +36,7 @@ even implement the newer Legacy-era Streamable HTTP transport
 
 **Concrete, business-relevant consequence**: per the spec's own
 compatibility matrix (reproduced below), a strictly-Modern MCP client
-talking to `agentflow-mcp`'s server surface today **fails outright** — not
+talking to `yanshi-mcp`'s server surface today **fails outright** — not
 gracefully, not with a clean error the client can act on, just fails.
 This will only get more common as the ecosystem moves onto `2026-07-28`.
 
@@ -44,7 +44,7 @@ This RFC is **not** a plan to rewrite the crate. It recommends a
 **dual-era bridge**: keep every existing Legacy-era behavior byte-for-byte
 (the server surface is Beta-stable per `docs/STABILITY.md` — breaking it
 is not on the table), and add Modern-era support alongside it, so
-`agentflow-mcp` can act as a Modern client to today's real-world servers
+`yanshi-mcp` can act as a Modern client to today's real-world servers
 and — eventually — as a dual-era server.
 
 ## Background: what W5.6 already covers, and what this RFC covers instead
@@ -72,17 +72,17 @@ which is what follows.
 | `2025-11-25` | Legacy | Streamable HTTP v1 (same shape as above) | Superseded, last Legacy revision |
 | `2026-07-28` | **Modern** | Streamable HTTP v2 (stateless: no sessions, no GET stream, no resumability; POST-only, SSE scoped per-request) | **Current** (stable) |
 
-`agentflow-mcp` implements **only** `2024-11-05` — the deprecated
+`yanshi-mcp` implements **only** `2024-11-05` — the deprecated
 transport, one revision before Streamable HTTP existed at all.
 
 ### The architectural break, precisely
 
-**Legacy** (what `agentflow-mcp` has today, matches `2025-11-25` and
+**Legacy** (what `yanshi-mcp` has today, matches `2025-11-25` and
 earlier): client opens a connection, sends `initialize` with its
 `ClientCapabilities`, server responds with `ServerCapabilities` +
 `protocolVersion` it picked, client sends `notifications/initialized`,
 *then* a session exists and subsequent requests are scoped to it.
-`agentflow-mcp`'s entire `MCPClient` struct — `connected`,
+`yanshi-mcp`'s entire `MCPClient` struct — `connected`,
 `server_capabilities`, `server_info`, the whole `client/session.rs` — is
 built around this lifecycle.
 
@@ -126,7 +126,7 @@ by handling an inbound request.
 | Legacy | Dual-era | Works |
 | Legacy | Legacy | Works |
 
-`agentflow-mcp`'s server is Legacy. Its client is Legacy. Both the
+`yanshi-mcp`'s server is Legacy. Its client is Legacy. Both the
 "Modern client → our Legacy server" row and the "our Legacy client →
 Modern server" row are in the **Fails** set today.
 
@@ -150,7 +150,7 @@ Modern server" row are in the **Fails** set today.
 
 ## Correction to this crate's own audit doc
 
-`docs/audit/agentflow-mcp.md` (2026-05-24) doesn't mention any of this —
+`docs/audit/yanshi-mcp.md` (2026-05-24) doesn't mention any of this —
 it was written when `2024-11-05` may genuinely have still been closer to
 current, or simply didn't check. Its "M2" finding ("HTTP transport gap...
 no MCP-related entry in RoadMap.md") is directionally right but
@@ -189,8 +189,8 @@ downstream consumers). Add a parallel Modern-era path:
 Drop the handshake model, target `2026-07-28` only. Reaches "spec current"
 fastest, but breaks `docs/STABILITY.md`'s Beta promise on `MCPServer`
 outright, and breaks the connect()/initialize()-shaped assumptions baked
-into all 4 real downstream consumers (`agentflow-skills::McpClientPool`,
-3 `agentflow-cli mcp` subcommands, 2 independent node implementations).
+into all 4 real downstream consumers (`yanshi-skills::McpClientPool`,
+3 `yanshi-cli mcp` subcommands, 2 independent node implementations).
 Rejected — no compatibility story for existing embedders, and the blast
 radius is unjustified when Option A gets the same end state without it.
 
@@ -211,7 +211,7 @@ re-litigating the overall direction.
 
 ## Transport trait fit (a specific, load-bearing finding)
 
-`docs/audit/agentflow-mcp.md` and the original W5.7 TODO entry both
+`docs/audit/yanshi-mcp.md` and the original W5.7 TODO entry both
 assumed the current `Transport` trait (`send_message(&self, req) ->
 MCPResult<Value>` + separate `receive_message(&self) ->
 MCPResult<Option<Value>>` for out-of-band messages) would need
@@ -292,7 +292,7 @@ Research + design. No code.
 
 ### Phase 4 — connection-level reconnect (small, independent, can be done anytime — including before Phases 2/3)
 Reframed from the original W5.7 filing after reading
-`agentflow-skills::McpClientPool` closely: **the lazy-reconnect machinery
+`yanshi-skills::McpClientPool` closely: **the lazy-reconnect machinery
 already exists** (`ensure_client`/`ensure_client_for_tool` rebuild a fresh
 client whenever the cached slot is `None`). The actual gap is narrower
 than "build reconnect from scratch" — it's that only the `tokio::time::
@@ -312,9 +312,9 @@ appetite to close it sooner.
 ## Consumer impact (blast radius, unchanged from W5.6's research)
 
 Changes to `MCPClient`/`ClientBuilder`/`Transport` ripple to 4 real
-consumers: `agentflow-skills::McpClientPool` (the canonical adapter),
-`agentflow-cli`'s 3 `mcp` subcommands, `agentflow-nodes-ai::mcp` node, and
-`agentflow-agents::mcp_tool_node` (marked `Experimental`, and — as an
+consumers: `yanshi-skills::McpClientPool` (the canonical adapter),
+`yanshi-cli`'s 3 `mcp` subcommands, `yanshi-nodes-ai::mcp` node, and
+`yanshi-agents::mcp_tool_node` (marked `Experimental`, and — as an
 aside noticed during this research, not this RFC's main concern — an
 entirely separate, non-shared client-construction path from the
 `nodes-ai` node; worth considering whether to unify them as a small
@@ -336,7 +336,7 @@ logic would otherwise need duplicating into a second call site).
 ## Verification plan (once implementation phases begin)
 
 Same discipline as every prior W-track item this session: full
-`cargo test -p agentflow-mcp --lib --tests`, `clippy -D warnings`,
+`cargo test -p yanshi-mcp --lib --tests`, `clippy -D warnings`,
 `fmt --check`, `cargo xtask check-arch`, full
 `cargo build --workspace --all-targets` before each phase's commit.
 Phase 2/3 additionally need either a real external Modern MCP server to

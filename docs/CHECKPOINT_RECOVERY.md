@@ -26,7 +26,7 @@ The Checkpoint Recovery System provides persistent workflow state management, en
 ### Basic Usage
 
 ```rust
-use agentflow_core::checkpoint::{CheckpointManager, CheckpointConfig};
+use yanshi_core::checkpoint::{CheckpointManager, CheckpointConfig};
 use std::collections::HashMap;
 
 #[tokio::main]
@@ -57,11 +57,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### With Custom Configuration
 
 ```rust
-use agentflow_core::checkpoint::{CheckpointManager, CheckpointConfig};
+use yanshi_core::checkpoint::{CheckpointManager, CheckpointConfig};
 use std::path::PathBuf;
 
 let config = CheckpointConfig::default()
-    .with_checkpoint_dir("/var/lib/agentflow/checkpoints")
+    .with_checkpoint_dir("/var/lib/yanshi/checkpoints")
     .with_success_retention_days(7)    // Keep successful workflows for 7 days
     .with_failure_retention_days(30)    // Keep failed workflows for 30 days
     .with_auto_cleanup(true);
@@ -91,7 +91,7 @@ pub struct CheckpointConfig {
 let config = CheckpointConfig::default();
 
 // Defaults to:
-// - checkpoint_dir: ~/.agentflow/checkpoints
+// - checkpoint_dir: ~/.yanshi/checkpoints
 // - success_retention_days: 7
 // - failure_retention_days: 30
 // - auto_cleanup: true
@@ -178,7 +178,7 @@ Load the latest or a specific checkpoint for a workflow.
 
 #### Concurrent Execution Note
 
-`agentflow workflow run --execution-mode concurrent` can create checkpoints
+`yanshi workflow run --execution-mode concurrent` can create checkpoints
 during normal workflow execution. Independent ready nodes may complete in any
 order, and the final checkpoint stores every successfully completed node output.
 If a concurrent run fails, the final checkpoint status is `Failed` and
@@ -405,7 +405,7 @@ These defaults deliberately prefer manual recovery over hidden side effects.
 registration-time signal. Built-in HTTP `GET` and file `read` / `list`
 operations are idempotent; HTTP `POST`, file `write`, shell, and script tools
 are non-idempotent. MCP adapters can pass hints with `[idempotent]`,
-`[non-idempotent]`, or `x-agentflow-idempotency` in the input schema.
+`[non-idempotent]`, or `x-yanshi-idempotency` in the input schema.
 Unknown tools are treated as `external`.
 
 `AgentNode` can consume a previous `agent_result` as input. If the trace has no
@@ -427,7 +427,7 @@ pub enum WorkflowStatus {
 
 ### Automatic Checkpointing in Workflows
 
-AgentFlow automatically creates checkpoints during workflow execution:
+Yanshi automatically creates checkpoints during workflow execution:
 
 ```yaml
 # workflow.yml
@@ -470,8 +470,8 @@ agent tool calls from running again during workflow recovery.
 For programmatic control:
 
 ```rust
-use agentflow_core::{Flow, GraphNode};
-use agentflow_core::checkpoint::{CheckpointManager, CheckpointConfig};
+use yanshi_core::{Flow, GraphNode};
+use yanshi_core::checkpoint::{CheckpointManager, CheckpointConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -505,7 +505,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Resume Strategy
 
 ```rust
-use agentflow_core::checkpoint::{CheckpointManager, Checkpoint};
+use yanshi_core::checkpoint::{CheckpointManager, Checkpoint};
 
 async fn run_workflow_with_resume(
     workflow_id: &str,
@@ -741,12 +741,12 @@ if let Some(checkpoint) = manager.load_latest_checkpoint(workflow_id).await? {
 use prometheus::{IntCounter, Histogram, Registry};
 
 let checkpoint_saves = IntCounter::new(
-    "agentflow_checkpoint_saves_total",
+    "yanshi_checkpoint_saves_total",
     "Total number of checkpoints saved"
 )?;
 
 let checkpoint_load_duration = Histogram::new(
-    "agentflow_checkpoint_load_duration_seconds",
+    "yanshi_checkpoint_load_duration_seconds",
     "Checkpoint load duration"
 )?;
 
@@ -762,7 +762,7 @@ checkpoint_load_duration.observe(start.elapsed().as_secs_f64());
 ```rust
 use std::fs;
 
-let checkpoint_dir = "/var/lib/agentflow/checkpoints";
+let checkpoint_dir = "/var/lib/yanshi/checkpoints";
 let metadata = fs::metadata(checkpoint_dir)?;
 
 // Monitor checkpoint directory size
@@ -793,7 +793,7 @@ println!("Checkpoint directory size: {} MB", size / 1024 / 1024);
 **Solutions:**
 1. Check directory permissions:
    ```bash
-   ls -la ~/.agentflow/checkpoints
+   ls -la ~/.yanshi/checkpoints
    ```
 
 2. Verify configuration:

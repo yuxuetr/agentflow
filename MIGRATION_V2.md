@@ -1,4 +1,4 @@
-# AgentFlow V1 to V2 Migration Guide
+# Yanshi V1 to V2 Migration Guide
 
 > Historical reference: this guide covers the long-completed V1→V2
 > migration (a single-crate prototype to the early layered workspace).
@@ -6,7 +6,7 @@
 > current architecture, see `docs/ARCHITECTURE.md` and `CLAUDE.md`; for
 > current status, see `docs/CURRENT_STATUS.md`.
 
-This guide provides instructions for migrating your workflows and custom nodes from AgentFlow V1 to the new V2 architecture.
+This guide provides instructions for migrating your workflows and custom nodes from Yanshi V1 to the new V2 architecture.
 
 ## Key Architectural Changes
 
@@ -92,7 +92,7 @@ The V1 lifecycle (`prep`, `exec`, `post`) is gone. There is now a single `execut
 
 ```rust
 // V2
-use agentflow_core::{
+use yanshi_core::{
     async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
     value::FlowValue,
 };
@@ -112,4 +112,4 @@ pub trait AsyncNode: Send + Sync {
     - Return all your node's results as a `HashMap<String, FlowValue>`.
 3.  **Use `FlowValue`**: Wrap your outputs in the `FlowValue` enum (e.g., `FlowValue::Json(serde_json::Value::String(my_string))`).
 
-By following these steps, your custom nodes and workflows will be compatible with the more robust and powerful AgentFlow V2 architecture.
+By following these steps, your custom nodes and workflows will be compatible with the more robust and powerful Yanshi V2 architecture.

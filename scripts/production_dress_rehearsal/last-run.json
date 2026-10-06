@@ -1,8 +1,8 @@
 {
   "profile": "production",
   "steps": [
-    { "name": "step1_security_profile", "outcome": "pass", "detail": "AGENTFLOW_SECURITY_PROFILE=production" },
-    { "name": "step2_api_token", "outcome": "pass", "detail": "AGENTFLOW_API_TOKEN exported (64 hex chars)" },
+    { "name": "step1_security_profile", "outcome": "pass", "detail": "YANSHI_SECURITY_PROFILE=production" },
+    { "name": "step2_api_token", "outcome": "pass", "detail": "YANSHI_API_TOKEN exported (64 hex chars)" },
     { "name": "step3_storage_dirs", "outcome": "pass", "detail": "5 dirs created, all writable" },
     { "name": "step4_database_url", "outcome": "pass-noted", "detail": "DATABASE_URL exported (connectivity not validated; see README)" },
     { "name": "step5_doctor", "outcome": "pass", "detail": "exit=0 status=ok" },

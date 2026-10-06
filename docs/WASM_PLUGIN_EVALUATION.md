@@ -1,7 +1,7 @@
 # WASM Plugin Runtime — Evaluation 1-Pager
 
 Status: **Decision document for P10.19.1**
-Owner: AgentFlow core
+Owner: Yanshi core
 Last updated: 2026-05-20
 Closes: P10.19.1 (HIGH — pre-GA)
 
@@ -22,23 +22,23 @@ The recommendation up front: **push to v2.0.** Reasoning below.
 The subprocess plugin runtime is the only one shipped. Surface
 that any WASM runtime would have to match or strictly extend:
 
-- `agentflow-core/src/plugin/manifest.rs`: `PluginManifest`
+- `yanshi-core/src/plugin/manifest.rs`: `PluginManifest`
   parses `plugin.toml`. `PluginRuntime::{Subprocess, Wasm}` is
   already an enum variant — `Wasm` parses today but errors at
   load time with `ManifestError::UnsupportedRuntime`. This means
   the manifest schema is already forward-compatible; the work
   to add WASM is implementing the host side, not changing the
   manifest format.
-- `agentflow-core/src/plugin/host.rs`: `PluginHost` spawns the
+- `yanshi-core/src/plugin/host.rs`: `PluginHost` spawns the
   subprocess, handshakes via `plugin/initialize`, dispatches
   `node/execute`, and shuts down via `plugin/shutdown`. It
   exposes `execute_node(node_type, inputs: HashMap<String,
   FlowValue>) -> Result<HashMap<String, FlowValue>>` to the rest
   of the workspace.
-- `agentflow-core/src/plugin/node.rs`: `PluginNode` is the
+- `yanshi-core/src/plugin/node.rs`: `PluginNode` is the
   `AsyncNode` adapter the registry hands back; the rest of
   `Flow` doesn't know it's talking to a plugin.
-- `agentflow-core/src/plugin/protocol.rs`: 4 host→plugin methods
+- `yanshi-core/src/plugin/protocol.rs`: 4 host→plugin methods
   (`plugin/initialize`, `node/execute`, `plugin/shutdown`,
   `plugin/log` notification), all carrying `FlowValue` payloads
   serialized via serde.
@@ -98,7 +98,7 @@ release cadence.
 - **Sandbox**: Equivalent isolation model; capability surface
   feels similar but the Wasmer-specific WASIX extends WASI 0.2
   in ways that aren't portable to wasmtime/Spin/Envoy plugins.
-  Adopting Wasmer means the AgentFlow plugin ecosystem
+  Adopting Wasmer means the Yanshi plugin ecosystem
   bifurcates from the broader Bytecode Alliance ecosystem.
 - **Binary cost**: Similar magnitude (~6-8 MB).
 - **Ecosystem**: Smaller. The 2024-2026 trend across reference
@@ -139,9 +139,9 @@ SDK, the Python SDK, etc.
   with sandboxed user code). Less aligned with our use case
   (third-party DAG nodes that participate in `FlowValue` typing
   and need async access to host imports like HTTP fetch).
-- **Verdict**: Wrong abstraction tier for AgentFlow's plugin
+- **Verdict**: Wrong abstraction tier for Yanshi's plugin
   story. extism optimises for "scripts that compute against
-  bytes"; AgentFlow plugins are "typed nodes that participate
+  bytes"; Yanshi plugins are "typed nodes that participate
   in a typed dataflow graph." We'd fight the framework. If we
   adopt WASM, we want WIT + Component Model directly, not the
   extism abstraction.
@@ -160,7 +160,7 @@ SDK, the Python SDK, etc.
 | Host async imports from plugin | ✅ | ⚠️ | ❌ |
 | Host binary cost | ~7 MB / ~80 crates | ~6-8 MB | ~7 MB + 1 MB shim |
 | Adoption proof in 2026 | Spin, Envoy, Fastly, Zed | smaller | Dylibso products |
-| AgentFlow fit | ✅ if we adopt WASM | ❌ ecosystem split | ❌ abstraction mismatch |
+| Yanshi fit | ✅ if we adopt WASM | ❌ ecosystem split | ❌ abstraction mismatch |
 
 If we ever adopt WASM, the answer is **wasmtime + WIT +
 WASI 0.2**. The remaining question is *when*.
@@ -182,7 +182,7 @@ WASI 0.2**. The remaining question is *when*.
    handshake; typical cold start is 50-200 ms. Matters for
    short-lived workflows or per-request plugin instantiation.
 3. **Built-in capability sandbox.** Subprocess plugins rely on
-   `agentflow-tools/src/sandbox/` (macOS `sandbox-exec` /
+   `yanshi-tools/src/sandbox/` (macOS `sandbox-exec` /
    Linux seccomp) for OS-level isolation. wasmtime's
    capability model is finer-grained (per-resource handles)
    and portable across host OSes.
@@ -193,16 +193,16 @@ WASI 0.2**. The remaining question is *when*.
 
 ### 4.2 What WASM would cost us pre-GA
 
-1. **+7 MB on every `agentflow` binary even when no plugins
+1. **+7 MB on every `yanshi` binary even when no plugins
    are loaded.** Mitigation: feature-gate `wasm` so the cost
    is opt-in. But feature-gating splits the test matrix and
    adds CI surface.
 2. **A `.wit` contract is a forward-compatibility freeze.**
-   Once we ship `agentflow.plugin/wasm.v1.wit`, every change
+   Once we ship `yanshi.plugin/wasm.v1.wit`, every change
    has to maintain WIT backward compatibility. Doing this
    *before* we know the right ergonomics is premature.
 3. **Polyglot SDKs need polyglot examples + docs + CI smoke.**
-   The subprocess runtime has one example (`agentflow-core/
+   The subprocess runtime has one example (`yanshi-core/
    examples/plugin_host_demo.rs`) plus the `examples/
    ecosystem/plugins/` set; a WASM runtime worth shipping
    needs at least Rust + TinyGo + componentize-py examples
@@ -248,7 +248,7 @@ conditions holds:**
    cold-start is the bottleneck. Until then it's noise next to
    LLM RTT.
 2. **Polyglot plugin demand.** A non-Rust contributor wants to
-   ship an AgentFlow plugin and the subprocess polyglot story
+   ship an Yanshi plugin and the subprocess polyglot story
    (write a binary in any language) isn't enough for them. We
    haven't seen this request.
 3. **Single-binary distribution complaint.** Plugin authors
@@ -278,11 +278,11 @@ with a real `WasmPluginHost` keeping the same outer
 
 If we re-cross the threshold in v2:
 
-1. **WIT contract** (`agentflow-core/wit/plugin.v1.wit`):
+1. **WIT contract** (`yanshi-core/wit/plugin.v1.wit`):
    define `node`, `flow-value`, `execute(node, inputs) ->
    (outputs, error)` with at least the same expressivity as
    the current JSON-RPC `ExecuteParams` / `ExecuteResult`.
-2. **`WasmPluginHost` in `agentflow-core/src/plugin/wasm.rs`**:
+2. **`WasmPluginHost` in `yanshi-core/src/plugin/wasm.rs`**:
    load the `.wasm` via `Engine + Component::from_file`,
    wire host imports for `host_log`, `host_http_get` (gated
    by `Capabilities::network`), `host_fs_read` (gated by
@@ -295,12 +295,12 @@ If we re-cross the threshold in v2:
    (`cargo component`), Python (`componentize-py`), Go
    (TinyGo + `wit-bindgen-go`). All three must round-trip
    through `Flow::execute` in CI.
-5. **Feature flag `agentflow-core/Cargo.toml [features] wasm
+5. **Feature flag `yanshi-core/Cargo.toml [features] wasm
    = ["wasmtime", "wasmtime-wasi", ...]`** — opt-in so the
    default release binary stays small.
 
 Estimated scope: ~6-8 person-weeks for someone familiar with
-both AgentFlow's plugin host and the Component Model. Cargo
+both Yanshi's plugin host and the Component Model. Cargo
 features keep this additive — no changes to the subprocess
 runtime, no breakage for existing plugins.
 

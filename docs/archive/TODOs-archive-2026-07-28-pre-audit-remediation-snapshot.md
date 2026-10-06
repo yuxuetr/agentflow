@@ -1,4 +1,4 @@
-# AgentFlow TODOs
+# Yanshi TODOs
 
 Last updated: 2026-07-23
 
@@ -60,7 +60,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
 ## H — Harness Mode follow-ups (post loop-ownership + chat)
 
 > 来源：`docs/RFC_HARNESS_LOOP_OWNERSHIP.md`（已实现并合并，PR #2）+
-> `agentflow harness chat`（已实现并合并，PR #3）。**核心已生产可用、全绿、进
+> `yanshi harness chat`（已实现并合并，PR #3）。**核心已生产可用、全绿、进
 > main**；以下都是收尾打磨或主动推迟项，**无任何生产阻断**。状态：`TODO` =
 > 可做的收尾增强；`DEFERRED` = 需设计或属 RoadMap non-goal。
 
@@ -129,7 +129,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
 ### H.6 — 服务端多节点共享 memory backend（DEFERRED）
 
 - DEFERRED H.6.1 跨节点的 harness 对话记忆
-  - 现状:`AGENTFLOW_HARNESS_MEMORY_DB` opt-in 用共享 SQLite 文件(单节点假设),
+  - 现状:`YANSHI_HARNESS_MEMORY_DB` opt-in 用共享 SQLite 文件(单节点假设),
     已写进 `docs/DEPLOYMENT.md`。
   - 推迟原因:多节点部署需要 Postgres-backed 或外部 `MemoryStore`,属架构决策,
     待真实多节点需求出现再设计(对应 `docs/ROADMAP_v2.md` Theme B/C)。
@@ -173,7 +173,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
 > - `harness→llm`(仅 tokenizer) / `mcp→tracing`(仅 traceparent) / `memory→rag`
 >   (仅 EmbeddingProvider) 是"薄理由胖依赖"，折叠进 `value`/`agent-spi`/`store-spi`，
 >   不另起微 crate（R6）。
-> - `agentflow-nodes` 是横跨 tool/capability/runtime 三层的胖 crate → 需显式拆分
+> - `yanshi-nodes` 是横跨 tool/capability/runtime 三层的胖 crate → 需显式拆分
 >   决策（R3，见 P-A0.5）。
 
 ### P-A0 — 立约 + 架构守卫
@@ -194,10 +194,10 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   要求移入 `ARCH_ALLOWLIST`，故清单只会变真或缩小。含 `evaluate_latent` 纯函数 +
   present/resolved/misfiled 单测 + 唯一性/与 allowlist 不相交 guard。提交 `3195ee3`。
   （`harness` 5 条 impl 边中 4 条 latent + 1 条 allowlist 均已显式追踪。）
-- DONE P-A0.5（R3）`agentflow-nodes` 拆分决策已定，见
+- DONE P-A0.5（R3）`yanshi-nodes` 拆分决策已定，见
   `docs/RFC_NODES_DECOMPOSITION.md`（提交 `8a366e5`）：按实测 per-file 能力导入分两
-  crate——`agentflow-nodes`（tool 层 7 个：template/file/http/batch/conditional/
-  arxiv/markmap，仅 `graph`+`tool`）+ 新 `agentflow-nodes-ai`（能力适配 10 个：
+  crate——`yanshi-nodes`（tool 层 7 个：template/file/http/batch/conditional/
+  arxiv/markmap，仅 `graph`+`tool`）+ 新 `yanshi-nodes-ai`（能力适配 10 个：
   llm/asr/tts/image*/rag/mcp）。否决 feature-gate（optional dep 仍是 check-arch 边）
   与分散到各能力 crate（碎片化 node factory）。**落地在 P-A4**（依赖 P-A1.3 graph
   拆分）；之后 `worker→nodes` 零能力负担，解锁 P2.8。
@@ -207,25 +207,25 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
 > 执行顺序（评估修订）：**P-A1.5（value）→ P-A1.3（graph）→ P-A1.1/1.2（spi）→
 > P-A1.4（async-util）→ P-A1.6（spike）**。`value` 是 `graph` 的前置依赖，必须先抽。
 
-- DONE P-A1.5（R1，首抽）`agentflow-value` 叶子 crate 已抽出（提交 `e315849`）：
-  `FlowValue` + serde 转换从 `agentflow-core/src/value.rs` 移入零内部依赖的新 crate；
-  `core` 依赖并经 `pub use agentflow_value as value` re-export，`agentflow_core::value::
-  FlowValue` / `agentflow_core::FlowValue` 全部不变即编译通过（忠实绞杀，暂不 repoint
+- DONE P-A1.5（R1，首抽）`yanshi-value` 叶子 crate 已抽出（提交 `e315849`）：
+  `FlowValue` + serde 转换从 `yanshi-core/src/value.rs` 移入零内部依赖的新 crate；
+  `core` 依赖并经 `pub use yanshi_value as value` re-export，`yanshi_core::value::
+  FlowValue` / `yanshi_core::FlowValue` 全部不变即编译通过（忠实绞杀，暂不 repoint
   consumers——在 graph 拆分前 repoint 不消任何边）。验证：value 6 测试 + core 190+ 测试
   通过、`cargo check --workspace --all-targets` clean、check-arch green（17 members）、
   fmt/clippy clean。`nodes`/`agents` 的 repoint 留到 P-A1.3 graph 拆分时一并做。
-- DONE P-A1.3 从 `agentflow-core` 拆 `agentflow-graph`（IR），`core` 留执行引擎；
+- DONE P-A1.3 从 `yanshi-core` 拆 `yanshi-graph`（IR），`core` 留执行引擎；
   re-export 兼容。**IR ≠ executor 拆分已闭环**（提交 `0252972` / `caf4b04` /
   `4cc5067` / `c8a5323` / `be75e5c` / `56246e9` / `91c6604`）。决策（用户选定）：
   **FlowExt 扩展 trait 保留 `flow.run()`**，引擎在 core 的 `FlowExecutor<'a>(&Flow)`
   内联实现（orphan-rule 干净），`Flow`/`GraphNode`/`NodeType` 在 graph。
-  `agentflow_core::{Flow,GraphNode,NodeType,FlowExt}` re-export，调用方唯一变化是
-  `use agentflow_core::FlowExt`。验证：workspace build/clippy/fmt clean、core 184 +
+  `yanshi_core::{Flow,GraphNode,NodeType,FlowExt}` re-export，调用方唯一变化是
+  `use yanshi_core::FlowExt`。验证：workspace build/clippy/fmt clean、core 184 +
   graph 178 + agents + workspace doc 测试全过、check-arch green。**`agents→core` 已烧**
   （2d-ii/2d-iv 随 P-A2.1 FlowRunner 契约线落地，2026-06-23 审核确认空 allowlist）。
   分两步执行明细见下：
   - DONE **step 1/2**（提交 `0252972`）：纯 IR 叶子 `error`/`async_node`/`node`/`expr`
-    移入 `agentflow-graph`（仅依赖 `value`）；`core` 依赖 graph 并按原路径 re-export，
+    移入 `yanshi-graph`（仅依赖 `value`）；`core` 依赖 graph 并按原路径 re-export，
     全仓库不变即编译。graph 30+ / core 190+ 测试通过，check-arch green（18 members）。
   - step 2 拆成 2a–2d 四个绿色子步：
     - DONE **2a/2b**（提交 `caf4b04`）：`events`（EventListener/WorkflowEvent/listeners，
@@ -245,15 +245,15 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
         （随 struct 迁 graph）。13 套测试通过。**至此执行引擎对 Flow 的耦合只剩 5 个 accessor
         + 私有 `checkpoint_manager()` helper。**
       - DONE **2d-ii**（core 内，独立可绿）：`struct FlowExecutor<'a>{ flow:&'a Flow }` 已落地
-        （`agentflow-core/src/flow.rs:35`）——引擎（私有 helper + execute_* 深层逻辑）从 `impl Flow`
+        （`yanshi-core/src/flow.rs:35`）——引擎（私有 helper + execute_* 深层逻辑）从 `impl Flow`
         迁入 `impl<'f> FlowExecutor<'f>`，Flow 的公开方法保留为薄委托。全程 core 内，无跨 crate。
         （随 P-A2.1 的 `FlowRunner` 契约线一并落地；2026-06-23 审核确认 core 99 单测 + 全集成测过。）
       - DONE **2d-iv**（原子移动）：`Flow`/`GraphNode`/`NodeType` + builder + accessor 已在
-        `agentflow-graph/src/flow.rs`（带 `with_checkpoint_config` 无校验 setter + 5 个 pub accessor）；
+        `yanshi-graph/src/flow.rs`（带 `with_checkpoint_config` 无校验 setter + 5 个 pub accessor）；
         7 个公开执行方法在 core 改为 `pub trait FlowExt`（`impl FlowExt for Flow` 委托 FlowExecutor），
         core lib re-export `Flow`/`GraphNode`/`NodeType` + prelude 含 `FlowExt`，call sites（agents 等）
-        改 `use agentflow_core::FlowExt`。**`agents→core` 已烧**：agents 实依赖 `agentflow-graph`（IR）
-        + `FlowRunner` 契约，`agentflow-core` 仅 dev-dep；`CoreFlowRunner` 由 surface 注入。check-arch
+        改 `use yanshi_core::FlowExt`。**`agents→core` 已烧**：agents 实依赖 `yanshi-graph`（IR）
+        + `FlowRunner` 契约，`yanshi-core` 仅 dev-dep；`CoreFlowRunner` 由 surface 注入。check-arch
         现 0 tracked / **空 allowlist**（2026-06-23 审核确认：build/test/check-arch 全绿）。
       - 历史分析（flow.rs 3246 行）：
       1. graph：`NodeType`/`GraphNode`/`Flow` struct（`checkpoint_manager:
@@ -267,15 +267,15 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
          ~23 处 `self.<field>` 改走 accessor；`FlowExt::run()` 用 `checkpoint_config` 在
          运行时 `CheckpointManager::new(cfg)`。
       3. core lib.rs re-export `Flow`/`GraphNode`/`NodeType`/`NodeStatus` from graph；
-         加 prelude 含 `FlowExt`，call sites（`agentflow-agents` 10+ 文件等）加
-         `use agentflow_core::FlowExt`（或 prelude glob）。
+         加 prelude 含 `FlowExt`，call sites（`yanshi-agents` 10+ 文件等）加
+         `use yanshi_core::FlowExt`（或 prelude glob）。
       4. flow.rs 测试（行 1490–3246，~1756 行）跟执行逻辑迁到 core。
       完成后 `agents→graph` 干净、烧掉 allowlist 第 1 条（agents→core）。
-- P-A1.1 `agentflow-agent-spi`（依赖 P-A1.2 store-spi 已解锁）分两步：
+- P-A1.1 `yanshi-agent-spi`（依赖 P-A1.2 store-spi 已解锁）分两步：
   - DONE **1/2 运行时契约**（提交 `2abf420`）：`runtime.rs` 整体（AgentRuntime /
     AgentEvent / AgentStep / AgentContext / RuntimeLimits / 取消令牌 / event+memory
-    hook / AgentRuntimeError）移入新 `agentflow-agent-spi`；`Message`/`MemoryStore`
-    指向 store-spi；agents 依赖 agent-spi 并按原 `agentflow_agents::runtime` 路径
+    hook / AgentRuntimeError）移入新 `yanshi-agent-spi`；`Message`/`MemoryStore`
+    指向 store-spi；agents 依赖 agent-spi 并按原 `yanshi_agents::runtime` 路径
     re-export——**消费方零改动**。react/reflection 仅是 intra-doc 链接，降级为普通
     code span。agent-spi 19 + agents 159 测试过、check-arch green（20 members）。
     `agent-spi→llm` 是过渡（仅为 `AgentContext.trace_context: LlmTraceContext`），
@@ -284,12 +284,12 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     payload 类型）/ `Approval*`（Request/Decision/Risk/Scope/Outcome + `ApprovalProvider`
     trait）/ `PreToolHook` / `PostToolHook` / `HarnessEventSink` trait / `ContextProvider`
     （+ `HarnessContext`/`HarnessProfile`/`HarnessRuntimeKind`/`ContextItem`/
-    `ContextPriority`）+ 共享的 `HarnessError` 整体移入新 `agentflow-agent-spi::harness`
+    `ContextPriority`）+ 共享的 `HarnessError` 整体移入新 `yanshi-agent-spi::harness`
     子模块。**忠实绞杀**：harness 的 `error`/`approval`/`context`/`hooks`/`event` 五个文件
-    降为 `pub use agentflow_agent_spi::harness::<mod>::*` re-export shim；`persistence.rs`
+    降为 `pub use yanshi_agent_spi::harness::<mod>::*` re-export shim；`persistence.rs`
     保留具体 sink 实现（Jsonl/Stdout/InMemory/SinkChain），仅 trait 移走并 re-export——
     **消费方（server/cli）零改动**。agent-spi **零新增依赖**（chrono/serde/async-trait/
-    thiserror/tools 全已在）。redaction（`params_summary.rs`→`agentflow_tracing`）刻意留
+    thiserror/tools 全已在）。redaction（`params_summary.rs`→`yanshi_tracing`）刻意留
     harness（契约类型只持已脱敏字符串、不调 redaction），故本步**不烧** `harness→tracing`
     边——那需把 redaction 下沉到 value/agent-spi，留后续。验证：agent-spi 38（含迁入的 19
     个契约测试）+ harness 74 + envelope_contract 6 + server 180 + cli 173 + agents 163
@@ -298,8 +298,8 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   - 拆出（留 P-A4.3）：RFC §2 的 `Capability`/`Lowered` trait 是推测性新设计，与
     skills 降解（P-A4.3 `Capability::lower`）强绑定——待有真实消费者时随 P-A4.3 落地，
     不在本契约抽取步里空写。
-- DONE P-A1.2 `agentflow-store-spi` 已抽出（提交 `be9a148`）：`MemoryStore` +
-  `Message`/`Role`/`TokenCounter` + `MemoryError` 从 `agentflow-memory` 移入新契约
+- DONE P-A1.2 `yanshi-store-spi` 已抽出（提交 `be9a148`）：`MemoryStore` +
+  `Message`/`Role`/`TokenCounter` + `MemoryError` 从 `yanshi-memory` 移入新契约
   crate；具体 store 实现（SessionMemory/SqliteMemory/SemanticMemory/preference/
   entity）留 memory，memory 依赖 store-spi 并按原路径 re-export——**消费方零改动**。
   这给 `Message` 一个契约家，解锁 P-A1.1（agent-spi 可依赖 store-spi::Message 而非
@@ -308,13 +308,13 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   **未做（留 follow-up）**：(a) `EmbeddingProvider`（R6，`memory→rag` 边）需先统一
   rag/memory 错误面再收进 store-spi；(b) `MemoryError` 目前把 `sqlx` 钉进契约 crate
   （orphan rule），后续可瘦身解耦；(c) `KnowledgeBackend` 是 P-A4 RAG 归位时新写。
-- DONE P-A1.4 `agentflow-async-util` 已抽出（提交 `d5b4f26`）：retry + timeout 组合子
-  从 core 移入新 crate，core re-export `agentflow_core::{retry,timeout}`——消费方零改动；
+- DONE P-A1.4 `yanshi-async-util` 已抽出（提交 `d5b4f26`）：retry + timeout 组合子
+  从 core 移入新 crate，core re-export `yanshi_core::{retry,timeout}`——消费方零改动；
   retry_executor 留 core。加 `observability` feature 并从 core 传播。async-util→graph
-  （AgentFlowError），待通用错误重构解耦。**五个新内核 crate 全部就位**（value / graph /
+  （YanshiError），待通用错误重构解耦。**五个新内核 crate 全部就位**（value / graph /
   store-spi / agent-spi / async-util）。与 agents 重复实现的合并是 P-A3.2。
 - DONE P-A1.6 dynamic-workflow 垂直切片 spike 已落地（提交见下）：
-  `agentflow-agents/examples/dynamic_workflow_spike.rs` 演示 toy planner 运行时
+  `yanshi-agents/examples/dynamic_workflow_spike.rs` 演示 toy planner 运行时
   生成 `Flow`（graph IR，shape 运行时定）→ core 经 `FlowExt` 执行，二者只经 graph
   契约相遇。已接入 examples-smoke CI gate。验证内核可承载 dynamic workflow；P-A4
   产品化（PlanExecuteAgent 产出真 Flow）。
@@ -331,17 +331,17 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   `stopped`，按 per-node result map 分类 completed/failed/timed-out）。工具治理走 registry seam:
   Flow 节点的 registry 经 `wrap_registry` + `HookConfig`(共享 runtime 的 seq_counter + sinks)
   包裹后,approval/hook/audit 事件与信封交织在同一单调流上。新增 `HarnessRuntimeKind::Flow` 变体 +
-  `InnerRuntime::None`。新增 harness→agentflow-graph 依赖(runtime→contract,executor 经 FlowRunner
+  `InnerRuntime::None`。新增 harness→yanshi-graph 依赖(runtime→contract,executor 经 FlowRunner
   留外,check-arch 绿)。2 集成测(信封 + AutoDeny 阻断节点工具调用并 fail run)+ harness 74 测全绿,
   clippy(-D)/fmt/全 workspace build 绿。
 - DONE P-A2.2-FU1 节点级 `step_started` 事件已落地（分支 `feat/p-a2.2-flow-node-events`）：
-  `run_flow` 给 flow 挂 `agentflow-graph::EventListener`，把每个节点的 NodeStarted（node_id）
+  `run_flow` 给 flow 挂 `yanshi-graph::EventListener`，把每个节点的 NodeStarted（node_id）
   经 channel 转出，与 run 并发 drain（biased `select!`），实时发 `step_started`
   （`step_type = "node:<id>"`），与工具/审批事件在 `session_started`↔`stopped` 间实时交错。
   经现有 `Flow::with_event_listener` seam 观测，零 executor 耦合。+1 集成测（2 节点→2 step_started，
   seq gap-free）。
 - DONE P-A2.2-FU2 CLI surface 已落地（分支 `feat/p-a2.2-harness-flow-cli`）：新子命令
-  `agentflow harness run-flow <workflow.yaml>` —— build_flow_from_yaml → `HarnessRuntime::run_flow`
+  `yanshi harness run-flow <workflow.yaml>` —— build_flow_from_yaml → `HarnessRuntime::run_flow`
   + `CoreFlowRunner`,把 Harness 信封(session_started runtime=flow → 每节点 step_started → stopped)
   按 agent session 一样持久化为 JSONL。flag:`--input k=v`(可重复)/`--model`/`--profile`/`--output
   text|json|stream-json|json-envelope`/`--workspace`/`--run-dir`/`--timeout-ms`/`--session`/
@@ -362,10 +362,10 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   `FlowRunner` 在确定性引擎执行,返回带 Observe→Plan→逐节点 ToolCall/ToolResult→FinalAnswer
   trace 的 `AgentRunResult`(节点失败→`AgentStopReason::Error`)。复用既有 call_planner/parse_plan/
   memory 私有 helper,不动 sequential 路径(零回归);同一 cancel/timeout/token/step/tool-call 预算。
-  `PlanExecuteError` 加 `Flow(#[from] AgentFlowError)`。+1 mock-LLM e2e(plan→compile→execute→answer)
+  `PlanExecuteError` 加 `Flow(#[from] YanshiError)`。+1 mock-LLM e2e(plan→compile→execute→answer)
   + 179 agents 测全绿。clippy(-D)/fmt/check-arch/全 workspace build 绿。
-- DONE P-A2.2-FU3b-e2e `run_as_flow` 端到端已落地（分支 `feat/p-a2.2-planexecute-emits-flow`+续）：`PlanExecuteAgent::run_as_flow(context, runner)` —— LLM 规划 → compile_plan_to_flow → 经注入 `FlowRunner` 在确定性引擎执行,返回带 Observe→Plan→逐节点 ToolCall/ToolResult→FinalAnswer trace 的 `AgentRunResult`(节点失败→`AgentStopReason::Error`)。复用既有 call_planner/parse_plan/memory 等私有 helper,不动 sequential 路径(零回归)。同一 cancel/timeout/token/step/tool-call 预算。`PlanExecuteError` 加 `Flow(#[from] AgentFlowError)`。+1 mock-LLM e2e(plan→compile→execute→answer)+ 179 agents 测全绿。
-- DONE P-A2.3 抽 `agentflow-worker-proto`，烧 `worker→server`（PR #25）。新 crate 收
+- DONE P-A2.2-FU3b-e2e `run_as_flow` 端到端已落地（分支 `feat/p-a2.2-planexecute-emits-flow`+续）：`PlanExecuteAgent::run_as_flow(context, runner)` —— LLM 规划 → compile_plan_to_flow → 经注入 `FlowRunner` 在确定性引擎执行,返回带 Observe→Plan→逐节点 ToolCall/ToolResult→FinalAnswer trace 的 `AgentRunResult`(节点失败→`AgentStopReason::Error`)。复用既有 call_planner/parse_plan/memory 等私有 helper,不动 sequential 路径(零回归)。同一 cancel/timeout/token/step/tool-call 预算。`PlanExecuteError` 加 `Flow(#[from] YanshiError)`。+1 mock-LLM e2e(plan→compile→execute→answer)+ 179 agents 测全绿。
+- DONE P-A2.3 抽 `yanshi-worker-proto`，烧 `worker→server`（PR #25）。新 crate 收
   WorkerProtocol 契约 + 全部 wire 类型 + SchedulerError + InMemoryWorkerProtocol +
   NodeExecutionPayload + GrpcWorkerProtocol(client) + proto↔domain 转换 + traceparent
   helpers + worker.proto codegen(build.rs+tonic-build→pb)。worker 依赖 worker-proto（server
@@ -376,51 +376,51 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   cross-hop e2e) / worker 16+集成。**P-A2 运行时解耦全段闭环。**。**已详细 scoping（2026-06-21）**：
   非简单搬迁，是 **gRPC codegen crate 迁移**。`worker` 用 `GrpcWorkerProtocol`/`InMemoryWorkerProtocol`/`WorkerId`。`scheduler/mod.rs`（1562 行）既是协议又是聚合器
   （`pub use admission/distributed/grpc`）；`grpc.rs` 的 `GrpcWorkerProtocol` 依赖
-  `build.rs` + `proto/agentflow/*.proto` + `tonic-build`/`prost` codegen。烧边需：
-  (a) 新建 `agentflow-worker-proto`，迁 `build.rs` + `.proto` + `tonic-build`/`prost` 依赖；
+  `build.rs` + `proto/yanshi/*.proto` + `tonic-build`/`prost` codegen。烧边需：
+  (a) 新建 `yanshi-worker-proto`，迁 `build.rs` + `.proto` + `tonic-build`/`prost` 依赖；
   (b) 从 mod.rs carve ~18 协议类型（WorkerProtocol trait + WorkerTask/WorkerTaskResult/
   WorkerHeartbeat/WorkerId/WorkerCapabilities/ClaimHints/SchedulerError/WorkerControlPlane/
   InMemoryWorkerProtocol/trace 类型）；(c) `admission/distributed/jwt` 留 server，从
   worker-proto 反向 import；(d) 解开 mod.rs 聚合 re-export。**大且涉 codegen，建议独立 fresh session。**
 - DONE(step 1/2) P-A2.4 抽共享 assembly，删 `server→cli`（PR #22 = step 1）：
-  新建 `agentflow-config` crate（config schema v2/schema + executor build_flow_from_yaml
-  + node factories），从 cli 外迁；cli `pub use agentflow_config::{config, executor}` 兼容
+  新建 `yanshi-config` crate（config schema v2/schema + executor build_flow_from_yaml
+  + node factories），从 cli 外迁；cli `pub use yanshi_config::{config, executor}` 兼容
   + feature 转发（plugin/rag/mcp）；server `runs.rs`(build_flow_from_yaml) + `scheduler::
-  distributed`(V2 schema) 改 import agentflow-config。**3 个 server→cli 用点已repoint 2 个**。
+  distributed`(V2 schema) 改 import yanshi-config。**3 个 server→cli 用点已repoint 2 个**。
   **剩余 step 2（烧边）**：doctor `build_report`（server `/diagnostics` 用）——需把 report
   builder 从 doctor 命令拆出（`execute` 耦合 cli `json_envelope`，故 build_report + report
-  model + DoctorProfile → agentflow-config 的 diagnostics 模块；execute/OutputFormat 留 cli），
+  model + DoctorProfile → yanshi-config 的 diagnostics 模块；execute/OutputFormat 留 cli），
   repoint server `diagnostics.rs`，然后从 ARCH_ALLOWLIST 移除 server→cli 烧边。
 - DONE(step 2/2 — 烧边完成) P-A2.4 server→cli 已烧（PR #23）：doctor report builder
   （build_report/DoctorProfile/DoctorReport+report model/print_text_report）移入
-  `agentflow_config::diagnostics`；execute（耦合 json_envelope）+ probe_top_level_mcp_config
+  `yanshi_config::diagnostics`；execute（耦合 json_envelope）+ probe_top_level_mcp_config
   （读 McpConfigFile）留 cli；build_report 加 `top_level_mcp` 参数由 caller 注入（cli 传真
-  probe，server 传空）——行为不变。server **完全不再依赖 agentflow-cli**（Cargo 移除 dep）。
+  probe，server 传空）——行为不变。server **完全不再依赖 yanshi-cli**（Cargo 移除 dep）。
   check-arch 从 ARCH_ALLOWLIST 删 server→cli，现 **2 tracked**（agents→core / worker→server），
-  测试断言已更新。cli `pub use agentflow_config::diagnostics::*` 兼容，doctor 命令不变。
+  测试断言已更新。cli `pub use yanshi_config::diagnostics::*` 兼容，doctor 命令不变。
   **P-A2.4 全闭环。** 剩余 P-A2 烧边：worker→server（P-A2.3 worker-proto，大、独立 session）。
 
 ### P-A3 — 可靠性合并 + 类型加固
 
-- DONE P-A3.1（前置）加厚 `agentflow-agents/src/react/agent.rs` 循环测试覆盖（PR #19）：
+- DONE P-A3.1（前置）加厚 `yanshi-agents/src/react/agent.rs` 循环测试覆盖（PR #19）：
   补齐 timeout/cancellation **racing** 路径——既有测试只覆盖 pre-signalled cancel +
   batch max-tool-calls，新增 4 个确定性测试覆盖 `run_turn_llm_call`/`run_turn_tool_call`
   的四臂 `select!`（LLM-call timeout / LLM-call cancel / tool-call timeout / tool-call
   cancel）。用"永不完成的慢操作"（10s sleep >> ~50ms deadline）保证结果确定、不依赖调度
   时序；tool-cancel 用 started 标志确保取消落在工具在飞行时。配套：Mock provider 认
-  `AGENTFLOW_MOCK_DELAY_MS` env（registry 路径可模拟慢往返）+ panic-safe `EnvVarGuard`。
+  `YANSHI_MOCK_DELAY_MS` env（registry 路径可模拟慢往返）+ panic-safe `EnvVarGuard`。
   **这是 P-A3.2（race_with_limits 抽取）的安全网前置**。
 - DONE(部分) P-A3.2 timeout×cancellation `select!` 抽 `async-util::race_with_limits`
   （PR #20）：新增 `race_with_limits(fut, remaining, cancel) -> RaceOutcome::{Completed,
   TimedOut, Cancelled}` 收敛四臂 `(Option<Duration>, Option<CancelSignal>)` 矩阵 + 双层
   `tokio::select!`；ReActAgent 的 LLM-call + tool-call 两个单调用点改为委托，重复的
-  timeout/cancel 分支各只写一次（LLM 点 88→38 行）。经 `agentflow_core::{race_with_limits,
+  timeout/cancel 分支各只写一次（LLM 点 88→38 行）。经 `yanshi_core::{race_with_limits,
   RaceOutcome}` re-export；async-util 加 tokio `macros` feature。行为不变——P-A3.1 racing
   测试不改即通过 + 6 个组合子单测。**batch follow-up 已闭环（PR #21）**：concurrent
   `join_all` + serial per-call 两个 batch 矩阵也改为委托 race_with_limits——先加 4 个
   batch racing 测试（concurrent/serial × timeout/cancel，characterize-then-repoint），
   ReActAgent 热路径已无任何 timeout/cancel select! 矩阵（4 处全收敛）。**剩余**：
-  `agentflow-core` shutdown 路径的 select!（不同语义，独立评估）——非本任务核心，按需再做。
+  `yanshi-core` shutdown 路径的 select!（不同语义，独立评估）——非本任务核心，按需再做。
 - DONE P-A3.3 `ReActLoopSession` consuming typestate（SessionFinished 提前到编译期，
   提交 `28e68f0`）：原 `next_turn(&mut self)` 带 `finished: bool`，finish 后再调返回运行时
   `ReActError::SessionFinished`。改为 `next_turn(self)` **consume session** 返回
@@ -463,7 +463,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
 - DONE P-A3.7 契约 enum 加 `#[non_exhaustive]`（提交 `3e9ad0e`）：前向兼容硬化——给
   non-exhaustive enum 加变体不再强制下游每个 `match` 破裂。已标记：边界 error 枚举
   （thiserror 面）`MemoryError`(store-spi) / `ToolError`·`SecurityProfileError`·
-  `SandboxError`(tools)，加上既有的 `AgentFlowError`/`KnowledgeError`/`CapabilityError`/
+  `SandboxError`(tools)，加上既有的 `YanshiError`/`KnowledgeError`/`CapabilityError`/
   `AgentRuntimeError`/`HarnessError`（error 消费方用 `?`/to_string/通配，零 ripple）；
   观测事件枚举 `WorkflowEvent`(graph) + `AgentEvent`(agent-spi)。ripple 由通配 arm 修复
   且保持现行为：3 个 supervisor `rewrite_event_step_index` + ReAct resume offset 循环
@@ -477,26 +477,26 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
 
 ### P-A4 — Dynamic workflow + RAG 归位（收口）
 
-- DONE P-A4.0（落地 P-A0.5/R3）`agentflow-nodes` 拆分完成（PR #28，分支
-  `feat/p-a-nodes-decomposition`）：tool 层 `agentflow-nodes`（7 个：template/file/
-  http/batch/conditional/arxiv/markmap，仅依赖 IR + `agentflow-tools`，去掉 llm/mcp/
-  rag deps 与 feature）+ 新 `agentflow-nodes-ai`（能力适配 9 个：llm/asr/tts/
+- DONE P-A4.0（落地 P-A0.5/R3）`yanshi-nodes` 拆分完成（PR #28，分支
+  `feat/p-a-nodes-decomposition`）：tool 层 `yanshi-nodes`（7 个：template/file/
+  http/batch/conditional/arxiv/markmap，仅依赖 IR + `yanshi-tools`，去掉 llm/mcp/
+  rag deps 与 feature）+ 新 `yanshi-nodes-ai`（能力适配 9 个：llm/asr/tts/
   text_to_image/image_to_image/image_understand/image_edit + mcp/rag feature-gated，
-  依赖 `agentflow-nodes` 复用 common/error）。dispatch 不变：`agentflow-config::
+  依赖 `yanshi-nodes` 复用 common/error）。dispatch 不变：`yanshi-config::
   executor::factory` 分别从两个 crate import；cli 把 mcp/rag 转发给 config；worker
   保留 tool 层、仅为 llm/mcp payload 拉 nodes-ai（带 mcp）。`nodes→{llm,mcp,rag}` 三条
   latent 边消解、从 `ARCH_LATENT_EDGES` 剪除（`nodes→core` 保留，留 core→graph repoint）。
   build/clippy(-D)/fmt/check-arch 全绿。
 - DONE(部分) P-A4.1 `rag` impl `KnowledgeBackend` + `rag_search` 工具已落地（分支
-  `feat/p-a4.1-rag-knowledge-backend`）：L0 `agentflow-store-spi` 新增 `KnowledgeBackend`
+  `feat/p-a4.1-rag-knowledge-backend`）：L0 `yanshi-store-spi` 新增 `KnowledgeBackend`
   trait + `KnowledgeChunk` + `KnowledgeError`（`#[non_exhaustive]`，与 `MemoryStore` 同层，
-  让 `skills`⟷`rag` 共享契约而不互依实现）。`agentflow-rag` 两个实现：`Bm25KnowledgeBackend`
+  让 `skills`⟷`rag` 共享契约而不互依实现）。`yanshi-rag` 两个实现：`Bm25KnowledgeBackend`
   （内存 BM25、可单测、bundled-files 层）+ `VectorStoreKnowledgeBackend`（任意 `VectorStore`
   + `RetrievalStrategy` 的语义检索层）；并暴露 `RagSearchTool`（`rag_search`，idempotent 只读，
   包 `Arc<dyn KnowledgeBackend>`）。rag 新增向下依赖 store-spi + tools（均 L0），check-arch OK。
   store-spi 2 测 + rag 9 测全绿，clippy(-D)/fmt/全 workspace build 绿。
 - DONE P-A4.1b `rag search/index/collections` CLI 降为运维子命令（分支
-  `feat/p-a4.1b-rag-ops-cli`，接在 #32 上）：三者移到 `agentflow rag ops <cmd>`（新
+  `feat/p-a4.1b-rag-ops-cli`，接在 #32 上）：三者移到 `yanshi rag ops <cmd>`（新
   `RagOpsCommands` enum + `RagCommands::Ops` 变体），`rag eval` 保留顶层（质量门）。
   agent 面向的检索路径是 Skill 暴露的 `rag_search` 工具,`ops` 仅供运维直连向量库。
   dispatch 改为 `Ops(ops) => match ops {...}`;help 文案说明降级原因。改了 1 个 assert_cmd
@@ -512,22 +512,22 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   112 skills 测全绿，clippy(-D)/fmt/check-arch 绿。docs/SKILLS.md 增补 backend 分层。每个 rag
   文件暂按整文件索引,细粒度 chunking 留作后续 refinement。
 - DONE P-A4.3 `Capability::lower` 已落地（分支 `feat/p-a4.3-capability-lower`，接在 #31 上）：
-  RFC §2 第二根契约 trait 进 `agentflow-agent-spi`——`Capability` trait + `Lowered { tools,
+  RFC §2 第二根契约 trait 进 `yanshi-agent-spi`——`Capability` trait + `Lowered { tools,
   context }` + `CapabilityError`（`#[non_exhaustive]`）。`Lowered.context` 复用既有 `ContextItem`
   （priority + token_estimate），直接接 harness/runtime 的 prompt 预算机制；`Lowered::merge` =
-  capability flatten 组合。与 OS-sandbox `agentflow_tools::Capability` enum（进程权限）同名不同
-  物，永不同位。`agentflow-skills` 落实现：`SkillCapability`（manifest + skill_dir）`lower()` →
+  capability flatten 组合。与 OS-sandbox `yanshi_tools::Capability` enum（进程权限）同名不同
+  物，永不同位。`yanshi-skills` 落实现：`SkillCapability`（manifest + skill_dir）`lower()` →
   build_registry 的工具（built-in + MCP + P-A4.2 rag_search）+ persona 作单个 Critical context
   fragment。新增 skills→agent-spi 直接 L0 依赖（capability→contract，check-arch 绿）。agent-spi
   2 测 + skills 2 测全绿，clippy(-D)/fmt/全 workspace build 绿。**剩余**：surface 全面采用
   （用 merge 替换直接 `SkillBuilder::build` 路径、多 capability 合并）留后续；契约+实现+组合原语
   本次落地。
-- DONE(部分) P-A4.4 plan→Flow 编译器已落地（提交 `4fa70df`）：`agentflow_agents::dynamic::
+- DONE(部分) P-A4.4 plan→Flow 编译器已落地（提交 `4fa70df`）：`yanshi_agents::dynamic::
   compile_plan_to_flow`——声明式 `WorkflowPlan`（LLM 产的 JSON：`{id,tool,params,depends_on}`）
   编译成真工具调用的 `Flow`，`depends_on`→图依赖（独立步并行、依赖步收 deps 输出）。校验
   重复 id/悬空依赖;环由拓扑排序兜。`dynamic_workflow_plan` 示例进 smoke gate;3 单测覆盖
   diamond DAG + 校验。**+ DynamicWorkflowAgent**（提交 `3e3b5ab`，PR #14）：`plan(goal)` 经 LLM 产 WorkflowPlan、`run(goal)` plan→compile→并行执行;mock-LLM 端到端测试过。docs reality-check 已更新（dynamic workflow = 真库路径）。**剩余 follow-up（P-A4.5）**：接 CLI surface + 支持 `AgentNode` 步 + `PlanExecuteAgent` 改产 Flow。
-- DONE P-A4.5 dynamic-workflow CLI surface 已落地：`agentflow workflow dynamic
+- DONE P-A4.5 dynamic-workflow CLI surface 已落地：`yanshi workflow dynamic
   --goal <G> --model <M> [--allow-path P]* [--allow-domain D]* [--approve none|cli|
   auto-allow|auto-deny] [--profile dev|production] [--dry-run] [--max-concurrency N]
   [--output text|json]`。复用库路径 `DynamicWorkflowAgent::plan` + `compile_plan_to_flow`
@@ -536,14 +536,14 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   路径/域名必须经 `--allow-path`/`--allow-domain` 显式授予；`--dry-run` 只打印 plan 不执行；
   `--approve != none` 时经 harness `wrap_registry` 把同一个 `Arc<ToolRegistry>`（planner 与
   compiler 共享）裹上审批/审计管线，**不需先做 P-A2.2**。新文件
-  `agentflow-cli/src/commands/workflow/dynamic.rs`（7 单测覆盖 policy/approve/渲染）+
+  `yanshi-cli/src/commands/workflow/dynamic.rs`（7 单测覆盖 policy/approve/渲染）+
   `tests/workflow_dynamic_tests.rs`（4 个 e2e：dry-run 不执行 / 未授权路径被 sandbox 拒
   且退出非零 / 授权后写入成功 / 缺 --model 报错）。fmt + clippy(-D warnings) + check-arch
   全绿（cli 仅复用既有 agents/harness/tools 依赖，零新边）。剩余 follow-up：plan 支持
   `AgentNode` 步 + 并行 verifier/收敛判定（归入 P-A4.6 文档与后续增强）。
 - DONE P-A4.6 文档已更新（分支 `feat/p-a4.6-docs`，接在 #33 上）：`docs/HYBRID_WORKFLOW.md`
   新增 "Dynamic Workflow" 章节（WorkflowPlan→compile_plan_to_flow→FlowRunner 流程图 +
-  `DynamicWorkflowAgent` + `agentflow workflow dynamic` CLI + sandbox/approval 治理）+ 改
+  `DynamicWorkflowAgent` + `yanshi workflow dynamic` CLI + sandbox/approval 治理）+ 改
   intro 三桥 + Current Boundaries。`docs/ARCHITECTURE.md` 四范式 reality-check 刷新（dynamic
   workflow ✅ library+CLI、契约层 ✅ 0 tracked edges、governance shell 正交 ✅）、gaps-map 表更新、
   契约内核图加 `KnowledgeBackend`/`Capability`、L2 加 `nodes-ai`、Axis 2 注明 `Capability` lowering
@@ -557,8 +557,8 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
 ## S — 沙箱与代码执行安全演进（sandbox & code-execution hardening）
 
 > 来源：2026-07-23 sandbox 复审（对话式代码走查，非全量审计）。范围：
-> `agentflow-tools/src/sandbox/*` + `builtin/{shell,script,file}.rs` +
-> `agentflow-skills/src/builder.rs` + `agentflow-agents/src/dynamic.rs`。
+> `yanshi-tools/src/sandbox/*` + `builtin/{shell,script,file}.rs` +
+> `yanshi-skills/src/builder.rs` + `yanshi-agents/src/dynamic.rs`。
 > 核心结论：双层防御（in-process `SandboxPolicy` + OS `SandboxBackend`）骨架
 > 成立、Q1 波次的针对性修复扎实；但 **"谁写的代码、信任级别是什么"这个维度
 > 未显式建模**——skill 作者代码与 LLM 现场生成内容在执行路径上未被区分对待，
@@ -583,7 +583,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   信任级别界定，不只按路径——路径 allow-list 只是信任不变量的近似，S1
   （脚本清单+内容 hash）才是精确版本。S1–S4 均引用此 RFC。
 - DONE S0.2 切断 file+script 组合链（提交 `65a6c19`）：`build_sandbox_policy`
-  （`agentflow-skills/src/builder.rs`）曾把全部工具约束合并成一个共享
+  （`yanshi-skills/src/builder.rs`）曾把全部工具约束合并成一个共享
   `SandboxPolicy`，`has_script` 时把解释器（python3/bash/node）和 `scripts/`
   隐式注入这个共享对象——不仅 file+script 组合可被 FileTool 写入 scripts/ 后
   由 ScriptTool 执行，file+shell+script 组合更严重：解释器泄漏进 shell 的
@@ -597,7 +597,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   cli 全测试绿，clippy(-D)/fmt/check-arch 绿。
 - DONE S0.3 dynamic workflow 的 registry 同链核查（提交 `4a07b7e`）：审计
   `compile_plan_to_flow`/`DynamicWorkflowAgent`（共享同一
-  `Arc<ToolRegistry>`）+ `agentflow workflow dynamic` CLI 的工具表构造——
+  `Arc<ToolRegistry>`）+ `yanshi workflow dynamic` CLI 的工具表构造——
   确认该 CLI 只注册 `file` + `http`，从不注册 `script`/`shell`/MCP
   （P-A4.5 治理落点原文即如此，本次为其补上机器可验证的回归而非停留在
   "现状描述"）。`compile_plan_to_flow` 本身不做 tool 存在性编译期校验，未注册
@@ -633,7 +633,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   observability 模式，未新增 `SandboxStatus` 字段——判定认为"发 trace 事件"
   已满足"校验结果进 trace"的意图，无需为此扩展 OS-sandbox 强度概念）。未配置
   `script_hashes`（`None`）保持历史行为，供 skill-manifest 路径之外的调用方
-  用。agentflow-tools 新增 `sha2` 依赖。5 个新单测（含篡改回归 + 未列入回归 +
+  用。yanshi-tools 新增 `sha2` 依赖。5 个新单测（含篡改回归 + 未列入回归 +
   未配置时不受影响）+ 既有 89 测全绿。
 - DONE S1.3 profile 开关落地为"清单驱动、非 profile 驱动"的执行期 gate
   （提交 `94994af`）：`SkillBuilder::build_registry` 把 `manifest.scripts`
@@ -655,7 +655,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
 ### S2 — Per-skill 依赖环境（支持"项目代码"的能力前置）— DONE（2026-07-24，Python-only，离线波）
 
 > 落地前用 Explore agent 核实了 TODO 原文的三个隐含假设，发现均不成立：**不存在
-> "skill 数据目录"概念**（只有内存 db 走 `~/.agentflow/memory/<name>.db` 这种弱
+> "skill 数据目录"概念**（只有内存 db 走 `~/.yanshi/memory/<name>.db` 这种弱
 > 绑定 flat 命名空间，install 目录本身是纯 `WalkDir` 拷贝无 hook）；**CLI 里没有
 > 任何 install 时确认/capability 门禁机制**（连交互式 prompt 依赖都没有，而且
 > `marketplace install` 今天已经在**无确认**的情况下摸网络，先例本身就不一致）；
@@ -672,18 +672,18 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   不是 S1.1 的"没声明"分支，不做 profile 分级）。支持 pip 风格的反斜杠续行
   语法。9 个新 loader 测试全绿。
 - DONE S2.2 安装时/首次加载时离线构建 per-skill venv（提交 `aecbdb5`）：新模块
-  `agentflow-skills/src/python_env.rs::ensure_python_venv`——`python3 -m venv
+  `yanshi-skills/src/python_env.rs::ensure_python_venv`——`python3 -m venv
   <skill_dir>/.venv` + `pip install --no-index --find-links vendor/
-  --require-hashes -r requirements.txt`，**AgentFlow 自身完全不摸网络**（skill
+  --require-hashes -r requirements.txt`，**Yanshi 自身完全不摸网络**（skill
   自己把 wheel/sdist 放进 `vendor/`）；`.venv/` 与 `scripts/` 同级而非其子目录，
   天然不进 S1.1 的 `[[scripts]]` 扫描范围、也不会被打进 marketplace 签名包。
-  幂等：`.venv/.agentflow-lock-sha256` marker 记 requirements 文件 sha256，命中
+  幂等：`.venv/.yanshi-lock-sha256` marker 记 requirements 文件 sha256，命中
   则跳过重建。**未做**：TODO 原文"lockfile hash 固化进 S1.1 完整性范围"——判断
   pip 自身的 `--require-hashes` 在 install 时逐包校验已经是等价的强制点，没有
   必要在 S1.1 之上再叠一层重复的 hash 记账。5 个单测（含 1 个真实跑通
   `python3 -m venv` + 手搓 wheel + `pip install --require-hashes` 全链路的
   gated smoke test，`python3` 不在 PATH 时跳过，跟随
-  `agentflow-tools/tests/sandbox_linux.rs` 已有的 skip 惯例）。
+  `yanshi-tools/tests/sandbox_linux.rs` 已有的 skip 惯例）。
 - DONE S2.3 ScriptTool 解释器指向 per-skill venv（提交 `488b80c` + `aecbdb5`）：
   `ScriptTool` 新增 `python_interpreter: Option<PathBuf>` + `with_python_interpreter`；
   `.py` 脚本改 spawn 该二进制而非全局 `python3`（`.sh`/`.js` 不受影响）；sandbox
@@ -695,13 +695,13 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   "宿主机全局解释器仅作 fallback（dev profile）"——声明了 `[dependencies].python`
   但装不上（vendor/ 缺失或 hash 不过）在**任何** profile 下都是硬错误，不悄悄退回
   全局解释器（跟 S1.3 的推理一致：声明后没管住是缺陷，不是"还没采用"）。
-  agentflow-tools 6 个新测（含手搓 fake interpreter 证明 spawn 目标正确）+
-  agentflow-skills 3 个新测（含 1 个经 `SkillBuilder::build_registry` 全链路、
+  yanshi-tools 6 个新测（含手搓 fake interpreter 证明 spawn 目标正确）+
+  yanshi-skills 3 个新测（含 1 个经 `SkillBuilder::build_registry` 全链路、
   真实 venv+wheel 的 gated smoke test）。全绿：skills 133 + tools 92 + workspace
   `--lib --bins` 全绿，clippy(-D)/fmt/check-arch 绿。
 
 - DEFERRED S2.2b 网络安装 + 确认 UX（本次未做，非本波范围）
-  - 现状：`marketplace install`（`agentflow-cli/src/commands/marketplace.rs`）
+  - 现状：`marketplace install`（`yanshi-cli/src/commands/marketplace.rs`）
     今天已经会摸网络下 artifact，且**零确认**；CLI 里完全没有交互式 y/n prompt
     依赖（`dialoguer`/`inquire` 之类都不是现有依赖）。
   - 目标（留后续）：给"skill 声明的依赖需要联网抓取"这条路径设计一致的确认
@@ -720,7 +720,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
 > running），经排查它不是共享内核的轻量命名空间，而是经 Virtualization.framework
 > 起的**真实 Linux 6.12.28 aarch64 VM**（cgroups v2 挂载、`cpuset cpu io
 > memory hugetlb pids` 控制器齐全）——足以承载真实编译+内核强制验证，遂用
-> `container run` 起一个持久开发容器（`agentflow-linux-dev`）完成 S3.1/S3.2。
+> `container run` 起一个持久开发容器（`yanshi-linux-dev`）完成 S3.1/S3.2。
 > S3.3（macOS，本机可测）此前已闭环。
 
 - DONE S3.1 Linux：Landlock 补路径粒度（提交 `5f51279`，2026-07-25）
@@ -745,11 +745,11 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     `Enforcing`——`sandbox_linux.rs` 两个新 Landlock 集成测试对此有专门
     skip-guard（`landlock_enforcing()`，检测不到就 `eprintln!` 跳过而非误报
     失败），单测层面（`build_landlock_ruleset_*`）不依赖内核支持,照常跑绿。
-  - 回归：`agentflow-tools/tests/sandbox_linux.rs` 新增
+  - 回归：`yanshi-tools/tests/sandbox_linux.rs` 新增
     `linux_landlock_blocks_reads_outside_the_allowed_scope` /
     `linux_landlock_allows_reads_inside_the_allowed_scope`；`sandbox/linux.rs`
     单测新增 4 个（ABI 探测、空 scope、真实路径、不存在路径优雅忽略）。容器内
-    `agentflow-tools` 全量测试 + fmt/clippy(-D)/check-arch 绿。
+    `yanshi-tools` 全量测试 + fmt/clippy(-D)/check-arch 绿。
 - DONE S3.2 cgroups v2 / RLIMIT_* 资源限额（提交 `e9071e0`，2026-07-26）
   - 现状（修复前）：仅 wall-clock 超时（`max_exec_time_secs`）；无内存/CPU/
     pids 限制,fork 炸弹（Exec 授予时）/内存耗尽均不设防。
@@ -760,7 +760,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
       节点（`memory.max`/`pids.max`）落地，子进程从 `pre_exec` 内用纯裸
       syscall（`libc::open`/`write`/`close` + 手搓无分配 pid 转 ASCII，不用
       `std::fs`）迁移进去，同一套既有 async-signal-safety 纪律。root 走
-      `/sys/fs/cgroup/agentflow`，非 root 走 systemd user-session delegated
+      `/sys/fs/cgroup/yanshi`，非 root 走 systemd user-session delegated
       slice（`man systemd.resource-control` Delegation 节的
       `user@<uid>.service` 默认 `Delegate=yes` 路径）。`max_cpu_secs` **不**
       走 cgroup（`cpu.max` 是"每周期配额"式速率上限，语义对不上字段名暗示的
@@ -785,7 +785,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     杀伐不可靠）；`sandbox_macos.rs` 新增 1 测试
     （`macos_sandbox_enforces_max_cpu_secs_via_rlimit`，直接驱动
     `MacosSandboxExecBackend::wrap_command`，同一 C busy-loop fixture）。
-    容器内 `agentflow-tools` 全量测试（103 lib + 9 sandbox_linux 全绿,含
+    容器内 `yanshi-tools` 全量测试（103 lib + 9 sandbox_linux 全绿,含
     skip）+ fmt/clippy(-D)/check-arch 绿；macOS host 侧 101 lib + 6
     sandbox_macos 全绿,`cargo build --workspace --features rag,code-chunking`
     无回归。
@@ -823,21 +823,21 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
      `.stdin()/.stdout()/.stderr()` 挪到 `wrap_command` **之后**再设;在
      `SandboxBackend::wrap_command` trait doc 上补了这条调用约定,防止未来任何
      新工具踩同一个坑。
-  回归：`agentflow-tools/tests/sandbox_macos.rs` 新增 2 个集成测试（真实
+  回归：`yanshi-tools/tests/sandbox_macos.rs` 新增 2 个集成测试（真实
   `python3 -m venv` + 手搓 wheel + `pip install --require-hashes`，enforcing
   下 import 成功；venv 场景下 scope 外读取仍被拒，证明新授权没变成万能后门）+
   `sandbox/macos.rs` 单测 2 个（canonicalize 生效 / 不存在路径原样回退）。
-  agentflow-tools 94 测全绿,workspace `--lib --bins` 全绿,clippy(-D)/fmt/
+  yanshi-tools 94 测全绿,workspace `--lib --bins` 全绿,clippy(-D)/fmt/
   check-arch 绿。
 - DONE S3.4 `os_sandbox` 默认值翻转（提交 `937c0ad`，2026-07-27）
   - **先厘清评估阶段发现的一个关键事实**：`SecurityProfileDefaults.sandboxing.
-    require_os_sandbox`（`agentflow-tools/src/security_profile.rs`）和
+    require_os_sandbox`（`yanshi-tools/src/security_profile.rs`）和
     `SkillManifest`/`SecurityConfig` 的 `security.os_sandbox`
-    （`agentflow-skills/src/manifest.rs`）是**两个独立字段**——前者只被
-    `agentflow doctor` 报告读取（`agentflow-config/src/diagnostics.rs:1118`），
+    （`yanshi-skills/src/manifest.rs`）是**两个独立字段**——前者只被
+    `yanshi doctor` 报告读取（`yanshi-config/src/diagnostics.rs:1118`），
     从未真正 gate 任何执行路径；真正决定 `ShellTool`/`ScriptTool` 是否套
     `.with_os_sandbox()` 的是后者（消费点在
-    `agentflow-skills/src/builder.rs`）。TODO 原文两者都提，但只有翻转后者
+    `yanshi-skills/src/builder.rs`）。TODO 原文两者都提，但只有翻转后者
     才有实际行为变化——已与用户对齐，只翻转 `SecurityConfig::os_sandbox`
     的默认值，`SecurityProfileDefaults` 保持不动（仅诊断展示，留给后续按需
     决定是否要接上真实 gate）。
@@ -876,9 +876,9 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   - `skill_cli_tests.rs` 两个 sandbox-profile 测试（针对 `rust_expert`——声明
     shell+script 但未设 `[security]`——和 `mcp-basic`——无 sandboxable 工具）
     更新为断言新默认值 `security.os_sandbox = true` 及对应的 notes 文案。
-  - 回归：`agentflow-tools`（101 lib + 开发容器内 9 sandbox_linux + 6
-    sandbox_macos）、`agentflow-skills`（137 lib + 全部集成测试）、
-    `agentflow-cli`（全部测试套件，含 `skill_cli_tests` 29 个）全绿;
+  - 回归：`yanshi-tools`（101 lib + 开发容器内 9 sandbox_linux + 6
+    sandbox_macos）、`yanshi-skills`（137 lib + 全部集成测试）、
+    `yanshi-cli`（全部测试套件，含 `skill_cli_tests` 29 个）全绿;
     fmt/clippy(-D)/check-arch 绿;`cargo build --workspace --features
     rag,code-chunking` 无回归。
 
@@ -906,14 +906,14 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     机制。
 - DONE S4.2 强隔离 `ContainerBackend` + `code_exec` 工具（提交 `422b9d8`
   RFC 文档 + `044a830` 实现，2026-07-27）
-  - 落地：`ContainerBackend`（`agentflow-tools/src/sandbox/container.rs`）
+  - 落地：`ContainerBackend`（`yanshi-tools/src/sandbox/container.rs`）
     shell 出真实容器引擎——优先 Apple `container` CLI（真实 per-invocation
     Linux microVM，经 Virtualization.framework，本机已验证工作）,否则
     rootless Podman（Linux）。**无部分强制档位**（不同于 seccomp+Landlock
     组合——Landlock 缺失时 seccomp 自己仍是真实强制;容器引擎缺失时没有降级
     可选,`enforcement_level()` 直接 `Disabled`,`wrap_command()` 硬拒绝
     `Err(SandboxError::Unsupported)`)。新工具
-    `code_exec`（`agentflow-tools/src/builtin/code_exec.rs`）：v1 仅
+    `code_exec`（`yanshi-tools/src/builtin/code_exec.rs`）：v1 仅
     Python（`{code: string}` 参数,内容内联——llm-generated 从不是预先存在
     的文件）,每次调用新建 `tempfile::TempDir`,调用返回时自动销毁,硬编码
     资源限额（256 MiB / 30 CPU 秒 / 32 pids,v1 不做 manifest 可配置）,
@@ -949,7 +949,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     6. 有个测试断言"OSError 或低 fork 计数都算证明 pids 限额生效"过于宽松——
        它把上面第 5 条的 `--uid` bug 误判成"限额生效的证据"（因为 `is_error`
        为真,但原因不对）。收紧为检查 fork 相关的具体错误特征。
-  - **Linux 验证**（复用 S3 会话搭的 `agentflow-linux-dev` 开发容器,装了
+  - **Linux 验证**（复用 S3 会话搭的 `yanshi-linux-dev` 开发容器,装了
     rootless Podman）：引擎探测、基础执行、网络阻断、pids 限额都经真实编译的
     Rust 代码确认工作。内存限额撞上和 S3.2 完全相同的 cgroup v2 delegation
     缺口（无 systemd、root cgroup 有直接挂载进程）——复用 S3.2 已经建好的
@@ -957,7 +957,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     `tests/code_exec_linux.rs` 的 skip-guard,而不是让 `code_exec` 静默降级
     隔离保证,也不是另起一套探测逻辑。有真实 cgroup v2 delegation 的宿主
     （比如标准 systemd Linux 服务器）不会撞上这个问题。
-  - 回归：`agentflow-tools/tests/code_exec_macos.rs` 新增 8 个测试,证明的是
+  - 回归：`yanshi-tools/tests/code_exec_macos.rs` 新增 8 个测试,证明的是
     真实隔离而不只是编译通过——代码确实跑在独立 Linux 内核里（即使在 macOS
     宿主上,`platform.system()` 报告 "Linux"）、网络彻底阻断
     （DNS/HTTP/裸socket）、宿主文件系统不可达（`/Users` 在容器里不存在）、
@@ -966,9 +966,9 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     还在跑的临时目录"赛跑,用可区分前缀 + `tokio::sync::Mutex` 序列化这个
     文件的测试修复,不能用 std `Mutex`——clippy 正确标记了跨 `await` 持有
     std `MutexGuard`）。`code_exec_linux.rs` 3 个测试覆盖该环境下可验证的
-    部分。`agentflow-skills` 新增测试通过真实 skill manifest 注册并调用
-    `code_exec`。macOS 上 agentflow-tools 108 lib + 8 macos + 3 linux
-    （本机 skip-guard）、agentflow-skills 138、agentflow-cli 全量测试套件
+    部分。`yanshi-skills` 新增测试通过真实 skill manifest 注册并调用
+    `code_exec`。macOS 上 yanshi-tools 108 lib + 8 macos + 3 linux
+    （本机 skip-guard）、yanshi-skills 138、yanshi-cli 全量测试套件
     全绿;Linux 开发 VM 内 110 lib + 3 linux 测试全绿;两端 fmt/clippy(-D)/
     check-arch 绿;`cargo build --workspace --features rag,code-chunking`
     无回归。
@@ -981,53 +981,53 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     `code_exec` 工具的执行后端,不改 plugin runtime（仍是 subprocess
     JSON-RPC）。
   - **收尾追加**（提交 `382a7e1`,2026-07-27）：宣称"完成"后实际跑了一遍
-    `agentflow skill inspect --explain-permissions` 针对真实 code_exec
+    `yanshi skill inspect --explain-permissions` 针对真实 code_exec
     skill,当场发现三处运维可见性缺口，均已修复：(1) `SkillLoader::
     KNOWN_TOOLS` 没列 `"code_exec"`,声明它的 skill 在 manifest 校验阶段
     就直接报错 "Unknown tool",在 CLI 路径下完全不可用（虽然 registry
     层面已经能注册）；(2) `skill inspect` 的 capability-decision 打印逻辑
-    （agentflow-cli 里一份独立于 `agentflow-tools::ToolPermissionSet::
+    （yanshi-cli 里一份独立于 `yanshi-tools::ToolPermissionSet::
     builtin` 的硬编码 name→capability 映射）不认识 code_exec,报
     "unknown built-in tool, skipped"；(3) `skill inspect` 的 sandbox
-    profile 段和 `agentflow doctor` 都只查询 `default_backend()`
+    profile 段和 `yanshi doctor` 都只查询 `default_backend()`
     （shell/script 用的 OS 沙箱层）,对 code_exec 用的 `ContainerBackend`
     完全没有可见性。新增独立的 "Code-exec isolation" 展示段（不并进
     os_sandbox 那个 opt-in 语境的 block,因为 code_exec 是强制而非
     opt-in）；`doctor` 新增 `CodeExecReport`,纯信息性展示,不影响
     `DoctorStatus`（code_exec 是 per-skill opt-in,doctor 的全机扫描视角
     看不出有没有 skill 真的声明它）。同时补了 `CLAUDE.md` 里
-    agentflow-tools 段落和 "Last Updated" 行（此前落后于 S3/S4 好几个
+    yanshi-tools 段落和 "Last Updated" 行（此前落后于 S3/S4 好几个
     版本）。这次是先做完整链路手测才抓到的,不是靠代码走查。
   - **最后一块缺口收口**（提交 `97292bf`,2026-07-27）：此前 harness
     审批集成只验证过通用机制（`production_profile_escalates_non_idempotent_
     tools` 用的是手搓的 `ProbeTool` 测试替身,`code_exec` 自己的单测也只
     检查 `metadata()` 自报的 `NonIdempotent`,没有任何测试真正把 `CodeExecTool`
     本体推过 `wrap_registry`/`HookConfig` 走一遍）。新增
-    `production_profile_escalates_code_exec`（`agentflow-harness/src/
+    `production_profile_escalates_code_exec`（`yanshi-harness/src/
     hooks_runtime.rs`）：注册真实 `CodeExecTool`,`Production` profile +
     `AutoDenyApprovalProvider`,断言调用在 `CodeExecTool::execute` 自己的
     强制隔离检查/spawn 逻辑跑之前就被审批闸拦下（deny 而非 allow,故本机
     有没有装容器引擎都不影响这条测试——审批闸短路发生在那些检查之前）。
-    `agentflow-harness` 79 lib 测试全绿。至此 S4.2 收尾时列出的三类缺口
+    `yanshi-harness` 79 lib 测试全绿。至此 S4.2 收尾时列出的三类缺口
     （运维可见性 + harness 审批集成）全部补齐。
   - **第二轮扫尾**（提交 `7cdd6b8` / `b6ab22c`，2026-07-27）：既然连续三次
     在"枚举 shell/script 工具名"的地方漏了 code_exec,索性系统性扫了一遍全仓库
-    同类模式,又抓到两处：(1) `agentflow-agents/src/project_memory.rs` 的
+    同类模式,又抓到两处：(1) `yanshi-agents/src/project_memory.rs` 的
     `DeterministicProjectFactGenerator::extract`（L3.1 项目记忆的事实抽取器）
     只匹配 `"shell"`/`"script"`——code_exec 调用成功执行后从未被记成
     `ProjectFact`,不报错,就是安静地漏记,补了 `"code_exec"` 分支（提取
     `code` 参数,和 shell/script 一样原样存,不做摘要,保持这个抽取器
     LLM-free 的既有设计原则）+ 回归测试；(2) 用户面文档
     `docs/SKILLS.md`（"Supported values" 明确写"shell/file/http/script"，
-    遗漏 code_exec）和 `docs/ARCHITECTURE.md`（agentflow-tools 那行 crate
+    遗漏 code_exec）和 `docs/ARCHITECTURE.md`（yanshi-tools 那行 crate
     摘要同样没提）——技能作者/新贡献者会真的读这两份文档,已修复,
     `SKILLS.md` 新增一整节 "Code Execution Tool" 参照 "Script Tools" 的
-    详细程度。**确认了两处不需要动**：`agentflow-config` 的 workflow YAML
+    详细程度。**确认了两处不需要动**：`yanshi-config` 的 workflow YAML
     node factory/schema（`shell`/`script` 在那边是完全独立的 DAG 节点类型
     命名空间,code_exec 设计上就不是 workflow node,这是刻意的范围排除,
     不是遗漏）；`RoadMap.md` 的 S 段描述（该文件全篇没有任何"已关闭"标记
     的先例,连已经全部收口的 P-A 段落都没标,不单独给 S 破例）。
-    agentflow-agents 231 + agentflow-memory 7 lib 测试全绿,workspace
+    yanshi-agents 231 + yanshi-memory 7 lib 测试全绿,workspace
     fmt/clippy(-D)/check-arch 全绿。
   - **对抗性代码审计 + 三处真实修复**（提交 `c7c1a10` / `b12fd69`，
     2026-07-27）：前几轮都是"扫同类模式"式的静态排查,这轮换成派 code-reviewer
@@ -1070,7 +1070,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
        进程的缓冲区。一个只顾疯狂 print、不 sleep（不会撞见发现 1 的超时
        路径,也不一定很快撞上 CPU 限额）的 payload 可以在宿主机上无限膨胀
        内存。改用 `tokio::join!` 并发读 stdout/stderr（各自 64 KiB 上限,
-       复用 `agentflow-harness::tasks` 已有的 `DEFAULT_MAX_OUTPUT_BYTES`
+       复用 `yanshi-harness::tasks` 已有的 `DEFAULT_MAX_OUTPUT_BYTES`
        惯例）+ `child.wait()`,`read_capped()` 超过上限后继续排空而非停止
        读（否则子进程会因为管道写满而卡住,把"限制输出"变成"卡到超时"）。
        新增测试 `code_exec_output_is_capped_...`：真的打印 1 MiB,确认
@@ -1079,7 +1079,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     （父进程里先写限额,子进程 `pre_exec` 里再迁移,没有 TOCTOU）、
     `pre_exec` 的 async-signal-safety、容器 flag 构造的引擎差异化逻辑、
     mandatory-refuse 分支——不是走查一遍就全放行,是每条都对着当前文件内容
-    核实过。agentflow-tools 108 lib + 10 code_exec_macos（原 8）测试
+    核实过。yanshi-tools 108 lib + 10 code_exec_macos（原 8）测试
     macOS 全绿;Linux 开发 VM 内 110 lib + 9 sandbox_linux + 3
     code_exec_linux 全绿;两端 fmt/clippy(-D)/check-arch 干净。
 
@@ -1106,7 +1106,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
 - DONE L1.1 失败驱动的 replan loop（提交见下）：`DynamicWorkflowAgent` 新增
   `run_with_replan(goal, max_replans) -> DynamicWorkflowRunOutcome`
   （`{state, plan, revisions}`）。判定"哪些 step 还没搞定"复用了对
-  `agentflow-core` 并发执行器语义的精确核实（专门起了个 Explore agent 查证）：
+  `yanshi-core` 并发执行器语义的精确核实（专门起了个 Explore agent 查证）：
   concurrent 模式下失败节点的下游根本不会进 state map（既不是 key 也不是
   `Err`，是彻底缺席）——所以判据是"state 里没有 `Ok(_)`"而非"state 里是
   `Err`"，两者都算"还没做完"，缺一不可。已成功的 step 结果存进
@@ -1124,18 +1124,18 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   （`DynamicWorkflowAgent` 本来就不用那套,不为这一个特性单独引入）；
   "trace 记 plan-revision 事件"用普通 `tracing::info!`
   （`event="dynamic_workflow_plan_revision"`）而非 Harness 信封——从
-  `agentflow-agents` 内部往 `HarnessEvent` 发送需要新依赖边,dynamic workflow
+  `yanshi-agents` 内部往 `HarnessEvent` 发送需要新依赖边,dynamic workflow
   今天的 harness 集成只在 CLI surface 层（`wrap_registry`）,不从 agents crate
   内部发,维持这个边界。
-  **顺手挖出一个真实的既有测试基础设施 bug**：`AGENTFLOW_MOCK_RESPONSES`
-  （复数,JSON 数组,FIFO 消费）比 `AGENTFLOW_MOCK_RESPONSE`（单数）优先级高,
+  **顺手挖出一个真实的既有测试基础设施 bug**：`YANSHI_MOCK_RESPONSES`
+  （复数,JSON 数组,FIFO 消费）比 `YANSHI_MOCK_RESPONSE`（单数）优先级高,
   而写它的测试助手若不主动清空,会在整个测试二进制的后续任意 mock-model
-  测试里残留生效——不清空时全量跑 `cargo test -p agentflow-agents` 会
+  测试里残留生效——不清空时全量跑 `cargo test -p yanshi-agents` 会
   随机连累 `plan_execute.rs` 里两个不相关测试失败（三次独立复现,失败的
   具体测试因并发调度而不同）。修复：新增 `MockResponsesGuard`（Drop 时清
-  `AGENTFLOW_MOCK_RESPONSES`,即使测试 panic 也会清）,比这个文件里已有的
+  `YANSHI_MOCK_RESPONSES`,即使测试 panic 也会清）,比这个文件里已有的
   "测试末尾手动 `remove_var`"惯例（`plan_execute.rs:1235`）更 panic-safe。
-  连续 3 次全量跑 `cargo test -p agentflow-agents`（188 测）零 flake。
+  连续 3 次全量跑 `cargo test -p yanshi-agents`（188 测）零 flake。
   回归：`run_with_replan_reuses_completed_steps_and_recovers_from_failure`
   （mock LLM 两轮,首轮必败节点,断言成功 step 的调用计数跨两轮仍是 1、
   失败 id 不出现在最终 state/plan 里）+
@@ -1143,7 +1143,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   （持续失败 → 耗尽预算后返回部分 state 而非报错或死循环）+
   `precomputed_step_replays_stored_value_without_touching_registry`
   （隔离验证 precomputed 编译路径,registry 里压根没注册对应工具也能跑）。
-  agentflow-agents 188 测 + workspace clippy(-D)/fmt/check-arch 绿。
+  yanshi-agents 188 测 + workspace clippy(-D)/fmt/check-arch 绿。
 - DONE L1.2 循环签名检测（死循环识别）（提交见下）：`ReActConfig` 新增
   `loop_detection: Option<LoopDetectionConfig>{window,threshold}`，默认
   `Some({window:6, threshold:3})`——**TODO 原文一个关键假设是错的**：
@@ -1151,11 +1151,11 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   "保留 exhaustive 的封闭 kind set"，跟 `AgentEvent`/`WorkflowEvent` 不同处理；
   加 `LoopDetected` 变体前先专门起 Explore agent 查证过，`TODOs.md` 这条原文
   "加变体无 ripple" 是过期表述）。加变体触发 4 个 exhaustive match 编译错误
-  （`agentflow-server/src/harness_live.rs` / `agentflow-agents/src/eval/
-  runner.rs` / `agentflow-cli/src/commands/agent/replay.rs` /
-  `agentflow-cli/src/commands/harness/run.rs`）+ `cargo check --workspace`
-  又额外揪出 2 个 Explore agent 没扫到的（`agentflow-harness/src/runtime.rs` +
-  `agentflow-agents/src/react/agent.rs` 自己的 `answer_from_result`）——6 处
+  （`yanshi-server/src/harness_live.rs` / `yanshi-agents/src/eval/
+  runner.rs` / `yanshi-cli/src/commands/agent/replay.rs` /
+  `yanshi-cli/src/commands/harness/run.rs`）+ `cargo check --workspace`
+  又额外揪出 2 个 Explore agent 没扫到的（`yanshi-harness/src/runtime.rs` +
+  `yanshi-agents/src/react/agent.rs` 自己的 `answer_from_result`）——6 处
   全部手工补 `LoopDetected` 分支，未走"顺手 seal 成 non_exhaustive"这条路
   （尊重 P-A3.7 当年的刻意选择，不在这个不相关的特性里单方面推翻）。
   检测算法：`LoopState` 新增 `recent_tool_calls: VecDeque<(tool,params)>`
@@ -1176,8 +1176,8 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   `loop_detection_catches_alternating_signature_pattern`（A,B 交替 8 次,证明
   不局限于连续重复）+ `loop_detection_can_be_disabled`（`without_loop_
   detection()` 后行为退回纯 max_iterations,验证关闭开关生效）。
-  agentflow-agents 191 测（连续 3 次全量跑零 flake）+ agentflow-server 78 +
-  agentflow-harness 180 + workspace `--lib --bins` 全绿，clippy(-D)/fmt/
+  yanshi-agents 191 测（连续 3 次全量跑零 flake）+ yanshi-server 78 +
+  yanshi-harness 180 + workspace `--lib --bins` 全绿，clippy(-D)/fmt/
   check-arch 绿。
 
 ### L2 — 任务摘要与状态恢复（context-truncation recovery）
@@ -1185,29 +1185,29 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
 - DONE L2.1 agent-loop 级任务摘要 checkpoint（提交见下）：落地前先起 Explore
   agent 核实了 TODO 原文的三个假设，两个不成立——**`ContextItem`/
   `ContextProvider`（"priority 机制"）是纯 Harness 侧概念**（定义在
-  `agentflow-agent-spi/src/harness/context.rs`），裸 `ReActAgent`/
-  `AgentContext` 完全没有等价机制，`grep agentflow-agents/src/` 零命中；
+  `yanshi-agent-spi/src/harness/context.rs`），裸 `ReActAgent`/
+  `AgentContext` 完全没有等价机制，`grep yanshi-agents/src/` 零命中；
   **CLI 今天压根没有接上既有的 message-level compaction 机制**
   （`memory_prompt_token_budget`/`memory_summary_strategy` 从未被
   `harness run`/`chat` 设置过）——"resume 后 agent 能答出截断前事实"这个
   场景在**当前 CLI 用法下从未真正发生过**，`--session <id>` 续用今天读的是
   完整原始历史，没有任何压缩。跟用户对齐后确定范围：(1) 生成器走确定性
-  提取而非 LLM（跟 `agentflow-harness::ContextSummarizer` 的既有先例一致，
+  提取而非 LLM（跟 `yanshi-harness::ContextSummarizer` 的既有先例一致，
   可插拔，未来可换 LLM 版本）；(2) 注入机制不能只挂 Harness 专属的
   `ContextItem`，要能覆盖裸 `ReActAgent` 场景。
-  落地：`agentflow-store-spi` 新增 `TaskSummary`（goal/completed_steps/
+  落地：`yanshi-store-spi` 新增 `TaskSummary`（goal/completed_steps/
   key_results/open_questions/next_steps/updated_at）+ `TaskSummaryStore`
   trait（契约按 TODO 原文明确指示挂 store-spi，这是相对于 `PreferenceStore`/
-  `EntityFactStore` 现有先例——那两个契约其实定义在 `agentflow-memory` 实现
+  `EntityFactStore` 现有先例——那两个契约其实定义在 `yanshi-memory` 实现
   crate 里——的刻意提升，因为 `agent-spi` 已经依赖 store-spi 拿 `Message`，
-  让 `TaskSummary` 也挂在这一层能被 agent-spi 直接引用）。`agentflow-memory`
+  让 `TaskSummary` 也挂在这一层能被 agent-spi 直接引用）。`yanshi-memory`
   两个具体实现：`InMemoryTaskSummaryStore`（会话级，配 `SessionMemory`）+
   `SqliteTaskSummaryStore`（持久化，独立 `task_summaries` 表，UPSERT 语义，
   配 `SqliteMemory`）——**没有**把 trait 反向塞进现有 `SessionMemory`/
   `SqliteMemory` 结构体本身：任务摘要持久化是独立、可选的关注点（没开
   compaction 的调用方压根没有摘要要存），跟 `MemoryStore`/`KnowledgeBackend`
   两两独立、由调用方自行组合的既有模式一致。
-  `agentflow-agents` 新增 `task_summary` 模块：`TaskSummaryGenerator` trait +
+  `yanshi-agents` 新增 `task_summary` 模块：`TaskSummaryGenerator` trait +
   `DeterministicTaskSummaryGenerator`（镜像 `ContextSummarizer` 设计——
   从被丢弃的 `Assistant`/`Tool` 角色消息里确定性抽取 completed_steps/
   key_results，`open_questions`/`next_steps` 原样透传上一轮摘要不猜测——
@@ -1235,9 +1235,9 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   历史真的没了),`preview_llm_messages()` 仍能看到第一个实例建立的事实)+
   `task_summary_is_a_no_op_when_not_configured`（未配置不 panic 不改变行为)+
   `task_summary` 模块自身 7 个单测（累加/goal 固定不被覆盖/open_questions
-  透传/长度裁剪/截断）+ store-spi/agentflow-memory 各自的存储层单测
+  透传/长度裁剪/截断）+ store-spi/yanshi-memory 各自的存储层单测
   （serde round-trip / 会话隔离 / SQLite UPSERT / 断开重连持久化)。
-  agentflow-agents 201 测 + store-spi 10 + memory 全绿 + workspace `--lib
+  yanshi-agents 201 测 + store-spi 10 + memory 全绿 + workspace `--lib
   --bins` 全绿，clippy(-D)/fmt/check-arch 绿。
 
 ### L3 — 项目级记忆（project memory）
@@ -1252,7 +1252,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   `ReActLoopSession::next_turn` 路径压根不经过这行）。`TaskSummary` 的
   更新语义也是整份覆盖、按 session_id 键;`ProjectMemory` 要的是跨会话
   按 project_key 累加/去重——结构上更贴近本仓库已有的 `EntityFact`/
-  `EntityFactStore`（人物实体的结构化事实,`agentflow-memory/src/layer.rs`）
+  `EntityFactStore`（人物实体的结构化事实,`yanshi-memory/src/layer.rs`）
   而非 `TaskSummary`。跟用户对齐后确定：只复用"确定性抽取器 + 可插拔
   generator trait"这个**解法形状**（跟 `ContextSummarizer`→
   `TaskSummaryGenerator`一脉相承）,不复用 `TaskSummary` 类型/store 本身。
@@ -1265,7 +1265,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   `SkillBuilder` 调用点分布在 3 个 crate,只有 `harness run`/`chat` 有
   "workspace root" 概念）留后续,本次只做库能力（precedent: L2.1 自己也是
   这么收的）。
-  落地：`agentflow-memory` 新增 `project` 模块（**不挂 store-spi**——跟
+  落地：`yanshi-memory` 新增 `project` 模块（**不挂 store-spi**——跟
   `TaskSummary` 的刻意提升相反，这次跟 `EntityFactStore`/`PreferenceStore`
   的既有先例走，因为 `ProjectFact` 今天没有跨 crate 消费方需要在 store-spi
   层引用它）：`ProjectFact{tool, command, first_seen, last_seen,
@@ -1275,7 +1275,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   canonicalized 路径,新建的约定,已发现没有先例可循）+ 两个实现
   `InMemoryProjectMemoryStore`/`SqliteProjectMemoryStore`（独立
   `project_facts` 表,`PRIMARY KEY (project_key, tool, command)`）。
-  `agentflow-agents` 新增 `project_memory` 模块：`ProjectFactGenerator`
+  `yanshi-agents` 新增 `project_memory` 模块：`ProjectFactGenerator`
   trait + `DeterministicProjectFactGenerator`——扫 `AgentStep` 里的
   `ToolCall{tool: "shell"|"script", params}`,取 `command`/`script`
   字段,run 内去重（run 间去重交给 store 的 upsert）。`ReActAgent` 新增
@@ -1296,13 +1296,13 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   `project_memory` 模块自身 5 个单测（抽取 shell/script、忽略其他工具、
   忽略非 ToolCall step、run 内去重）+ store 层 7 个单测（sha256 稳定性、
   不同路径不同 key、upsert 计数、跨 project 隔离、SQLite 断开重连持久化）。
-  agentflow-agents 209 测（2 次连续全量跑零 flake）+ agentflow-memory 65 +
+  yanshi-agents 209 测（2 次连续全量跑零 flake）+ yanshi-memory 65 +
   workspace `--lib --bins` 全绿，clippy(-D)/fmt/check-arch 绿。
 
 ### L4 — RAG 检索面补强（承接 P-A4.2 refinement）
 
 - DONE L4.1 细粒度 / 代码感知 chunking
-  - `agentflow-rag/src/chunking/{paragraph,heading,code_ast}.rs`：新增
+  - `yanshi-rag/src/chunking/{paragraph,heading,code_ast}.rs`：新增
     `ParagraphChunker`（段落为原子单元，从不切割段落内部，小段落合并到
     `chunk_size`，超大段落单独成 chunk）、`HeadingChunker`（按 markdown
     ATX 标题分节，一节一 chunk，超大节回退到定长子切分并保留父标题
@@ -1316,7 +1316,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     字节偏移，两者不一致；新 chunker 完全绕开这个歧义。
   - `code-chunking` 是新增的 Cargo feature（`syn` + `proc-macro2`，均为
     新依赖），非默认开启（避免所有 RAG 消费者被迫链接 syn）；
-    `agentflow-skills` 和 `agentflow-cli`（`rag` feature 下）显式打开它，
+    `yanshi-skills` 和 `yanshi-cli`（`rag` feature 下）显式打开它，
     否则 `chunk_strategy = "code_ast"` 会在运行时确定性报错——Cargo
     feature 是编译期的，库默认关闭时清单里的这个设置永远不可能生效。
   - `crate::types::ChunkingStrategy` 加 `Paragraph`/`Heading`/`CodeAst`
@@ -1327,7 +1327,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     `chunking::chunk_document_for_knowledge_backend`（对单文档分块并打包
     成 `(id, content, metadata)` 三元组，多 chunk 时 id 加
     `#chunk{idx}` 后缀，metadata 补 `source`）。
-  - `agentflow-skills`：`KnowledgeConfig` 加 `chunk_strategy` /
+  - `yanshi-skills`：`KnowledgeConfig` 加 `chunk_strategy` /
     `chunk_size` / `chunk_overlap`（均 `Option`，默认 `None` 保持
     pre-L4.1 整文件索引行为不变）。`register_knowledge_backends` 按条目
     路由：设了 `chunk_strategy` 走分块路径，否则走原整文件路径；两者
@@ -1337,15 +1337,15 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   - `rag eval`：`chunk_dataset` 泛化出 `chunk_dataset_with_strategy`
     (`ChunkedDataset` 加 `strategy` 字段)；`chunk_dataset` 保留原签名/
     错误变体作为 `FixedSize` 的薄包装，完全向后兼容。CLI
-    `agentflow rag eval --chunk-size N --chunk-strategy <name>`
+    `yanshi rag eval --chunk-size N --chunk-strategy <name>`
     新增（默认 `fixed_size`），让同一数据集可按策略跑多次形成对照组。
   - **范围裁剪**（比照 L2.1/L3.1 的"先库能力、CLI/更广接线留后续"模式）：
     `VectorStoreKnowledgeBackend` 本身没有任何 ingestion 路径（今天只能
     搜索已存在的 collection），不属于"换个 chunker"的范畴，未动；
-    `agentflow rag ops index` CLI（逐文档整篇 embed）也未接入分块——
+    `yanshi rag ops index` CLI（逐文档整篇 embed）也未接入分块——
     两者都是合理的后续项，不阻塞 L4.1 的字面验收标准（chunking 策略 +
     KnowledgeBackend 参数化 + citable metadata + eval 对照组）。
-  - 测试：`agentflow-rag` 每个新 chunker 5-6 个单测（段落不跨切分 /
+  - 测试：`yanshi-rag` 每个新 chunker 5-6 个单测（段落不跨切分 /
     小段落合并 / start_line-end_line metadata / 空文本 / try_new 校验 /
     标题分节 / 无标题文档单 chunk / 超大 item 回退子切分并保留父信息 /
     非法 Rust 源码响亮报错），`chunking::tests` 加 `create_chunker` 覆盖
@@ -1353,17 +1353,17 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     2 个测试，`knowledge::tests` 加端到端测试证明分块索引后搜索命中带
     `source`+`start_line`/`end_line`；`eval::chunking_eval::tests` 加
     `chunk_dataset_with_strategy` 段落策略 + 默认策略回归 2 个测试；
-    `agentflow-cli` 加 `parse_chunk_strategy` 覆盖全部 6 个 clap 取值；
-    `agentflow-skills::builder::tests` 加字面场景端到端测试——同一份
+    `yanshi-cli` 加 `parse_chunk_strategy` 覆盖全部 6 个 clap 取值；
+    `yanshi-skills::builder::tests` 加字面场景端到端测试——同一份
     manifest 分块后搜索命中收窄到匹配段落（不含无关填充段落，内容明显
     小于整文件），以及未知策略字符串是 build 期错误而非静默回退。
-    `agentflow-rag`(--features code-chunking) 195 测、`agentflow-skills`
-    135 测、`agentflow-cli`(--features rag) 160 测全绿；
+    `yanshi-rag`(--features code-chunking) 195 测、`yanshi-skills`
+    135 测、`yanshi-cli`(--features rag) 160 测全绿；
     fmt/clippy(-D,两种 feature 组合)/check-arch/cargo doc 全绿。
-    分 3 个提交：`agentflow-rag` chunking 核心、`agentflow-skills` 接线、
-    `agentflow-cli` eval 对照组接线。
+    分 3 个提交：`yanshi-rag` chunking 核心、`yanshi-skills` 接线、
+    `yanshi-cli` eval 对照组接线。
 - DONE L4.2 检索后处理链（rerank + 压缩 + 证据筛选）
-  - `agentflow-rag/src/postprocess/mod.rs`（新模块）：`PostProcessor` trait
+  - `yanshi-rag/src/postprocess/mod.rs`（新模块）：`PostProcessor` trait
     （async，`Vec<KnowledgeChunk> -> Vec<KnowledgeChunk>`）+
     `PostProcessorChain`（按序跑一串 `Arc<dyn PostProcessor>`，空链是
     passthrough）+ `PostProcessedKnowledgeBackend`（包一个
@@ -1376,19 +1376,19 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     evidence filtering 共用的注入点：`RerankProcessor`（按分数降序重排）
     和 `RelevanceFilterProcessor`（丢弃低于阈值的 chunk）都基于它构建。
     `ScoreRelevanceScorer` 是零依赖的确定性兜底实现（复用 chunk 自带的
-    检索 score）。**关键架构决定**：`agentflow-rag` 没有引入
-    `agentflow-llm` 依赖——研究阶段确认这是仓库既有的、被审计文档明确
+    检索 score）。**关键架构决定**：`yanshi-rag` 没有引入
+    `yanshi-llm` 依赖——研究阶段确认这是仓库既有的、被审计文档明确
     认可的"capability crate 互不依赖"纪律（`docs/RFC_CRATE_ARCHITECTURE.md`
     capability→capability 边在 `check-arch` 的 latent-law 列表里，加是要
     刻意决定的架构变更，不是顺手加一个 dep）。所以 LLM rerank（TODO 原文
     要求的目标，cross-encoder 明确留作后续）通过 `RelevanceScorer` 的
-    可注入设计支持，具体的 LLM 实现留给已有 `agentflow-llm` 依赖的调用方
-    （如 `agentflow-cli`）提供——这是范围裁剪，不是没做：composable chain
+    可注入设计支持，具体的 LLM 实现留给已有 `yanshi-llm` 依赖的调用方
+    （如 `yanshi-cli`）提供——这是范围裁剪，不是没做：composable chain
     本身完整可用，只是"某个具体 scorer 调 LLM"这一层没有内置。
   - `TruncateCompressor`：确定性字符预算截断（+ 截断标记），是"上下文
     压缩"这条腿的第一版——不需要 LLM；LLM 摘要式压缩留作后续（同样的
     scorer 风格注入点可以后续补）。
-  - `agentflow-rag/src/eval/postprocess_eval.rs`（新文件）：
+  - `yanshi-rag/src/eval/postprocess_eval.rs`（新文件）：
     `PrecomputedRetriever`（`query text -> ranked ids` 的纯查表 `Retriever`
     实现）+ `build_post_processed_retriever`（async 辅助函数：对数据集每条
     query 先跑 base retriever 拿到 id 排名，合成带 `score = 1/(rank+1)`
@@ -1398,7 +1398,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     的 `Retriever` trait 和天生异步的 `PostProcessor` chain，不改动
     `runner.rs` 一行代码。
   - `eval::compare` 加 `requires_gain(cmp, metric, threshold_gain,
-    threshold_p_value) -> GainDecision`：是 `agentflow-cli` 里
+    threshold_p_value) -> GainDecision`：是 `yanshi-cli` 里
     `evaluate_regression`（"禁止倒退"）的镜像版本（"要求前进"），复用同一套
     `ComparisonReport`/配对符号检验统计机制而不是另起一套。核心技巧：
     `compare()` 自带的 `paired_sign_p_value` 回答"candidate 是否更差"，
@@ -1417,19 +1417,19 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     `requires_gain` 单测（两条件都满足才 confirm / 单独指标增益不够 /
     单独胜率不显著 / 目标指标缺失 / 一个"处处获胜"的极端场景验证
     `requires_gain` 与 `compare()` 自身 p-value 极性相反这一关键假设不回归）。
-    `agentflow-rag`(--features code-chunking) 211 测（较 L4.1 完工时 +16）
+    `yanshi-rag`(--features code-chunking) 211 测（较 L4.1 完工时 +16）
     全绿；fmt/clippy(-D，两种 feature 组合)/check-arch/cargo doc 全绿；
-    `agentflow-skills`/`agentflow-cli`(--features rag) 重新 build 确认
-    未受影响（只消费 `agentflow-rag` 的既有导出，未使用新增 API）。
+    `yanshi-skills`/`yanshi-cli`(--features rag) 重新 build 确认
+    未受影响（只消费 `yanshi-rag` 的既有导出，未使用新增 API）。
   - **范围裁剪**：(a) 具体的 LLM-backed `RelevanceScorer` 实现 + `rag eval`
     暴露一个用它跑对照组的 CLI flag，留作后续——需要在某个已有
-    `agentflow-llm` 依赖的 crate（`agentflow-cli` 是最自然的落点）里实现，
+    `yanshi-llm` 依赖的 crate（`yanshi-cli` 是最自然的落点）里实现，
     本轮只交付了 library 能力和证明机制；(b) cross-encoder scorer 依 TODO
     原文本就是"作后续可选"；(c) LLM 摘要式压缩（相对于当前的确定性截断）
     留作后续。三者都不阻塞 L4.2 字面验收标准（可组合 post-processor 链 +
     LLM rerank 有可注入接口 + 压缩 + 证据过滤 + eval 能证明增益）。
 - DONE L4.3 Query rewrite / decomposition
-  - `agentflow-rag/src/rewrite/mod.rs`（新模块）：`QueryRewriter` trait
+  - `yanshi-rag/src/rewrite/mod.rs`（新模块）：`QueryRewriter` trait
     （async，一个 query 进，一个或多个 query 出——"改写"是 1→1，"拆分子
     查询"是 1→N，同一个接口形状覆盖两种场景）+ `IdentityQueryRewriter`
     （默认，原样返回）+ `SplitQueryRewriter`（确定性、零依赖，按
@@ -1441,17 +1441,17 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     求和），从"融合两个 retriever"泛化成"融合一个 retriever 的 N 个
     query 变体"，融合后的分数会覆盖每个 chunk 原来的单查询分数，供下游
     `postprocess` 链读取真实分数而非过期值。
-  - 与 L4.2 同样的架构决定：`agentflow-rag` 不引入 `agentflow-llm`，
+  - 与 L4.2 同样的架构决定：`yanshi-rag` 不引入 `yanshi-llm`，
     LLM 语义级改写通过 `QueryRewriter` 的可注入设计支持，具体实现留给
     已有该依赖的调用方——`SplitQueryRewriter` 是句法级（非语义级）的
     "拆分子查询"真实实现，不是占位符。
-  - `agentflow-rag/src/eval/rewrite_eval.rs`（新文件）：
+  - `yanshi-rag/src/eval/rewrite_eval.rs`（新文件）：
     `build_multi_query_retriever`，与 L4.2 的
     `build_post_processed_retriever` 同构——预先对数据集每条 query 跑
     改写 + 逐个子查询搜索 + RRF 融合，烘焙进 `PrecomputedRetriever`，
     照样免费复用 `evaluate()`/`compare()`/`requires_gain()`，一行
     harness 代码没改。
-  - `agentflow-skills`：`KnowledgeConfig` 加 `query_rewrite: Option<String>`
+  - `yanshi-skills`：`KnowledgeConfig` 加 `query_rewrite: Option<String>`
     （当前仅支持 `"split"`）。`register_knowledge_backends` 用"清单顺序里
     第一个设置了 `query_rewrite` 的 rag 条目生效"这一语义——因为所有
     rag-tier 条目共享同一个 backend/tool（P-A4.2 既有不变量），这个开关
@@ -1465,12 +1465,12 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     `eval::rewrite_eval` 2 个测试（构造的 retriever 通过拆分找回分散在两个
     文档里的答案 / 端到端证明改写后 recall 相对未改写基线有确认的增益——
     "eval 数据集加改写前后对照"字面场景的回归测试）；
-    `agentflow-skills::builder::tests` 加 2 个端到端测试（复合查询被拆分后
+    `yanshi-skills::builder::tests` 加 2 个端到端测试（复合查询被拆分后
     同时召回两个各自只含一半关键词的文档 / 未知 query_rewrite 是 build
-    期错误）。`agentflow-rag`(--features code-chunking) 223 测（较 L4.2
-    完工时 +12）全绿；`agentflow-skills` 137 测全绿；fmt/clippy(-D，两种
-    feature 组合)/check-arch/cargo doc 全绿。分 2 个提交：`agentflow-rag`
-    query rewrite 核心、`agentflow-skills` 接线。
+    期错误）。`yanshi-rag`(--features code-chunking) 223 测（较 L4.2
+    完工时 +12）全绿；`yanshi-skills` 137 测全绿；fmt/clippy(-D，两种
+    feature 组合)/check-arch/cargo doc 全绿。分 2 个提交：`yanshi-rag`
+    query rewrite 核心、`yanshi-skills` 接线。
   - **范围裁剪**：LLM 语义级改写的具体实现（相对于 `SplitQueryRewriter`
     的句法级拆分）留作后续，理由与 L4.2 的 `RelevanceScorer` 完全一致——
     不阻塞字面验收标准（改写 + 拆分子查询 + 多路召回合并 + skill manifest
@@ -1478,12 +1478,12 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
 - DONE L4.4 Citation 一致性校验
   - **架构决定（与 L4.1-4.3 不同）**：research 阶段确认——校验一个"已生成
     的最终回答"而非"检索本身"，天然是 agent 循环层面的关注点（需要读
-    `AgentStep` 历史找最近一次 `rag_search` 结果），且 `agentflow-agents`
-    本来就依赖 `agentflow-llm`（不像 `agentflow-rag` 刻意零 LLM 依赖）。
-    所以这次没有把逻辑放进 `agentflow-rag`，而是新建
-    `agentflow-agents/src/citation.rs`——并且这次"LLM rerank"式的具体
+    `AgentStep` 历史找最近一次 `rag_search` 结果），且 `yanshi-agents`
+    本来就依赖 `yanshi-llm`（不像 `yanshi-rag` 刻意零 LLM 依赖）。
+    所以这次没有把逻辑放进 `yanshi-rag`，而是新建
+    `yanshi-agents/src/citation.rs`——并且这次"LLM rerank"式的具体
     LLM-as-judge 实现是**真正交付的**，不是像 L4.2/L4.3 那样又留了一个
-    可注入接口给"更上层"（`agentflow-agents` 已经就是那个更上层）。
+    可注入接口给"更上层"（`yanshi-agents` 已经就是那个更上层）。
   - `Citation`（marker/source/content）+ `CitationVerdict`（Supported /
     Unsupported{reason}）+ `CitationChecker` trait（async，一批 citation
     进，一批 verdict 出，形状与 L4.2 `RelevanceScorer::score` 一致，保持
@@ -1495,7 +1495,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     `citations_referenced_in_answer` 只保留答案里真正出现的 marker。
   - `KeywordOverlapCitationChecker`（默认/测试用，零依赖，答案与引用内容
     的词汇重叠率过阈值判 Supported）+ `LlmCitationChecker`（真正的
-    "轻量 LLM-as-judge"：`AgentFlow::model(...).prompt(...).json_schema(
+    "轻量 LLM-as-judge"：`Yanshi::model(...).prompt(...).json_schema(
     "citation_verdicts", schema).execute()` 一次结构化调用批量判定所有
     引用；判官没返回某个 marker 的 verdict 时该 marker 判定为
     Unsupported——fail closed，不会被静默放行）。
@@ -1528,13 +1528,13 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     降级、记录为失败的 Verify step 和 VerificationCompleted(approved=
     false) 事件；对照组：引用内容确实支持结论时答案原样不变、不产生
     降级 step——这两条是"不通过才降级，通过则不动"字面场景的回归测试）。
-    `agentflow-agents` 224 测（较改动前 209 + 13 单测 + 2 集成测试）全绿，
+    `yanshi-agents` 224 测（较改动前 209 + 13 单测 + 2 集成测试）全绿，
     连续两次跑确认无 flake；fmt/clippy(-D)/check-arch/cargo doc 全绿；
-    `agentflow-skills`/`agentflow-harness`/`agentflow-cli` 重新 build 确认
+    `yanshi-skills`/`yanshi-harness`/`yanshi-cli` 重新 build 确认
     未受影响。
   - **范围裁剪**：(a) "Citation Accuracy 指标进 `rag eval`"——指标类型本身
-    交付了（`CitationAccuracyReport`），但没有把它接进 `agentflow rag eval`
-    CLI 子命令或 `agentflow-rag` 的 `EvalReport`/`compare()` 机制，理由见上
+    交付了（`CitationAccuracyReport`），但没有把它接进 `yanshi rag eval`
+    CLI 子命令或 `yanshi-rag` 的 `EvalReport`/`compare()` 机制，理由见上
     （数据模型不匹配，属于比这次该做的范围更大的改动）；这是留给后续的
     CLI/harness 接线，不是没做核心能力。(b) Citation 校验目前只识别
     `RagSearchTool::render()` 的文本格式（唯一存在的 provenance 载体）；
@@ -1547,29 +1547,29 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   - **架构决定**：research 阶段确认 Handoff/Blackboard/Debate 三种
     supervisor 模式里没有任何 per-sub-agent 配置结构——调用方手工构建每个
     子 agent 的 `ToolRegistry`，supervisor 从不触碰它。`DelegationSpec`
-    因此放进 `agentflow-agent-spi`（而不是 `agentflow-agents`），因为它是
+    因此放进 `yanshi-agent-spi`（而不是 `yanshi-agents`），因为它是
     纯数据契约（不带 `ToolRegistry`/`ReActAgent` 引用），和 `RuntimeLimits`/
     `AgentContext` 一样属于"跑一次调用需要的配置"这层共享词汇表，供任何
     未来的 runtime 复用，不止三个 supervisor 模式。
-  - `agentflow-tools::ToolRegistry::narrowed(allowed_tools, allowed_capabilities)`
+  - `yanshi-tools::ToolRegistry::narrowed(allowed_tools, allowed_capabilities)`
     ——研究确认 `ToolRegistry` 原本没有任何"从大 registry 切出子集"的
     方法，这是真正新写的部分。刻意复用两个已有机制而不是发明新的合并
     算法：`ToolPolicy::allow_tools` 做工具名子集（在每次 `execute()` 都
     生效，不只是构造时过滤一次），`with_skill_capabilities` 装
-    capability 层——这正是 `agentflow-skills/src/builder.rs` 里 Skill
+    capability 层——这正是 `yanshi-skills/src/builder.rs` 里 Skill
     自己的 `security.tool_permission_allowlist` 早就在用的同一条
     `EffectiveCapabilities::resolve` 交集路径，没有引入第二套合并逻辑。
     narrowed 出的 registry 有自己独立的 audit trail（新的
     `policy_audit`/`capability_audit`），不与 parent 共享。
-  - `agentflow-agent-spi::delegation`：`DelegationSpec`（goal / input_context
+  - `yanshi-agent-spi::delegation`：`DelegationSpec`（goal / input_context
     / allowed_tools / allowed_capabilities / expected_output_schema /
     timeout_ms / budget_tokens / evaluation_criteria，全部 builder 风格
     `with_*`）+ `validate_output`/`SchemaValidation`（把子 agent 的自由
     文本回答按 JSON 解析后用 `jsonschema::JSONSchema::options()`——与
-    `agentflow-tools` 校验工具参数完全相同的调用方式——校验进
+    `yanshi-tools` 校验工具参数完全相同的调用方式——校验进
     `expected_output_schema`）。`DelegationSpec::narrow_registry` 是对
     `ToolRegistry::narrowed` 的一层自文档化薄包装。
-  - `agentflow-agents::delegation`：`build_delegated_agent`（按 spec 收窄
+  - `yanshi-agents::delegation`：`build_delegated_agent`（按 spec 收窄
     父 registry 后构造 `ReActAgent`）+ `run_delegated`（把 goal+
     input_context 拼成任务文本，把 spec 的 timeout_ms/budget_tokens 叠加在
     `RuntimeLimits::react_defaults()` 之上，跑完后校验 schema）。刻意做成
@@ -1581,31 +1581,31 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
   - 回归测试（字面场景，"子 agent 尝试调用 spec 外工具 → 被拒且 trace
     可见"）：mock LLM 驱动一个收窄到 `["echo"]` 的子 agent 仍然尝试调用
     `http`，断言这次调用在 `outcome.result.steps` 里以失败的 `ToolResult`
-    step 出现（不是被静默吞掉）。另有 `agentflow-tools` 侧 7 个单测
+    step 出现（不是被静默吞掉）。另有 `yanshi-tools` 侧 7 个单测
     （按工具名收窄 / None 保留全部 / 收窄后仍在 registry 里的工具被拒
     / 防御性验证——即使工具意外仍在 registry 里 policy 依然生效 / 装载
     capability 层 / capability 层通过 `EffectiveCapabilities::resolve`
-    拒绝未授权能力的工具 / 独立 audit trail）+ `agentflow-agent-spi` 侧
+    拒绝未授权能力的工具 / 独立 audit trail）+ `yanshi-agent-spi` 侧
     7 个单测（builder 设置全部字段 / 默认不收窄不校验 / narrow_registry
     委托正确 / 无 schema 时不校验 / 通过校验 / 非 JSON 回答拒绝 / 违反
-    schema 拒绝）+ `agentflow-agents` 侧 4 个单测（收窄到指定工具 / 不收窄
+    schema 拒绝）+ `yanshi-agents` 侧 4 个单测（收窄到指定工具 / 不收窄
     保留全部 / 校验通过的端到端跑通 / 校验失败的端到端跑通）。
   - **重要副产品**：在跑 L5 新增测试时发现 L4.4 引入的两个 citation 测试
-    设置了 `AGENTFLOW_MOCK_RESPONSES` 却从未清理，导致该环境变量泄漏进
-    进程内下一个持有 `LLM_TEST_LOCK` 的测试——`AGENTFLOW_MOCK_RESPONSES`
-    优先于 `AGENTFLOW_MOCK_RESPONSE`，一旦泄漏会静默劫持之后所有用单条
+    设置了 `YANSHI_MOCK_RESPONSES` 却从未清理，导致该环境变量泄漏进
+    进程内下一个持有 `LLM_TEST_LOCK` 的测试——`YANSHI_MOCK_RESPONSES`
+    优先于 `YANSHI_MOCK_RESPONSE`，一旦泄漏会静默劫持之后所有用单条
     mock 响应的测试，直到进程退出。表现为 `dynamic::tests::
     llm_plans_then_engine_executes_in_parallel` 确定性失败（不是偶发
     race——单线程跑也复现），根因是测试卫生问题不是并发问题。已用
-    `agentflow-agents` 里既有的 `EnvVarGuard` drop-guard 模式修复（独立
-    commit，`fix(agents): plug AGENTFLOW_MOCK_RESPONSES leak in L4.4
+    `yanshi-agents` 里既有的 `EnvVarGuard` drop-guard 模式修复（独立
+    commit，`fix(agents): plug YANSHI_MOCK_RESPONSES leak in L4.4
     citation tests`），并给本次新增的所有 mock-LLM 测试也套上了同样的
     guard，避免重犯。连续 4 次跑（3 次默认并行 + 1 次
     `--test-threads=1`）确认稳定，229/229 全绿。
-  - `agentflow-tools`/`agentflow-agent-spi`/`agentflow-agents` 全绿；
+  - `yanshi-tools`/`yanshi-agent-spi`/`yanshi-agents` 全绿；
     fmt/clippy(-D)/check-arch/cargo doc 全绿；workspace 全量 build 确认
-    未受影响。分 3 个 commit：`agentflow-tools` narrowed 原语、
-    `agentflow-agent-spi` DelegationSpec 契约、`agentflow-agents` 应用层。
+    未受影响。分 3 个 commit：`yanshi-tools` narrowed 原语、
+    `yanshi-agent-spi` DelegationSpec 契约、`yanshi-agents` 应用层。
 - DONE L5.2 结果聚合与冲突仲裁
   - 精读 TODO 原文后的关键设计决定：仲裁模型不是"自动选一个赢家"，是
     "识别冲突后显式标记交主 agent 复核"（"交主 agent 复核"=hand to main
@@ -1613,7 +1613,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     字面要求，因此整个聚合原语保持确定性、零 LLM 依赖，延续本次 L4.2/
     L4.3 "库能力优先，具体 LLM 判定逻辑留给已有 LLM 依赖的调用方"的
     一贯设计语言（虽然这里其实不需要 LLM 依赖，纯确定性算法就够）。
-  - `agentflow-agent-spi::aggregation`：`SubagentAnswer`（agent_name +
+  - `yanshi-agent-spi::aggregation`：`SubagentAnswer`（agent_name +
     answer + `SchemaValidation`）+ `aggregate_answers`——去重 key 依赖
     L5.1 的 schema 校验结果：通过 schema 校验的回答按解析后的 JSON
     `Value` 结构相等去重（`{"a":1,"b":2}` 与 `{"b":2,"a":1}` 视为同一个
@@ -1626,7 +1626,7 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     是纯函数，不碰 `AgentStep`/`AgentEvent`——是否写入 trace、写成什么
     形状，留给调用方决定（与 `DelegationSpec` 本身不带
     `ToolRegistry`/`ReActAgent` 引用的克制风格一致）。
-  - `agentflow-agents::delegation` 加 `subagent_answer_from_outcome`
+  - `yanshi-agents::delegation` 加 `subagent_answer_from_outcome`
     桥接函数：把 `DelegationOutcome`（L5.1 产出）转成 `aggregate_answers`
     吃的 `SubagentAnswer`，回答缺失（run 没走到 FinalAnswer）时返回
     `None` 而不是构造一个假答案。
@@ -1636,15 +1636,15 @@ S3.1–S3.4 全 DONE，2026-07-25～2026-07-27，借助 Apple `container` CLI �
     冲突被正确识别、少数派 agent 被 `flagged_for_review()` 点名、
     `render_summary()` 包含"Conflict"字样——这是 L5.1→L5.2 依赖关系
     （"依赖 L5.1 的输出 schema 约定"）第一次被端到端验证，不只是分别
-    测试两层。`agentflow-agent-spi::aggregation` 模块自身 11 个单测覆盖
+    测试两层。`yanshi-agent-spi::aggregation` 模块自身 11 个单测覆盖
     空输入 / 文本去重（含空白规整）/ 文本冲突识别与标记 / JSON 结构去重
     忽略字段顺序 / JSON 值不同判冲突 / schema 校验失败时退回文本比较
     （即使碰巧是合法 JSON 也不放心结构化解析）/ 并列时先出现者排前 /
     两种 render_summary 分支（一致 / 冲突）/ 空输入的 render_summary。
-  - `agentflow-agent-spi` 57 测、`agentflow-agents` 230 测全绿（连续 3 次
+  - `yanshi-agent-spi` 57 测、`yanshi-agents` 230 测全绿（连续 3 次
     跑无 flake）；fmt/clippy(-D)/check-arch/cargo doc 全绿；workspace
-    全量 build 确认未受影响。分 2 个 commit：`agentflow-agent-spi`
-    aggregation 核心、`agentflow-agents` 桥接 + 端到端测试。
+    全量 build 确认未受影响。分 2 个 commit：`yanshi-agent-spi`
+    aggregation 核心、`yanshi-agents` 桥接 + 端到端测试。
   - **范围裁剪**：没有把 `AggregationReport` 接进任何一个 supervisor 的
     trace 记录（如 `DebateSupervisor` 的 `AgentStepKind::DebateVerdict`），
     理由与 L5.1 相同——先交付经过测试的核心原语，具体 supervisor 接线是
@@ -1746,5 +1746,5 @@ cargo test --workspace
   包过的 registry 即自动获得审批/sandbox 治理（经现有 `HookedTool` 组合，**不需先做 P-A2.2**）。
   cli 同时依赖 agents（DynamicWorkflowAgent）+ harness（wrap_registry），是治理化 dynamic
   workflow 的天然落点。
-- 建议：fresh session 做；`agentflow workflow dynamic --goal ... [--model M]`，默认用
+- 建议：fresh session 做；`yanshi workflow dynamic --goal ... [--model M]`，默认用
   harness-wrapped 内置工具表（shell 默认禁用）。

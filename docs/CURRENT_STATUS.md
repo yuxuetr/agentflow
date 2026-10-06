@@ -5,14 +5,14 @@ V4.4-FU1 follow-up — the 2026-08-05 production-readiness remediation
 that was active as of the 2026-08-08 update — are now DONE; see
 `TODOs.md`)
 
-This is the current authoritative status entrypoint for AgentFlow. Historical
+This is the current authoritative status entrypoint for Yanshi. Historical
 evaluations, roadmap notes, and TODO queues may explain how the project arrived
 here, but this document is the shortest maintained summary of what exists now
 and what remains active.
 
 ## Summary
 
-AgentFlow is a Rust workspace for deterministic DAG workflows, agent-native
+Yanshi is a Rust workspace for deterministic DAG workflows, agent-native
 runtime loops, Skills, MCP tools, RAG, memory, tracing, plugins, distributed
 worker foundations, and a Web UI run console.
 
@@ -21,36 +21,36 @@ The current architecture is organized into five layers, with a narrow-waist
 shared contracts (enforced by `cargo xtask check-arch`; see
 `docs/RFC_CRATE_ARCHITECTURE.md` and `docs/ARCHITECTURE.md`):
 
-- L0 contract kernel: `agentflow-value` (`FlowValue`), `agentflow-graph`
-  (the `Flow` IR), `agentflow-store-spi`, `agentflow-agent-spi`,
-  `agentflow-async-util` (+ `agentflow-tools` as the `Tool` contract).
-- L1 execution core (the executor): `agentflow-core` runs the L0 `Flow` IR via
+- L0 contract kernel: `yanshi-value` (`FlowValue`), `yanshi-graph`
+  (the `Flow` IR), `yanshi-store-spi`, `yanshi-agent-spi`,
+  `yanshi-async-util` (+ `yanshi-tools` as the `Tool` contract).
+- L1 execution core (the executor): `yanshi-core` runs the L0 `Flow` IR via
   the `FlowExt` trait (`flow.run()`).
-- L2 capability adapters: `agentflow-nodes` (tool-tier), `agentflow-nodes-ai`
-  (capability-backed node adapters, split out of `agentflow-nodes` by the
-  P-A4.0 nodes decomposition), `agentflow-llm`, `agentflow-tools`,
-  `agentflow-mcp`, `agentflow-rag`, `agentflow-memory`.
-- L3 agent and orchestration: `agentflow-agents`, `agentflow-skills`,
-  `agentflow-harness`, `agentflow-config` (shared config-first workflow assembly
-  + diagnostics, consumed by both the CLI and server), `agentflow-cli`.
-- L4 operations and productization: `agentflow-tracing`,
-  `agentflow-server`, `agentflow-db`, `agentflow-worker`, `agentflow-ui`.
+- L2 capability adapters: `yanshi-nodes` (tool-tier), `yanshi-nodes-ai`
+  (capability-backed node adapters, split out of `yanshi-nodes` by the
+  P-A4.0 nodes decomposition), `yanshi-llm`, `yanshi-tools`,
+  `yanshi-mcp`, `yanshi-rag`, `yanshi-memory`.
+- L3 agent and orchestration: `yanshi-agents`, `yanshi-skills`,
+  `yanshi-harness`, `yanshi-config` (shared config-first workflow assembly
+  + diagnostics, consumed by both the CLI and server), `yanshi-cli`.
+- L4 operations and productization: `yanshi-tracing`,
+  `yanshi-server`, `yanshi-db`, `yanshi-worker`, `yanshi-ui`.
 
 ## Implemented Surfaces
 
-- DAG workflow execution through `agentflow-core::Flow` (run via the `FlowExt` trait).
-- Config-first workflow validation and execution through `agentflow-cli`.
+- DAG workflow execution through `yanshi-core::Flow` (run via the `FlowExt` trait).
+- Config-first workflow validation and execution through `yanshi-cli`.
 - Agent-native runtimes through `AgentRuntime`, ReAct, Plan-Execute,
   reflection, memory, and supervisor patterns.
-- Dynamic workflow: `agentflow_agents::dynamic::compile_plan_to_flow` compiles a
+- Dynamic workflow: `yanshi_agents::dynamic::compile_plan_to_flow` compiles a
   declarative `WorkflowPlan` into a parallel `Flow` of tool calls, and
   `DynamicWorkflowAgent` makes the LLM planning call then compiles + executes.
-  Exposed on the CLI as `agentflow workflow dynamic --goal ... --model ...`, where
+  Exposed on the CLI as `yanshi workflow dynamic --goal ... --model ...`, where
   the LLM-authored plan runs against a restrictive built-in tool sandbox
   (`--allow-path` / `--allow-domain` grant access; shell is never registered),
   `--dry-run` prints the plan without executing, and `--approve` routes every tool
   call through the Harness approval pipeline.
-- Harness governance shell (`agentflow-harness`): hooks, interactive approval,
+- Harness governance shell (`yanshi-harness`): hooks, interactive approval,
   sandbox, audit, run limits, background tasks, and the `HarnessEvent` envelope.
 - Skills through `SKILL.md` and `skill.toml`, including tiered
   `[[knowledge]]` retrieval (inline `files` tier or indexed `rag` tier)
@@ -83,7 +83,7 @@ shared contracts (enforced by `cargo xtask check-arch`; see
   2026-07-2x): replan-loop closure for stalled/failed plan steps, task-summary
   recovery so a resumed session doesn't re-derive prior progress from scratch,
   project-level memory persisted across sessions, RAG retrieval
-  strengthening, and a delegation contract (`agentflow-agent-spi::delegation`
+  strengthening, and a delegation contract (`yanshi-agent-spi::delegation`
   + `aggregation`) for sub-agent hand-off with schema-validated answers and
   conflict-flagged result aggregation.
 
@@ -94,7 +94,7 @@ The full per-provider capability matrix, `ProviderRequest` contract,
 context windows, and rate-limit handling all live in
 [`LLM_PROVIDERS_MATRIX.md`](LLM_PROVIDERS_MATRIX.md). That document is
 the single source of truth for what each provider supports; entries
-are verified by `agentflow-llm/tests/provider_consistency.rs` (offline)
+are verified by `yanshi-llm/tests/provider_consistency.rs` (offline)
 and `provider_consistency_live.rs` (opt-in live).
 
 ## Stability
@@ -133,14 +133,14 @@ orchestration / L4 platform), cross-checked by the orchestrator running
   `HttpTool`, per-tenant run admission control, supply-chain tightening
   (Ed25519 marketplace/plugin signatures, bounded MCP stdio reads), and an
   `expr` parser recursion-depth limit.
-- **V4** — `AGENTS.md` regenerated from current sources, `agentflow-cli`'s
+- **V4** — `AGENTS.md` regenerated from current sources, `yanshi-cli`'s
   2700-line `main.rs` split into per-domain `commands/*/cli.rs` modules,
   `cargo-audit` wired into CI (11 of 13 pre-existing CVEs resolved via
   targeted dependency bumps), and completeness follow-ups: an
   `input_mapping` whitespace-parsing bug, a Gemini `base_url` bug, DB-free
-  `~/.agentflow/runs` retention, and (as a follow-up once the rest of V4
+  `~/.yanshi/runs` retention, and (as a follow-up once the rest of V4
   closed) `chunk_strategy = "semantic"` now reachable from a skill's
-  `[[knowledge]]` manifest entries, backed by `agentflow-rag`'s
+  `[[knowledge]]` manifest entries, backed by `yanshi-rag`'s
   embedding-based `SemanticChunker`.
 
 The ongoing documentation-convergence convention:

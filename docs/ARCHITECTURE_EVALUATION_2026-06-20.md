@@ -1,4 +1,4 @@
-# AgentFlow Architecture-Lens Evaluation — 2026-06-20
+# Yanshi Architecture-Lens Evaluation — 2026-06-20
 
 - Status: **Complete** — validates and refines `docs/RFC_CRATE_ARCHITECTURE.md`.
 - Scope: all 16 workspace crates (15 Rust + 1 TS SPA), **architecture / dependency
@@ -9,7 +9,7 @@
   and is the RFC's contract-kernel crate division the right way to get there?*
 - Method: ground-truth internal dependency graph parsed from every
   `Cargo.toml` `[dependencies]` (dev-deps excluded — test-only, don't shape the
-  shipped graph), then **per-edge symbol analysis** (`grep "use agentflow_X::"`)
+  shipped graph), then **per-edge symbol analysis** (`grep "use yanshi_X::"`)
   to learn *why* each edge exists, not just *that* it exists. No guesswork.
 
 ## TL;DR
@@ -22,14 +22,14 @@ fused with the executor**. The narrow-waist contract kernel fixes both. Two
 findings strengthen the case and one exposes a genuine gap the RFC under-specifies:
 
 - **Confirming (de-risks the plan):** `agents → core` imports **only IR symbols**
-  (`AsyncNode` / `Flow` / `FlowValue` / `AsyncNodeInputs` / `AgentFlowError`) and
+  (`AsyncNode` / `Flow` / `FlowValue` / `AsyncNodeInputs` / `YanshiError`) and
   **zero executor symbols** — so splitting `graph` out of `core` (P-A1.3) fully
   resolves the `agents→core` violation with *no residual coupling*. `core` itself
   depends on **nothing internal** — the executor never reaches up. The cleanest
   possible starting point.
 - **Strengthening:** `llm` already has **no internal deps** (the `llm→core` edge
   the RFC still implies was removed in Q3.6.1). The RFC text should drop it.
-- **Gap:** `agentflow-nodes` is a **fat straddler** — a tool-tier `AsyncNode`
+- **Gap:** `yanshi-nodes` is a **fat straddler** — a tool-tier `AsyncNode`
   library that also *consumes capabilities* (`llm`, `rag`) and a runtime (`core`).
   The RFC files `nodes` under "Tools" but its real dependency-set doesn't fit any
   single tier. This needs an explicit decomposition decision (R3).
@@ -48,40 +48,40 @@ evaluation; see `docs/ARCHITECTURE_DIAGRAM.md` and `cargo xtask check-arch`'s
 own output for the current dependency-law count and latent-edge list.
 
 **Update (U2.1, 2026-07-30):** edge #6's `harness → memory` half (row 6 of
-§2's table) is **paid down** — `agentflow-harness`'s production code only
+§2's table) is **paid down** — `yanshi-harness`'s production code only
 ever touched `MemoryStore`/`Message` (both plain `store-spi` re-exports, not
-`agentflow-memory`-specific impls), so `[dependencies]` now points at
-`agentflow-store-spi` directly; `agentflow-memory` moved to
+`yanshi-memory`-specific impls), so `[dependencies]` now points at
+`yanshi-store-spi` directly; `yanshi-memory` moved to
 `[dev-dependencies]` for `SessionMemory`, used only by this crate's own
 tests. `ARCH_LATENT_EDGES` in `xtask/src/main.rs` no longer tracks it.
 Edge #5's `agents → memory` half stays **real, not paid down** — re-auditing
 turned up a materially different reason than this table's "inject via
-`agent-spi`/`store-spi` at surfaces" framing assumed: `agentflow-agents`'s
+`agent-spi`/`store-spi` at surfaces" framing assumed: `yanshi-agents`'s
 `ReActAgent` production code (`react/agent.rs`) depends on
 `ProjectMemoryStore`/`ProjectFact` (project-memory feature, landed after
 this evaluation's 2026-06-20 baseline), and neither has a `store-spi`
 contract today — unlike `MemoryStore`/`TaskSummaryStore`/`Message`, which
 already do. Closing this edge for real requires first extracting a
 `ProjectMemoryStore`/`ProjectFact` contract into `store-spi` (the same
-`Tool`/`agentflow-tool` split shape T3.3 already used for the tool
+`Tool`/`yanshi-tool` split shape T3.3 already used for the tool
 contract) — a separate, larger follow-up, not "inject the existing
 contract at the surface." Tracked as a new backlog item rather than left
 as a stale "inject via store-spi" resolution note.
 
 **Update (U3.3, 2026-07-31):** T3.3 (commit `b06ce03`, 2026-07-30 — one
 day *after* this evaluation's ground-truth pass) split the `Tool`
-contract out of `agentflow-tools` into a new, dependency-free
-`agentflow-tool` L0 kernel crate (`docs/RFC_TOOL_CONTRACT_SPLIT.md`).
-§1's table below still lists `agentflow-tools` as "Tool contract +
+contract out of `yanshi-tools` into a new, dependency-free
+`yanshi-tool` L0 kernel crate (`docs/RFC_TOOL_CONTRACT_SPLIT.md`).
+§1's table below still lists `yanshi-tools` as "Tool contract +
 builtins" and §2's violation map still lists `agents/harness → tools`
 as the latent edge — both accurate **as of the 2026-06-20 snapshot**,
 which predates the split by five weeks, so the table rows are left
 as-is per this doc's own snapshot-preservation convention (see the
-T2.4 update above). Post-split, the accurate framing is: `agentflow-tool`
+T2.4 update above). Post-split, the accurate framing is: `yanshi-tool`
 (L0, zero internal deps) carries the actual `Tool` contract;
-`agentflow-agents`/`agentflow-harness` depend on `agentflow-tool`
-directly, not on `agentflow-tools`; `agentflow-tools` (L2) depends on
-and fully re-exports `agentflow-tool`, adding the builtin tool impls +
+`yanshi-agents`/`yanshi-harness` depend on `yanshi-tool`
+directly, not on `yanshi-tools`; `yanshi-tools` (L2) depends on
+and fully re-exports `yanshi-tool`, adding the builtin tool impls +
 OS-sandbox backends. `cargo xtask check-arch`'s live edge list and
 `docs/ARCHITECTURE_DIAGRAM.md` (updated alongside this note) are the
 sources of truth for the current graph; this file stays a historical
@@ -90,25 +90,25 @@ point-in-time evaluation.
 **Update (U2.5, 2026-07-31):** the U2.1 update above tracked
 `ProjectMemoryStore`/`ProjectFact` as the extraction needed to close
 edge #5's `agents → memory` half. That extraction is now **done** —
-mirroring the `TaskSummaryStore` split already in `agentflow-store-spi`,
+mirroring the `TaskSummaryStore` split already in `yanshi-store-spi`,
 `ProjectMemoryStore` (trait) + `ProjectFact` (struct) +
-`project_key_for_path` moved to `agentflow-store-spi::project`;
-`agentflow-memory::project` keeps `InMemoryProjectMemoryStore`/
+`project_key_for_path` moved to `yanshi-store-spi::project`;
+`yanshi-memory::project` keeps `InMemoryProjectMemoryStore`/
 `SqliteProjectMemoryStore` and re-exports the contract types under
-their original `agentflow_memory::{ProjectFact, ProjectMemoryStore,
+their original `yanshi_memory::{ProjectFact, ProjectMemoryStore,
 project_key_for_path}` paths, so no call site needed to change. The
 edge itself, however, **still doesn't close**: re-auditing at the time
-of this extraction found `agentflow-agents`'s `ReActAgent` also carries
-a *second*, independent concrete-type dependency on `agentflow-memory`
-— `Option<Arc<tokio::sync::Mutex<agentflow_memory::SqlitePreferenceStore>>>`
-+ `agentflow_memory::PreferenceScope` (production fields, added by U2.2
+of this extraction found `yanshi-agents`'s `ReActAgent` also carries
+a *second*, independent concrete-type dependency on `yanshi-memory`
+— `Option<Arc<tokio::sync::Mutex<yanshi_memory::SqlitePreferenceStore>>>`
++ `yanshi_memory::PreferenceScope` (production fields, added by U2.2
 *after* this evaluation's baseline and *after* U2.1's re-audit). Unlike
 `ProjectMemoryStore`, `PreferenceStore`'s write methods are `&mut self`
 (U2.2's own scope decision explicitly left it off `store-spi`, since
 that shape doesn't fit this crate's `Arc<dyn Trait>` contracts without
 first redesigning it to `&self` + interior locking). So flipping
-`agentflow-agents/Cargo.toml`'s `[dependencies]` from `agentflow-memory`
-to `agentflow-store-spi` now requires *that* redesign+extraction, not
+`yanshi-agents/Cargo.toml`'s `[dependencies]` from `yanshi-memory`
+to `yanshi-store-spi` now requires *that* redesign+extraction, not
 the `ProjectMemoryStore` one — tracked as a new, still-open backlog
 item rather than closing this edge prematurely. `ARCH_LATENT_EDGES` in
 `xtask/src/main.rs` documents this in full at the `agents → memory` row.
@@ -120,13 +120,13 @@ writes only ever touch `&self.pool` (`sqlx::SqlitePool` is internally
 `Arc`-backed and already safe to share), and `AgeEncryptedPreferenceStore`
 just encrypts/forwards to its inner store. `PreferenceStore` (trait) +
 `PreferenceScope`/`PreferenceValue` moved to
-`agentflow-store-spi::preference` with `&self` write methods, matching
+`yanshi-store-spi::preference` with `&self` write methods, matching
 `ProjectMemoryStore`/`TaskSummaryStore` exactly; `ReActAgent`'s
 `preference_store` field and `RememberPreferenceTool` both dropped their
 `Mutex` wrapper for a bare `Arc<dyn PreferenceStore>`. Despite closing
 *both* of U2.1/U2.5's tracked reasons, edge #5's `agents → memory` half
 **still doesn't close**: this pass's re-audit surfaced a *third*,
-different reason — `agentflow-agents/src/dynamic.rs`'s
+different reason — `yanshi-agents/src/dynamic.rs`'s
 `DynamicWorkflowAgent` constructs a concrete
 `Box::new(SessionMemory::default_window())` as the default memory
 backend for LLM-authored `agent` plan steps. `SessionMemory` has no
@@ -136,7 +136,7 @@ for real needs `DynamicWorkflowAgent`'s default memory to become
 caller-injectable — a materially different, larger change than
 "extract one more contract." Confirmed with the requester and left
 un-opened as a new backlog item: this is now understood as an accepted,
-load-bearing use of a concrete `agentflow-memory` type, not a to-do.
+load-bearing use of a concrete `yanshi-memory` type, not a to-do.
 `ARCH_LATENT_EDGES` in `xtask/src/main.rs` carries the full account at
 the `agents → memory` row.
 
@@ -144,22 +144,22 @@ the `agents → memory` row.
 
 | Crate | RFC tier (claimed) | Internal deps (real) | Edge reason (imported symbols) |
 |---|---|---|---|
-| `agentflow-core` | Runtime (executor) **+ holds IR + `FlowValue`** | — | (depends on nothing internal) |
-| `agentflow-llm` | Capability | — | (no internal deps; `llm→core` removed Q3.6.1) |
-| `agentflow-tools` | Tool contract + builtins | — | (no internal deps) |
-| `agentflow-rag` | Capability + tool | — | (no internal deps) |
-| `agentflow-db` | Ops / persistence leaf | — | (no internal deps) |
-| `agentflow-tracing` | Ops | `core` | `events::{EventListener, WorkflowEvent}` |
-| `agentflow-mcp` | Tool | `tracing` | `context::{current_traceparent, scope}` — **traceparent ambient only** |
-| `agentflow-memory` | Capability | `rag` | `embeddings::EmbeddingProvider` — **SemanticMemory only** |
-| `agentflow-nodes` | Tool | `core, llm, mcp, rag, tools` | `core`=IR; `llm`=`AgentFlow/Asr/Tts/Image`; `rag`=retrieval nodes |
-| `agentflow-agents` | Runtime (loop) | `core, llm, mcp, memory, tools` | `core`=**IR-only**; `llm`/`memory`/`tools`=concrete impls |
-| `agentflow-skills` | Capability | `agents, mcp, memory, rag, tools` | `agents`=**runtime** (builds runnable agent) |
-| `agentflow-harness` | Runtime (shell) | `agents, llm, memory, tools, tracing` | `llm`=**tokenizer only**; `tracing`=redaction/storage/types |
-| `agentflow-server` | Surface | `agents, cli, core, db, harness, llm, memory, skills, tools, tracing` | surface assembly (+ `cli` edge — allow-listed) |
-| `agentflow-worker` | Surface | `agents, core, llm, memory, nodes, server, tools` | surface (+ `server` edge — allow-listed) |
-| `agentflow-cli` | Surface | `agents, core, db, harness, llm, mcp, memory, nodes, rag, server, skills, tools, tracing` | top assembly (imports the world — allowed) |
-| `agentflow-ui` | Surface (SPA) | — (HTTP client of `/v1/*`) | n/a |
+| `yanshi-core` | Runtime (executor) **+ holds IR + `FlowValue`** | — | (depends on nothing internal) |
+| `yanshi-llm` | Capability | — | (no internal deps; `llm→core` removed Q3.6.1) |
+| `yanshi-tools` | Tool contract + builtins | — | (no internal deps) |
+| `yanshi-rag` | Capability + tool | — | (no internal deps) |
+| `yanshi-db` | Ops / persistence leaf | — | (no internal deps) |
+| `yanshi-tracing` | Ops | `core` | `events::{EventListener, WorkflowEvent}` |
+| `yanshi-mcp` | Tool | `tracing` | `context::{current_traceparent, scope}` — **traceparent ambient only** |
+| `yanshi-memory` | Capability | `rag` | `embeddings::EmbeddingProvider` — **SemanticMemory only** |
+| `yanshi-nodes` | Tool | `core, llm, mcp, rag, tools` | `core`=IR; `llm`=`Yanshi/Asr/Tts/Image`; `rag`=retrieval nodes |
+| `yanshi-agents` | Runtime (loop) | `core, llm, mcp, memory, tools` | `core`=**IR-only**; `llm`/`memory`/`tools`=concrete impls |
+| `yanshi-skills` | Capability | `agents, mcp, memory, rag, tools` | `agents`=**runtime** (builds runnable agent) |
+| `yanshi-harness` | Runtime (shell) | `agents, llm, memory, tools, tracing` | `llm`=**tokenizer only**; `tracing`=redaction/storage/types |
+| `yanshi-server` | Surface | `agents, cli, core, db, harness, llm, memory, skills, tools, tracing` | surface assembly (+ `cli` edge — allow-listed) |
+| `yanshi-worker` | Surface | `agents, core, llm, memory, nodes, server, tools` | surface (+ `server` edge — allow-listed) |
+| `yanshi-cli` | Surface | `agents, core, db, harness, llm, mcp, memory, nodes, rag, server, skills, tools, tracing` | top assembly (imports the world — allowed) |
+| `yanshi-ui` | Surface (SPA) | — (HTTP client of `/v1/*`) | n/a |
 
 ## 2. The eight laws vs reality — full violation map
 
@@ -200,7 +200,7 @@ one waist — which is exactly what makes dynamic workflow "free."
 - **`llm`** — Clean leaf. No internal deps. Keep as a capability; its tokenizer
   sub-module is what `harness`/`agents` actually reach for (R6).
 - **`tools`** — Already the `Tool` contract + builtins fused. RFC §4 carves the
-  contract into `agentflow-tool` and moves builtins to `agentflow-tools-builtin`;
+  contract into `yanshi-tool` and moves builtins to `yanshi-tools-builtin`;
   low urgency (no bad inbound edges), do it when convenient.
 - **`rag`** — Clean leaf today. Repositions to a `KnowledgeBackend` capability
   (P-A4.1); keep the eval harness as the quality gate.
@@ -232,7 +232,7 @@ narrow-waist contract kernel; Capability-vs-Tool as the two load-bearing traits;
 IR ≠ executor; dyn-at-seams / generic-inside; `#[non_exhaustive]` contract enums.
 Refinements (deltas, not reversals):
 
-- **R1 — Promote `value`; do not defer it.** RFC §4 marks `agentflow-value`
+- **R1 — Promote `value`; do not defer it.** RFC §4 marks `yanshi-value`
   "defer (re-export)". But `graph` *depends on* `FlowValue`, and `FlowValue`
   (in `core/src/value.rs`) is imported by the widest set of crates. Extract
   `value` **first** in P-A1 as the cheapest, highest-leverage cut and a hard

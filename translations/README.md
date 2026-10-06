@@ -1,6 +1,6 @@
-# AgentFlow Documentation Translations
+# Yanshi Documentation Translations
 
-This directory contains translations of the AgentFlow documentation in multiple languages.
+This directory contains translations of the Yanshi documentation in multiple languages.
 
 ## Available Languages
 
@@ -50,4 +50,4 @@ If you need help with translations or find errors, please:
 
 ---
 
-Generated and maintained by the AgentFlow community. 🌍🦀
+Generated and maintained by the Yanshi community. 🌍🦀

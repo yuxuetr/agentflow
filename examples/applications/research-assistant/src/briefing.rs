@@ -85,7 +85,7 @@ pub async fn render_briefing(
   since: Option<DateTime<Utc>>,
 ) -> Result<String> {
   let prompt = build_prompt(category, since, papers);
-  let response = agentflow_llm::AgentFlow::model(model)
+  let response = yanshi_llm::Yanshi::model(model)
     .prompt(&prompt)
     .execute()
     .await

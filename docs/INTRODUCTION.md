@@ -1,12 +1,12 @@
-# AgentFlow Manual
+# Yanshi Manual
 
-AgentFlow is a modular Rust framework for two complementary execution styles
+Yanshi is a modular Rust framework for two complementary execution styles
 that share one runtime foundation:
 
 - **Deterministic DAG workflows** — a `Flow` of nodes with explicit inputs and
   outputs, dependency-ready concurrent scheduling, conditional execution,
   map/while loops, retry, timeout, and checkpointed recovery. Usually written
-  as YAML and run with `agentflow workflow run`.
+  as YAML and run with `yanshi workflow run`.
 - **Agent-native loops** — `ReActAgent`, Plan-Execute, and multi-agent
   supervisors that plan, call tools, reflect, and keep memory, with structured
   step/event traces and hard runtime limits.
@@ -29,7 +29,7 @@ gateway with a Web UI.
 | [Models, Multimodal and RAG](LLM_PROVIDERS_MATRIX.md) | pick a provider/model and use image, audio, or retrieval |
 | [Observability](TRACING_USAGE.md) | capture, replay, and inspect traces |
 | [Operations](DEPLOYMENT.md) | deploy the gateway, workers, and database |
-| [Extending AgentFlow](AGENT_SDK.md) | write custom runtimes, nodes, or strategies |
+| [Extending Yanshi](AGENT_SDK.md) | write custom runtimes, nodes, or strategies |
 | [Reference](STABILITY.md) | check stability tiers, compatibility, and release notes |
 | [Design and Internals](ARCHITECTURE.md) | understand the crate architecture and the RFCs behind it |
 

@@ -1,17 +1,17 @@
 # Skill / Tool / CLI Permission Merge
 
-This document specifies the **three-way capability merge** used by AgentFlow
+This document specifies the **three-way capability merge** used by Yanshi
 to decide which OS-mappable capabilities a tool invocation actually receives
 at runtime. The model complements the existing `ToolPermission` /
 `ToolPolicy` system documented in [TOOL_PERMISSIONS.md](TOOL_PERMISSIONS.md).
 
 ## Capabilities vs. Permissions
 
-[`ToolPermission`](../agentflow-tool/src/tool.rs) is a **declarative** label
+[`ToolPermission`](../yanshi-tool/src/tool.rs) is a **declarative** label
 attached to tool metadata. It is suitable for human inspection and prompt
 descriptions, but is too coarse-grained to drive OS-level enforcement.
 
-[`Capability`](../agentflow-tool/src/capability.rs) is the **runtime-facing**
+[`Capability`](../yanshi-tool/src/capability.rs) is the **runtime-facing**
 primitive. Each variant is intended to map onto sandbox profiles
 (`sandbox-exec` rules on macOS, seccomp filters / mount namespaces on Linux):
 
@@ -121,7 +121,7 @@ Operators can preview a skill's effective capability surface without running
 it:
 
 ```bash
-agentflow skill inspect path/to/skill --explain-permissions
+yanshi skill inspect path/to/skill --explain-permissions
 ```
 
 For each declared tool the command prints the required capabilities, the

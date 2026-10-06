@@ -22,7 +22,7 @@ briefing with Highlights / per-paper blocks / Clusters.
                                               │
                                               ▼
                                       ┌─────────────────────────────────────────┐
-                                      │ ~/.agentflow/state/research-assistant.db│
+                                      │ ~/.yanshi/state/research-assistant.db│
                                       │  EntityFact rows:                       │
                                       │   entity_id = "arxiv:<category>"        │
                                       │   fact_id   = arxiv paper id            │
@@ -49,14 +49,14 @@ Per the [L1+L3 R2 reflection rule](../../../docs/L1_L3_REFLECTION_R2_2026-05-18.
 Both axes point at L1. Wraps one HTTP fetch + one SQLite read/write
 + one LLM call.
 
-## What this validates in AgentFlow
+## What this validates in Yanshi
 
-- `agentflow-memory::SqliteEntityFactStore` end-to-end (open, query,
+- `yanshi-memory::SqliteEntityFactStore` end-to-end (open, query,
   insert, persist across runs) for a real "track-by-id" use case
-- `agentflow_llm::AgentFlow::model(...).prompt(...).execute()`
+- `yanshi_llm::Yanshi::model(...).prompt(...).execute()`
   one-shot LLM pattern (also used by A7) on `moonshot-v1-128k`
-- Cross-workspace path deps to `agentflow-memory` (in addition to
-  `agentflow-core` + `agentflow-llm` already used by A1/A7)
+- Cross-workspace path deps to `yanshi-memory` (in addition to
+  `yanshi-core` + `yanshi-llm` already used by A1/A7)
 - 3-node DAG with a shared in-memory bus pattern for handing off
   non-JSON data (avoids serialization roundtrip cost when nodes are
   same-process and the payload is structured Rust types)
@@ -66,8 +66,8 @@ Both axes point at L1. Wraps one HTTP fetch + one SQLite read/write
 | Dep | How to satisfy |
 | --- | --- |
 | Arxiv search API | Public, no auth, free (no key needed) |
-| LLM API key | Default model `moonshot-v1-128k`; needs `MOONSHOT_API_KEY`. Auto-loaded from `~/.agentflow/.env` (P9.3). |
-| SQLite | Bundled with `agentflow-memory` deps |
+| LLM API key | Default model `moonshot-v1-128k`; needs `MOONSHOT_API_KEY`. Auto-loaded from `~/.yanshi/.env` (P9.3). |
+| SQLite | Bundled with `yanshi-memory` deps |
 
 ## Files
 
@@ -86,7 +86,7 @@ research-assistant/
 
 ```bash
 cd examples/applications/research-assistant
-# MOONSHOT_API_KEY auto-loaded from ~/.agentflow/.env
+# MOONSHOT_API_KEY auto-loaded from ~/.yanshi/.env
 
 # First run — every paper is "new", LLM summarizes all:
 cargo run --release -- \
@@ -95,7 +95,7 @@ cargo run --release -- \
   --output /tmp/arxiv-cs-AI.md
 
 # Subsequent runs — only NEW papers since last run get summarized.
-# State persists in ~/.agentflow/state/research-assistant.db
+# State persists in ~/.yanshi/state/research-assistant.db
 cargo run --release -- --category cs.AI
 
 # Override state file (useful for testing or per-user separation):
@@ -112,8 +112,8 @@ CLI flags:
 | `--category <cat>` | (required) | e.g. `cs.AI`, `cs.CL`, `math.ST`, `stat.ML` |
 | `--max-results <N>` | 30 | Arxiv API max is 2000; > 30 is rarely useful for daily briefings |
 | `--output <path>` | `/tmp/arxiv-briefing.md` | Markdown briefing file |
-| `--state <path>` | `~/.agentflow/state/research-assistant.db` | Dedup SQLite (created on first run) |
-| `--model <name>` | `moonshot-v1-128k` | Any agentflow-llm provider model |
+| `--state <path>` | `~/.yanshi/state/research-assistant.db` | Dedup SQLite (created on first run) |
+| `--model <name>` | `moonshot-v1-128k` | Any yanshi-llm provider model |
 
 ## First-run observations (2026-05-18, cs.AI, 5 papers)
 
@@ -130,7 +130,7 @@ CLI flags:
   text rather than substituting cleanly. Cosmetic; could tighten
   the prompt to say "link as bare URL".
 - **EntityFact storage**: 5 facts written to
-  `~/.agentflow/state/research-assistant.db`, per-paper denormalized
+  `~/.yanshi/state/research-assistant.db`, per-paper denormalized
   snapshot (title + published + abs_url) so future tools can
   reference seen papers without re-fetching arxiv.
 - **No regressions in tests**: 11 unit tests covering all 3 modules
@@ -143,11 +143,11 @@ Tracked as future iterations to keep first cut shippable:
 
 - **Cross-reference via RAG**: original A3 spec called for RAG
   indexing of paper abstracts so the briefing can call out "this
-  builds on paper X from last week". Adds `agentflow-rag` +
+  builds on paper X from last week". Adds `yanshi-rag` +
   embeddings (probably Qdrant or local ONNX). Iteration 2.
 - **Scheduled run**: original spec called for weekly cron-style
   scheduling. Current binary is one-shot; schedule via OS cron /
-  systemd timer / `agentflow harness /schedule`. Iteration 2 (or
+  systemd timer / `yanshi harness /schedule`. Iteration 2 (or
   just document the cron line in this README).
 - **Per-user preference store**: original spec mentioned
   `SqlitePreferenceStore` for "which topics am I subscribed to".

@@ -1,12 +1,12 @@
-# AgentFlow Examples Documentation
+# Yanshi Examples Documentation
 
-This directory contains comprehensive documentation for AgentFlow examples, demonstrating various patterns and use cases for building agent workflows.
+This directory contains comprehensive documentation for Yanshi examples, demonstrating various patterns and use cases for building agent workflows.
 
 ## Available Examples
 
 ### 📘 [Runnable Tutorials (中文)](./runnable_tutorials_zh.md)
 
-Copy-and-run tutorials for the current AgentFlow runtime paths:
+Copy-and-run tutorials for the current Yanshi runtime paths:
 
 - Fixed DAG workflow
 - Agent-native ReAct runtime
@@ -23,16 +23,16 @@ Copy-and-run CLI tutorial for the current V2 path:
 - Skill inspect/list-tools/test
 - Skill run with `--model`, `--memory`, and `--trace`
 - `skill_agent` workflow execution
-- RAG + Skill workflow dry-run with `agentflow-cli --features rag`
+- RAG + Skill workflow dry-run with `yanshi-cli --features rag`
 - marketplace install flow
 
 ### 🤖 [Simple Agent LLM Flow](./simple_agent_llm_flow.md)
 
 **File**: `examples/simple_agent_llm_flow.rs`
 
-A comprehensive demonstration of integrating LLM API calls within AgentFlow's async workflow system. This example showcases:
+A comprehensive demonstration of integrating LLM API calls within Yanshi's async workflow system. This example showcases:
 
-- **LLM Integration**: Using the moonshot demo pattern within AgentFlow nodes
+- **LLM Integration**: Using the moonshot demo pattern within Yanshi nodes
 - **Response Processing**: Automated analysis of AI responses (sentiment, complexity)
 - **Intelligent Routing**: Dynamic flow branching based on response characteristics
 - **State Management**: Proper shared state usage across nodes
@@ -86,11 +86,11 @@ mmdc -i simple_agent_llm_flow_diagram.mermaid -o flow_diagram.png
 
 ### 🌟 **AI Integration Examples**
 - `simple_agent_llm_flow.rs` - LLM-powered workflows with intelligent routing
-- `agentflow-core/examples/fixed_dag_workflow.rs` - deterministic fixed DAG workflow without an LLM
-- `agentflow-agents/examples/agent_native_react.rs` - mock agent-native ReAct loop with a local echo tool
-- `agentflow-skills/examples/skill_calls_mcp_tool.rs` - Skill loads a local MCP server and calls a discovered tool
-- `agentflow-agents/examples/hybrid_workflow_agent.rs` - DAG + Agent hybrid flow where an `AgentNode` calls a child workflow through `WorkflowTool`
-- `agentflow-cli/examples/workflows/rag_skill_assistant.yml` - config-first RAG search followed by a Skill-backed agent node; dry-run is CI-friendly, full execution requires Qdrant and embedding credentials
+- `yanshi-core/examples/fixed_dag_workflow.rs` - deterministic fixed DAG workflow without an LLM
+- `yanshi-agents/examples/agent_native_react.rs` - mock agent-native ReAct loop with a local echo tool
+- `yanshi-skills/examples/skill_calls_mcp_tool.rs` - Skill loads a local MCP server and calls a discovered tool
+- `yanshi-agents/examples/hybrid_workflow_agent.rs` - DAG + Agent hybrid flow where an `AgentNode` calls a child workflow through `WorkflowTool`
+- `yanshi-cli/examples/workflows/rag_skill_assistant.yml` - config-first RAG search followed by a Skill-backed agent node; dry-run is CI-friendly, full execution requires Qdrant and embedding credentials
 
 ### 🔧 **Core Functionality Examples** (from main examples/)
 - `hello_world.rs` - Basic AsyncNode functionality
@@ -219,4 +219,4 @@ For questions or issues with examples:
 
 ---
 
-*These examples demonstrate production-ready patterns for building sophisticated agent workflows with AgentFlow's async execution framework and LLM integration capabilities.*
+*These examples demonstrate production-ready patterns for building sophisticated agent workflows with Yanshi's async execution framework and LLM integration capabilities.*

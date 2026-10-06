@@ -1,29 +1,29 @@
 # 循环节点功能实现总结
 
 > Historical reference：本文档记录的是 Map/While 循环节点最初落地时的
-> 实现总结（早期版本快照）。Map/While 早已是 `agentflow-core` 的稳定
+> 实现总结（早期版本快照）。Map/While 早已是 `yanshi-core` 的稳定
 > 生产能力，细节以当前源码与 `CLAUDE.md` 为准；当前项目状态见
 > `docs/CURRENT_STATUS.md`。**文档内全部行号/文件路径引用均已失效**
-> （`factory` 早已迁移到 `agentflow-config::executor::factory`，
+> （`factory` 早已迁移到 `yanshi-config::executor::factory`，
 > `flow.rs` 已膨胀到 5000+ 行，`execute_while_node` 等函数的实际行号
 > 与本文档所写完全对不上）——把本文档当叙事/设计动机参考，不要依赖任何
 > 具体行号或路径去定位代码。
 
 ## 概述
 
-AgentFlow 现已完全支持两种循环节点类型：**Map 节点**（批量处理）和 **While 节点**（条件循环）。
+Yanshi 现已完全支持两种循环节点类型：**Map 节点**（批量处理）和 **While 节点**（条件循环）。
 
 ## 已完成的工作
 
 ### 1. 核心功能实现 ✅
 
-#### Map 节点 (agentflow-core/src/flow.rs:19, 99-223)
+#### Map 节点 (yanshi-core/src/flow.rs:19, 99-223)
 - **顺序处理**: `execute_map_node_sequential` - 逐个处理列表元素
 - **并行处理**: `execute_map_node_parallel` - 使用 tokio::spawn 并发处理
 - 支持嵌套子工作流
 - 自动传递 `{{ item }}` 变量给子工作流
 
-#### While 节点 (agentflow-core/src/flow.rs:20-24, 116-160)
+#### While 节点 (yanshi-core/src/flow.rs:20-24, 116-160)
 - 条件评估和循环控制
 - 最大迭代次数保护（防止无限循环）
 - 状态传递和更新机制
@@ -31,7 +31,7 @@ AgentFlow 现已完全支持两种循环节点类型：**Map 节点**（批量�
 
 ### 2. YAML 配置解析 ✅
 
-**文件**: `agentflow-cli/src/executor/factory.rs`
+**文件**: `yanshi-cli/src/executor/factory.rs`
 
 #### Map 节点解析 (第 95-101 行)
 ```yaml
@@ -67,13 +67,13 @@ AgentFlow 现已完全支持两种循环节点类型：**Map 节点**（批量�
 
 **问题**: 模板占位符 `{{ variable }}` （有空格）没有被正确替换
 
-**解决方案**: 修改 `agentflow-nodes/src/nodes/template.rs` (第 55-72 行)
+**解决方案**: 修改 `yanshi-nodes/src/nodes/template.rs` (第 55-72 行)
 - 现在同时支持 `{{ variable }}` 和 `{{variable}}` 两种格式
 - 先替换预定义变量，再替换输入变量（允许覆盖）
 
 ### 4. 示例工作流 ✅
 
-创建了 4 个示例文件在 `agentflow-cli/templates/`:
+创建了 4 个示例文件在 `yanshi-cli/templates/`:
 
 1. **map-example.yml** - Map 节点顺序处理示例
 2. **map-parallel-example.yml** - Map 节点并行处理示例
@@ -82,13 +82,13 @@ AgentFlow 现已完全支持两种循环节点类型：**Map 节点**（批量�
 
 ### 5. 测试覆盖 ✅
 
-#### 单元测试 (agentflow-core/src/flow.rs:345-573)
+#### 单元测试 (yanshi-core/src/flow.rs:345-573)
 - `test_map_node_sequential_execution` - Map 顺序处理
 - `test_map_node_parallel_execution` - Map 并行处理
 - `test_while_node_basic_loop` - While 基础循环
 - `test_while_node_condition_check` - While 条件检查
 
-#### 集成测试 (agentflow-cli/tests/workflow_tests.rs)
+#### 集成测试 (yanshi-cli/tests/workflow_tests.rs)
 - `test_parallel_map_workflow` - 并行 LLM 调用（第 144-198 行）
 - `test_stateful_while_loop_workflow` - 有状态 While 循环（第 201-261 行）
 
@@ -103,7 +103,7 @@ test flow::tests::test_map_node_parallel_execution ... ok
 
 ### 6. 文档 ✅
 
-**完整使用指南**: `agentflow-cli/templates/LOOP_NODES_GUIDE.md`
+**完整使用指南**: `yanshi-cli/templates/LOOP_NODES_GUIDE.md`
 - Map 节点详细说明和示例
 - While 节点详细说明和示例
 - 嵌套循环示例
@@ -116,25 +116,25 @@ test flow::tests::test_map_node_parallel_execution ... ok
 
 ```bash
 # Map 节点示例
-cargo run --release -- workflow run agentflow-cli/templates/map-example.yml
+cargo run --release -- workflow run yanshi-cli/templates/map-example.yml
 
 # While 节点示例
-cargo run --release -- workflow run agentflow-cli/templates/while-example.yml
+cargo run --release -- workflow run yanshi-cli/templates/while-example.yml
 
 # 高级 While 示例（需要 STEPFUN_API_KEY）
 export STEPFUN_API_KEY=your_key_here
-cargo run --release -- workflow run agentflow-cli/templates/while-advanced-example.yml
+cargo run --release -- workflow run yanshi-cli/templates/while-advanced-example.yml
 ```
 
 ### 运行测试
 
 ```bash
 # 核心流程测试
-cargo test --package agentflow-core --lib flow::tests
+cargo test --package yanshi-core --lib flow::tests
 
 # 集成测试（需要 STEPFUN_API_KEY）
 export STEPFUN_API_KEY=your_key_here
-cargo test --package agentflow-cli workflow_tests
+cargo test --package yanshi-cli workflow_tests
 ```
 
 ## 技术细节
@@ -189,25 +189,25 @@ cargo test --package agentflow-cli workflow_tests
 ## 相关文件清单
 
 ### 核心实现
-- `agentflow-core/src/flow.rs` - Flow 执行引擎和循环节点实现
+- `yanshi-core/src/flow.rs` - Flow 执行引擎和循环节点实现
 
 ### CLI 和配置
-- `agentflow-cli/src/executor/factory.rs` - YAML 解析和节点创建
-- `agentflow-cli/src/config/v2.rs` - 工作流配置结构定义
+- `yanshi-cli/src/executor/factory.rs` - YAML 解析和节点创建
+- `yanshi-cli/src/config/v2.rs` - 工作流配置结构定义
 
 ### 节点实现
-- `agentflow-nodes/src/nodes/template.rs` - 模板节点（修复了空格支持）
+- `yanshi-nodes/src/nodes/template.rs` - 模板节点（修复了空格支持）
 
 ### 测试
-- `agentflow-core/src/flow.rs` - 单元测试（第 345-573 行）
-- `agentflow-cli/tests/workflow_tests.rs` - 集成测试
+- `yanshi-core/src/flow.rs` - 单元测试（第 345-573 行）
+- `yanshi-cli/tests/workflow_tests.rs` - 集成测试
 
 ### 示例和文档
-- `agentflow-cli/templates/map-example.yml`
-- `agentflow-cli/templates/map-parallel-example.yml`
-- `agentflow-cli/templates/while-example.yml`
-- `agentflow-cli/templates/while-advanced-example.yml`
-- `agentflow-cli/templates/LOOP_NODES_GUIDE.md`
+- `yanshi-cli/templates/map-example.yml`
+- `yanshi-cli/templates/map-parallel-example.yml`
+- `yanshi-cli/templates/while-example.yml`
+- `yanshi-cli/templates/while-advanced-example.yml`
+- `yanshi-cli/templates/LOOP_NODES_GUIDE.md`
 
 ## 总结
 

@@ -1,18 +1,18 @@
 //! `PodcastNode` — custom `AsyncNode` wrapping the phonon-podcast pipeline.
 //!
-//! Plan A: thin wrapper. One AgentFlow node owns the full
+//! Plan A: thin wrapper. One Yanshi node owns the full
 //! `blog text → multi-speaker dialogue script → TTS → assembled audio +
 //! SRT` chain by delegating to `phonon-podcast::OpenAiScriptGenerator`
 //! and `phonon-podcast::PodcastPipeline`. Splitting the chain into
-//! separate AgentFlow nodes (Plan B) is a follow-up driven by
+//! separate Yanshi nodes (Plan B) is a follow-up driven by
 //! dogfooding pain points.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use agentflow_core::async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult};
-use agentflow_core::error::AgentFlowError;
-use agentflow_core::value::FlowValue;
+use yanshi_core::async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult};
+use yanshi_core::error::YanshiError;
+use yanshi_core::value::FlowValue;
 use async_trait::async_trait;
 use phonon_ai::{EdgeTts, MiniMaxTts, OpenAiTts};
 use phonon_podcast::{
@@ -113,7 +113,7 @@ impl PodcastNodeConfig {
   }
 }
 
-/// Custom AgentFlow node — blog text → assembled podcast audio + SRT.
+/// Custom Yanshi node — blog text → assembled podcast audio + SRT.
 pub struct PodcastNode {
   config: PodcastNodeConfig,
 }
@@ -126,7 +126,7 @@ impl PodcastNode {
   fn require_string_input<'a>(
     inputs: &'a AsyncNodeInputs,
     key: &str,
-  ) -> Result<&'a str, AgentFlowError> {
+  ) -> Result<&'a str, YanshiError> {
     match inputs.get(key) {
       Some(FlowValue::Json(Value::String(s))) => Ok(s.as_str()),
       Some(_) => Err(input_error(format!("input `{key}` must be a JSON string"))),
@@ -155,9 +155,9 @@ impl PodcastNode {
     }
   }
 
-  async fn generate_script(&self, source_text: &str) -> Result<PodcastScript, AgentFlowError> {
+  async fn generate_script(&self, source_text: &str) -> Result<PodcastScript, YanshiError> {
     let api_key = std::env::var(&self.config.llm_api_key_env).map_err(|_| {
-      AgentFlowError::ConfigurationError {
+      YanshiError::ConfigurationError {
         message: format!(
           "env var `{}` is required for podcast script generation",
           self.config.llm_api_key_env
@@ -169,14 +169,14 @@ impl PodcastNode {
       self.config.llm_base_url.clone(),
       self.config.llm_model.clone(),
     )
-    .map_err(|err| AgentFlowError::AsyncExecutionError {
+    .map_err(|err| YanshiError::AsyncExecutionError {
       message: format!("failed to construct OpenAiScriptGenerator: {err}"),
     })?;
     let request = self.build_script_request(source_text);
     generator
       .generate(&request)
       .await
-      .map_err(|err| AgentFlowError::AsyncExecutionError {
+      .map_err(|err| YanshiError::AsyncExecutionError {
         message: format!("podcast script generation failed: {err}"),
       })
   }
@@ -204,10 +204,10 @@ impl PodcastNode {
     script: &PodcastScript,
     output_audio: &PathBuf,
     output_srt: &PathBuf,
-  ) -> Result<(f64, usize), AgentFlowError> {
+  ) -> Result<(f64, usize), YanshiError> {
     let buffer = match self.config.tts_backend {
       TtsBackend::MiniMax => {
-        let tts = MiniMaxTts::new().map_err(|e| AgentFlowError::ConfigurationError {
+        let tts = MiniMaxTts::new().map_err(|e| YanshiError::ConfigurationError {
           message: e.to_string(),
         })?;
         let pipeline = PodcastPipeline::new(tts);
@@ -219,19 +219,19 @@ impl PodcastNode {
         pipeline.generate(script).await
       }
       TtsBackend::OpenAi => {
-        let tts = OpenAiTts::new().map_err(|e| AgentFlowError::ConfigurationError {
+        let tts = OpenAiTts::new().map_err(|e| YanshiError::ConfigurationError {
           message: e.to_string(),
         })?;
         let pipeline = PodcastPipeline::new(tts);
         pipeline.generate(script).await
       }
     }
-    .map_err(|err| AgentFlowError::AsyncExecutionError {
+    .map_err(|err| YanshiError::AsyncExecutionError {
       message: format!("podcast pipeline failed: {err}"),
     })?;
 
     phonon_io::write_audio(output_audio, &buffer).map_err(|err| {
-      AgentFlowError::AsyncExecutionError {
+      YanshiError::AsyncExecutionError {
         message: format!("write audio to {}: {err}", output_audio.display()),
       }
     })?;
@@ -245,7 +245,7 @@ impl PodcastNode {
     // per-segment durations from the TTS pipeline.
     let subtitle_entries = estimate_subtitle_timing(&script.segments, duration);
     write_srt_file(&subtitle_entries, output_srt).map_err(|err| {
-      AgentFlowError::AsyncExecutionError {
+      YanshiError::AsyncExecutionError {
         message: format!("write SRT to {}: {err}", output_srt.display()),
       }
     })?;
@@ -319,8 +319,8 @@ impl AsyncNode for PodcastNode {
   }
 }
 
-fn input_error(message: impl Into<String>) -> AgentFlowError {
-  AgentFlowError::NodeInputError {
+fn input_error(message: impl Into<String>) -> YanshiError {
+  YanshiError::NodeInputError {
     message: message.into(),
   }
 }

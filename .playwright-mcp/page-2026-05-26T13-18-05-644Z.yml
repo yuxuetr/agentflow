@@ -1,7 +1,7 @@
 - main [ref=e3]:
   - generic [ref=e4]:
     - generic [ref=e5]:
-      - paragraph [ref=e6]: AgentFlow
+      - paragraph [ref=e6]: Yanshi
       - heading "Run Console" [level=1] [ref=e7]
     - generic [ref=e8]:
       - textbox "Run ID" [ref=e9]

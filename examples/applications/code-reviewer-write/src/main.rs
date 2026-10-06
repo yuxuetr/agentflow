@@ -8,25 +8,25 @@
 //!
 //! A2's original spec called for a code reviewer that BOTH reads PR
 //! diffs AND posts review comments back to GitHub, with the write
-//! side gated by Harness Mode's approval flow (`agentflow-harness`'s
+//! side gated by Harness Mode's approval flow (`yanshi-harness`'s
 //! P-H.2 `HookedTool` + `ApprovalProvider`). The original A2
 //! [code-reviewer skill](../code-reviewer/skill.toml) covered only
 //! the read side because the write side requires the approval gate.
 //!
-//! ## Why not `agentflow harness run --skill`?
+//! ## Why not `yanshi harness run --skill`?
 //!
-//! Investigation during this work surfaced a real agentflow gap
+//! Investigation during this work surfaced a real yanshi gap
 //! (**F-A2-9** in EXAMPLES_TODOs.md → **F-A2-11** in dogfooding):
-//! `agentflow harness run` CLI builds the agent via `SkillBuilder::build`
+//! `yanshi harness run` CLI builds the agent via `SkillBuilder::build`
 //! but does **NOT** call `wrap_registry(...)` to install the
-//! `HookedTool` + `ApprovalProvider` pipeline. Only `agentflow-server`'s
+//! `HookedTool` + `ApprovalProvider` pipeline. Only `yanshi-server`'s
 //! `LiveHarnessExecutor` wires it. So `harness run` from CLI today
 //! gives you the agent + sinks but skips the approval-gate plumbing.
 //!
 //! Rather than block on a CLI fix, this binary wires the pipeline
 //! manually so we can dogfood the approval flow end-to-end. The
 //! resulting code is essentially a reduced form of what
-//! `agentflow harness run` SHOULD do for skills with write tools —
+//! `yanshi harness run` SHOULD do for skills with write tools —
 //! a candidate to promote to first-class CLI support later.
 //!
 //! ## What the binary does
@@ -53,17 +53,17 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use agentflow_agents::react::{ReActAgent, ReActConfig};
-use agentflow_agents::runtime::RuntimeLimits;
-use agentflow_harness::{
+use yanshi_agents::react::{ReActAgent, ReActConfig};
+use yanshi_agents::runtime::RuntimeLimits;
+use yanshi_harness::{
   AutoAllowApprovalProvider, CliApprovalProvider, HarnessProfile, HookConfig, SinkChain,
   StdoutEventSink, wrap_registry,
 };
-use agentflow_llm::AgentFlow as LlmInit;
-use agentflow_memory::SessionMemory;
-use agentflow_tools::ToolRegistry;
-use agentflow_tools::builtin::{FileTool, ShellTool};
-use agentflow_tools::sandbox::SandboxPolicy;
+use yanshi_llm::Yanshi as LlmInit;
+use yanshi_memory::SessionMemory;
+use yanshi_tools::ToolRegistry;
+use yanshi_tools::builtin::{FileTool, ShellTool};
+use yanshi_tools::sandbox::SandboxPolicy;
 use anyhow::{Context, Result};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -148,9 +148,9 @@ fn render_prefetch_persona(commit: &str, ledger: &std::path::Path) -> String {
     .replace("{LEDGER}", &ledger.display().to_string())
 }
 
-fn load_agentflow_dotenv() {
+fn load_yanshi_dotenv() {
   if let Some(home) = std::env::home_dir() {
-    let _ = dotenvy::from_path(home.join(".agentflow").join(".env"));
+    let _ = dotenvy::from_path(home.join(".yanshi").join(".env"));
   }
 }
 
@@ -215,13 +215,13 @@ fn print_help() {
        -h, --help          show this help\n\
      \n\
      ENV:\n  \
-       MOONSHOT_API_KEY   required by default model; auto-loaded from ~/.agentflow/.env\n"
+       MOONSHOT_API_KEY   required by default model; auto-loaded from ~/.yanshi/.env\n"
   );
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-  load_agentflow_dotenv();
+  load_yanshi_dotenv();
   // Approval prompts go to stderr through tracing; keep stdout for the
   // final answer + JSON outputs so callers can pipe.
   tracing_subscriber::fmt()
@@ -234,7 +234,7 @@ async fn main() -> Result<()> {
 
   LlmInit::init()
     .await
-    .context("failed to initialise agentflow-llm")?;
+    .context("failed to initialise yanshi-llm")?;
 
   // Pre-fetch the diff outside the agent if requested. This bypasses
   // step 1 (the shell call) entirely and isolates the file:write
@@ -282,7 +282,7 @@ async fn main() -> Result<()> {
       .unwrap_or(0)
   );
   let sinks = SinkChain::new().push(Arc::new(StdoutEventSink::new()));
-  let approval: Arc<dyn agentflow_harness::ApprovalProvider> = if args.auto_approve {
+  let approval: Arc<dyn yanshi_harness::ApprovalProvider> = if args.auto_approve {
     info!("--auto-approve set: bypassing interactive approval");
     Arc::new(AutoAllowApprovalProvider::new())
   } else {
@@ -334,7 +334,7 @@ async fn main() -> Result<()> {
 
   let max_tool_calls = if args.prefetch_diff { 1 } else { 4 };
   let context =
-    agentflow_agents::runtime::AgentContext::new(agent.session_id.clone(), &prompt, &args.model)
+    yanshi_agents::runtime::AgentContext::new(agent.session_id.clone(), &prompt, &args.model)
       .with_persona(&persona)
       .with_limits(RuntimeLimits {
         // Happy path: 2 (shell + file:write) in non-prefetch mode; 1

@@ -1,15 +1,15 @@
 # Checkpoint Schema
 
-AgentFlow persists DAG run state to disk so a partially-completed
+Yanshi persists DAG run state to disk so a partially-completed
 run can resume after a crash, an operator-triggered cancel, or a
 distributed-worker handoff. This document describes the on-disk
 shape, the read/write rules, and the legacy-compatibility behaviour
 that the runtime guarantees.
 
-The Rust implementation lives in `agentflow-core/src/checkpoint.rs`
-(write path) and `agentflow-core/src/flow.rs::decode_checkpoint_flow_value`
+The Rust implementation lives in `yanshi-core/src/checkpoint.rs`
+(write path) and `yanshi-core/src/flow.rs::decode_checkpoint_flow_value`
 (read path). The companion fixture suite is
-`agentflow-core/tests/fixtures/checkpoints/`.
+`yanshi-core/tests/fixtures/checkpoints/`.
 
 ## Stability tier
 
@@ -67,11 +67,11 @@ stays silent.
 
 The asymmetry is pinned by tests:
 
-- `agentflow-core/tests/flow_value_checkpoint_compat.rs::legacy_raw_json_checkpoint_values_read_as_json_flow_values`
+- `yanshi-core/tests/flow_value_checkpoint_compat.rs::legacy_raw_json_checkpoint_values_read_as_json_flow_values`
   proves the silent fallback for legacy data.
-- `agentflow-core/src/flow.rs::tests::malformed_tagged_checkpoint_value_falls_back_to_json`
+- `yanshi-core/src/flow.rs::tests::malformed_tagged_checkpoint_value_falls_back_to_json`
   proves the loud-warning fallback for corrupt-tagged data.
-- `agentflow-core/src/flow.rs::tests::legacy_untagged_checkpoint_values_decode_as_json`
+- `yanshi-core/src/flow.rs::tests::legacy_untagged_checkpoint_values_decode_as_json`
   pins the silent path from inside the same module.
 
 If you're auditing a regression where a node's `File` / `Url`
@@ -82,7 +82,7 @@ diagnostic surface this design committed to.
 ## Writer contract
 
 Writers MUST emit the tagged schema for every `FlowValue` they
-persist. The unit tests in `agentflow-core/tests/fixtures/checkpoints/`
+persist. The unit tests in `yanshi-core/tests/fixtures/checkpoints/`
 include golden snapshots that pin the wire shape; running them
 against a writer change catches accidental untagged regressions.
 
@@ -92,8 +92,8 @@ Stable — bumping the encoding form is a v2-level migration.
 ## Related
 
 - `docs/STABILITY.md` § Workflow and Checkpoint Schemas
-- `agentflow-core/src/checkpoint.rs` — `CheckpointManager` (write path)
-- `agentflow-core/src/flow.rs::decode_checkpoint_flow_value` (read path)
-- `agentflow-core/tests/fixtures/checkpoints/` — golden fixtures
-- `agentflow-core/tests/flow_value_checkpoint_compat.rs` — legacy
+- `yanshi-core/src/checkpoint.rs` — `CheckpointManager` (write path)
+- `yanshi-core/src/flow.rs::decode_checkpoint_flow_value` (read path)
+- `yanshi-core/tests/fixtures/checkpoints/` — golden fixtures
+- `yanshi-core/tests/flow_value_checkpoint_compat.rs` — legacy
   read compat tests

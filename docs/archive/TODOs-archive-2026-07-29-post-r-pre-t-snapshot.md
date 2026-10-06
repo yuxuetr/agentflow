@@ -1,4 +1,4 @@
-# AgentFlow TODOs
+# Yanshi TODOs
 
 Last updated: 2026-07-28
 
@@ -43,19 +43,19 @@ Last updated: 2026-07-28
 Current focus: **H / P-A / S / L 四段已全闭环并整体存档**（见上）；
 **R（2026-07-28 工程化审计修复）R0–R4 全部 DONE，并在 GitHub Actions 真实
 硬件上实跑验证到 `release gate: conclusion=success`**（2026-07-29 收口）：
-`agentflow-rag` HTML loader panic 已修复；CI 测试矩阵从 8 扩到全部 23 个
+`yanshi-rag` HTML loader panic 已修复；CI 测试矩阵从 8 扩到全部 23 个
 workspace member；clippy job 补 `--all-features`；`agent-spi→llm` 违规依赖
-已烧（`LlmTraceContext` 下沉到 `agentflow-value`）；`check-arch` 新增
+已烧（`LlmTraceContext` 下沉到 `yanshi-value`）；`check-arch` 新增
 kernel-isolation 第三条 active law；4 处文档陈旧/矛盾已修；`_to_delete/` +
 `.github/copilot-instructions.md`/`.github/instructions/` 两处未追踪残留
 已清理；**R4（push 后第一次真实 CI 才暴露的问题，含一个生产级安全 bug）**：
 Linux Landlock 沙箱此前从未在真正强制的内核上验证过——`build_landlock_
 ruleset` 从没给系统二进制/动态链接器路径授权，一旦 Landlock 真正生效，
 `with_os_sandbox()` 的任何子进程调用都会失败（不分 policy），已修复+在真实
-x86_64 硬件上确认生效；agentflow-rag/agentflow-memory/agentflow-agents 里
+x86_64 硬件上确认生效；yanshi-rag/yanshi-memory/yanshi-agents 里
 另外 8 处预先存在的 clippy expect/unwrap 违规已清（前几处套用"编译期不变量"
 allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
-`agentflow-server` 一处过期 API 契约（`?tenant_id=` 早被安全加固移除）的
+`yanshi-server` 一处过期 API 契约（`?tenant_id=` 早被安全加固移除）的
 测试已跟进；cgroup v2 委托可用性探测从"只查目录结构"改成"真正试一次迁移"，
 修掉了 GitHub Actions runner 因 `system.slice` vs `user.slice` cgroup
 归属不同而无法真正限制资源的问题。**TODOs.md 里已没有开放的 `TODO` 项**——
@@ -86,18 +86,18 @@ allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
 
 ### R0 — CI 覆盖盲区 + 真实生产 bug（blocking）
 
-- DONE R0.1 修复 `agentflow-rag` HTML loader 的无效正则 panic：`script_regex`/
-  `style_regex`（`agentflow-rag/src/sources/html.rs`）改用 `regex` crate
+- DONE R0.1 修复 `yanshi-rag` HTML loader 的无效正则 panic：`script_regex`/
+  `style_regex`（`yanshi-rag/src/sources/html.rs`）改用 `regex` crate
   实际支持的非贪婪 `(?is)<script\b[^>]*>.*?</script>` /
   `(?is)<style\b[^>]*>.*?</style>` 模式替换原先不支持的负向前瞻写法——
   非贪婪匹配在语义上等价于浏览器把 script/style 内容当"原始文本，找到第一个
   字面 `</script>` 为止"的解析规则，不需要 lookaround。新增回归测试
   `test_html_removes_scripts_with_embedded_angle_brackets` 覆盖脚本内容里带
   `<`（比较运算符）+ 同文档多个 script/style 块的情况，证明非贪婪匹配不会被
-  内嵌的 `<` 提前截断或跨块贪婪吞并。`cargo test -p agentflow-rag --features
-  html` 8/8 过（含新测试），`cargo clippy -p agentflow-rag --features html
+  内嵌的 `<` 提前截断或跨块贪婪吞并。`cargo test -p yanshi-rag --features
+  html` 8/8 过（含新测试），`cargo clippy -p yanshi-rag --features html
   -- -D warnings` 的 2 个 `invalid_regex` 错误随之消失。
-- DONE R0.2 清理 `agentflow-rag` 的其余 clippy 违规（与 R0.1 同一次修复验证）：
+- DONE R0.2 清理 `yanshi-rag` 的其余 clippy 违规（与 R0.1 同一次修复验证）：
   - `embeddings/onnx.rs:193` `data.iter().copied().collect()` → `data.to_vec()`。
   - `sources/html.rs` title 提取的嵌套 `if let` 改用 let-chain
     （`if let Ok(..) && let Some(..) {`，本 crate 其他地方已有先例）合并。
@@ -108,14 +108,14 @@ allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
     构建下会变成"认得名字就返回 true"，与原本"该 feature 是否真的编译进去了"
     语义不同，是会引入真 bug 的自动修复建议。改为保留原 `match` + 显式
     `#[allow(clippy::match_like_matches_macro, reason = "...")]` 并写明原因。
-  - 顺带修了一个不在原计划内、但挡住 `cargo test -p agentflow-rag
+  - 顺带修了一个不在原计划内、但挡住 `cargo test -p yanshi-rag
     --all-features` 全绿验证的预先存在问题：`embeddings/onnx.rs` 模块级
-    doctest 缺 `use agentflow_rag::embeddings::EmbeddingProvider;` 导致
+    doctest 缺 `use yanshi_rag::embeddings::EmbeddingProvider;` 导致
     `embed_text` 方法不在作用域（`git stash` 验证过这个失败在本次改动前就
     存在，与 R0.1/R0.2 无关，顺手补上而非另开条目）。
   - 验收：`cargo clippy --workspace --all-features -- -D warnings` 全绿；
-    `cargo test -p agentflow-rag --all-features` 239 lib + 4+11 doc 全过、
-    `cargo fmt -p agentflow-rag -- --check` 干净。**R0.4 CI 侧仍需补
+    `cargo test -p yanshi-rag --all-features` 239 lib + 4+11 doc 全过、
+    `cargo fmt -p yanshi-rag -- --check` 干净。**R0.4 CI 侧仍需补
     `--all-features` 才能让这类问题以后自动被挡住**（未来 CI 才是关门项）。
 
 - DONE R0.3 把测试矩阵扩到全部 workspace member，补齐 CI 覆盖率缺口
@@ -125,25 +125,25 @@ allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
     false 也照样记录耗时"——**它从设计上就不会因为测试失败而 fail**，只会
     因为"变慢 ≥1.5×"而 fail。所以"接入 test-gate"本身**不能**堵住 R0.1
     这类回归，会是一次假绿修复。改为直接把 `quality.yml` 的 `test` job
-    矩阵从 8 个 crate 扩到全部 23 个真实 workspace member（`agentflow-value/
+    矩阵从 8 个 crate 扩到全部 23 个真实 workspace member（`yanshi-value/
     graph/store-spi/agent-spi/async-util/nodes/nodes-ai/config/rag/tracing/
     db/server/worker/worker-proto/harness` 15 个新增；此前列的"14 个"漏数了
-    `agentflow-worker-proto`）。
+    `yanshi-worker-proto`）。
   - 三个连带修复，都是为了让新加的矩阵项真正跑到会暴露问题的路径而不是自证
     通过：
-    1. `agentflow-rag` 特判为 `cargo test --features pdf,html,code-chunking`
+    1. `yanshi-rag` 特判为 `cargo test --features pdf,html,code-chunking`
        ——默认 feature 只有 `qdrant`，不加 `html` 的话新矩阵项照样不会编译到
        R0.1 那段代码，等于没堵上。`local-embeddings` 排除（会拉 `ort` 现场下
        载 ONNX Runtime 二进制，`features` job 的 feature-combo 矩阵已有同样
        排除理由）。
-    2. `agentflow-nodes-ai` 特判为 `--features mcp,rag`——默认 feature 是空，
+    2. `yanshi-nodes-ai` 特判为 `--features mcp,rag`——默认 feature 是空，
        `nodes::mcp`/`nodes::rag` 两个适配器模块不加 feature 根本不编译。
     3. `test` job 新增 job 级 postgres service +
-       `AGENTFLOW_DATABASE_TEST_URL` env（照抄 `ui-e2e.yml` 已验证过的写法）
-       ——`agentflow-db`/`agentflow-server` 的 DB 相关测试原本靠这个 env 缺失
-       时自我跳过（`eprintln!("skipping ... — set AGENTFLOW_DATABASE_TEST_URL
+       `YANSHI_DATABASE_TEST_URL` env（照抄 `ui-e2e.yml` 已验证过的写法）
+       ——`yanshi-db`/`yanshi-server` 的 DB 相关测试原本靠这个 env 缺失
+       时自我跳过（`eprintln!("skipping ... — set YANSHI_DATABASE_TEST_URL
        to run")`），不设的话矩阵扩了但这部分测试还是空跑。
-    `agentflow-cli/server/worker/worker-proto` 需要 protoc，`Install protoc`
+    `yanshi-cli/server/worker/worker-proto` 需要 protoc，`Install protoc`
     步骤的 `if:` 从"只认 cli"改成 `contains(fromJSON('[...]'), matrix.package)`
     四选一。
   - 验收（本地全部跑过，逐个确认非零失败为 0）：新增的 15 个 crate 逐个
@@ -169,20 +169,20 @@ allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
 
 ### R1 — 架构守卫盲区（`check-arch` 未覆盖 L0 内核层）
 
-- DONE R1.1 消除 `agentflow-agent-spi`（L0）对 `agentflow-llm`（L2）的直接依赖：
+- DONE R1.1 消除 `yanshi-agent-spi`（L0）对 `yanshi-llm`（L2）的直接依赖：
   `LlmTraceContext`（纯数据：trace_id/span_id/flags/tracestate + new/random/
   with_tracestate/with_flags/to_traceparent/from_traceparent，零 reqwest/
-  tokio 依赖）整体下沉到新 `agentflow-value/src/trace_context.rs`（新增
-  `uuid` 依赖用于 `random()` 的熵源）。`agentflow-llm` 反过来依赖
-  `agentflow-value`，`trace_context.rs` 改为 `pub use agentflow_value::
+  tokio 依赖）整体下沉到新 `yanshi-value/src/trace_context.rs`（新增
+  `uuid` 依赖用于 `random()` 的熵源）。`yanshi-llm` 反过来依赖
+  `yanshi-value`，`trace_context.rs` 改为 `pub use yanshi_value::
   LlmTraceContext;` + 只保留 tokio task-local `scope`/`current` 和 HTTP header
   注入（`inject_into_headers`/`inject_context_into_headers`）——这些是真正的
-  LLM 传输层关注点，留在 llm 天经地义。`agentflow_llm::LlmTraceContext` 这个
+  LLM 传输层关注点，留在 llm 天经地义。`yanshi_llm::LlmTraceContext` 这个
   路径**对所有既有调用方保持不变**（llm 自己 5 个 provider + agents 的
   plan_execute.rs/react/agent.rs + cli 的 cross-hop e2e 测试全部用的是这个
-  全限定路径，零改动即通过）。`agentflow-agent-spi/Cargo.toml` 删
-  `agentflow-llm`、加 `agentflow-value`；`runtime.rs:86,237` 两处
-  `agentflow_llm::LlmTraceContext` → `agentflow_value::LlmTraceContext`。
+  全限定路径，零改动即通过）。`yanshi-agent-spi/Cargo.toml` 删
+  `yanshi-llm`、加 `yanshi-value`；`runtime.rs:86,237` 两处
+  `yanshi_llm::LlmTraceContext` → `yanshi_value::LlmTraceContext`。
   纯数据单测（`new_rejects_malformed_ids`/`random_yields_...`/
   `traceparent_round_trips`/`from_traceparent_rejects_...`）跟着类型定义
   一起搬到 value；llm 侧留下的测试只测 scope/header 注入这层传输逻辑。
@@ -230,7 +230,7 @@ allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
 - DONE R2.1 `docs/KUBERNETES_DEPLOYMENT.md` 标注废弃（选了方案 b，不是 a）：
   **没有**用真实 Helm 模板重写全文——PVC/RBAC/HPA/ServiceMonitor/
   NetworkPolicy/PodDisruptionBudget/Fluentd 这些目前都不是
-  `charts/agentflow/templates/` 里的真实模板，要让文档"如实描述"就得先把这些
+  `charts/yanshi/templates/` 里的真实模板，要让文档"如实描述"就得先把这些
   写成经测试的 Helm 模板，那是功能开发不是文档修复，风险和工作量都远超本轮
   审计修复的范围，容易生产出没人验证过的"看起来权威"的基础设施代码。改为
   标题下加醒目 banner，点名端口号（8080/9090 vs 真实 chart 的 3000）和整批
@@ -238,7 +238,7 @@ allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
   `/health/live`/`/health/ready`/`/metrics`）仍然准确、是真实 chart 探针
   调用的确切端点；"Deployment Configuration" 小节开头也加了一条内联提示，
   因为读者可能直接从目录跳过去、不经过顶部 banner。两处都指向
-  `docs/DEPLOYMENT.md#helm` + `charts/agentflow/values.yaml` 作为真实部署路径。
+  `docs/DEPLOYMENT.md#helm` + `charts/yanshi/values.yaml` 作为真实部署路径。
   - 验收：banner 语言清楚区分"仍准确的部分"（健康检查代码）和"预 Helm 时代
     参考草图，不要直接 apply"（部署清单部分）；`docs/DEPLOYMENT.md` 的
     `#helm` 锚点确认存在（`## Helm` 标题，第 45 行）。
@@ -253,7 +253,7 @@ allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
 - DONE R2.3 `docs/CURRENT_STATUS.md` 刷新到当前状态：加了 S（沙箱/`code_exec`）
   和 L（长程任务/RAG/委托契约）两段收口摘要（浓缩自归档快照里对应段落的
   DONE 记录），"Last Updated" 改成 2026-07-28 并注明这次更新做了什么。顺带
-  修了一个连带发现的小遗漏——L2 capability adapters 那行漏了 `agentflow-
+  修了一个连带发现的小遗漏——L2 capability adapters 那行漏了 `yanshi-
   nodes-ai`（P-A4.0 nodes 拆分之后才存在的 crate，这份文档没跟上）；"Active
   Work" 一节的措辞还停留在"P0-P4 刚完成"的旧叙事，改成准确反映 H/P-A/S/L
   四段已收口存档、R 段（本次审计修复）为当前 active 的现状。
@@ -264,7 +264,7 @@ allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
   Experimental 就是单纯没跟着那次晋级一起改，是真正的过期表述，不是刻意的
   维度差异。直接把第 100 行改成 Beta，并加一句注明"这行之前是没跟上晋级的
   过期表述，不是两张表故意用不同口径"，避免以后又被人当成两个维度各自权威
-  再摆一次乌龙。顺手确认了 `agentflow-harness/tests/fixtures/` 目录确实存在
+  再摆一次乌龙。顺手确认了 `yanshi-harness/tests/fixtures/` 目录确实存在
   4 个 fixture 文件，Fixture Ownership 这一行本身描述准确，只有 stability
   等级列错了。
 
@@ -276,7 +276,7 @@ allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
 
 - DONE R3.2 移除 `.github/copilot-instructions.md` + `.github/instructions/`：
   与用户核实（AskUserQuestion，2026-07-29）确认不是团队有意加入的协作配置，
-  是 GitHub Copilot + VS Code Mermaid 扩展相关的本地工具残留，与 AgentFlow
+  是 GitHub Copilot + VS Code Mermaid 扩展相关的本地工具残留，与 Yanshi
   项目本身及 Claude Code 工作流无关。`rm -f`/`rm -rf` 移除，同样未被追踪，
   删除不产生 commit。**R3 段（仓库卫生）全部闭环，R 段（2026-07-28 工程化
   审计修复）全部 DONE：R0/R1/R2/R3 十二项全部完成。**
@@ -290,7 +290,7 @@ allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
 > 才暴露的既有 bug（R4.3、R4.4）。**R4.2 是这批里最严重的一个**——不是
 > CI 卫生问题，是一个真实的、可能影响生产的沙箱安全子系统缺陷。
 
-- DONE R4.1 修复 `agentflow-tools` 的 `clippy-lib-deny` 违规：
+- DONE R4.1 修复 `yanshi-tools` 的 `clippy-lib-deny` 违规：
   `code_exec.rs:247-248` 两处 `.expect()`（2026-07-27 commit `b12fd69`，
   本会话之前就存在）缺 `#[allow(clippy::expect_used, reason=...)]`。
   `child.stdout`/`child.stderr` 在 `.stdout(Stdio::piped())` 配置之后
@@ -300,7 +300,7 @@ allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
 - DONE R4.2 修复 Linux Landlock 沙箱从未在真正强制的内核上验证过的缺陷
   （**production-blocking，非 CI 卫生问题**）：
   - **根因**（通过读代码 + 双路径独立复现精确定位，非猜测）：
-    `build_landlock_ruleset`（`agentflow-tools/src/sandbox/linux.rs`）此前
+    `build_landlock_ruleset`（`yanshi-tools/src/sandbox/linux.rs`）此前
     只把 `scope.read_paths`（默认只有 `/tmp` + cwd，或调用方显式
     `allowed_paths`）喂给 Landlock 规则，从未对任何系统二进制/动态链接器
     路径（`/usr/bin`、`/lib`、`/usr/lib` 等）授予任何权限。而 landlock crate
@@ -331,7 +331,7 @@ allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
     `execve()` 本身被拒绝——也就是 Landlock。x86_64 VM 上 `apply_filter`
     报 EINVAL 大概率是 Apple 跨架构虚拟化层本身对 `seccomp(2)` 这个冷门
     系统调用的翻译缺陷，与生产环境无关，未继续深挖。
-  - **修复**：仿照 `agentflow-tools/src/sandbox/macos.rs::build_profile`
+  - **修复**：仿照 `yanshi-tools/src/sandbox/macos.rs::build_profile`
     已有的"bare minimum the child needs to start and link dyld"先例（对
     `/usr/bin`、`/usr/lib`、`/System` 等系统路径授予基线访问），给
     `build_landlock_ruleset` 加一份 Linux 对应的基线路径列表
@@ -346,52 +346,52 @@ allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
     整个 ruleset 构建失败。
   - 新增回归测试
     `linux_landlock_allows_exec_of_system_binary_outside_the_allowed_scope`
-    （`agentflow-tools/tests/sandbox_linux.rs`）：在 `landlock_enforcing()`
+    （`yanshi-tools/tests/sandbox_linux.rs`）：在 `landlock_enforcing()`
     的内核上，用只授权临时目录的 policy 跑 `python3`，断言 exec 依然成功
     ——这是直接对着这个 bug 形状写的测试，本地两台 VM 都不满足
     `landlock_enforcing()` 前提所以跑的是 skip 分支，验证的是"结构正确、
     不因为新代码路径 panic"，真正的通过/失败判定要看 R4.5 推上去之后
     GitHub Actions 的实跑结果。
-  - 验收（本地能做的部分全过）：`cargo clippy -p agentflow-tools
+  - 验收（本地能做的部分全过）：`cargo clippy -p yanshi-tools
     --all-targets -- -D warnings`、`--lib --no-deps` 的 unwrap/expect deny、
     `cargo fmt --check` 全干净；两台 VM（aarch64 + x86_64，均不支持
-    Landlock）上 `cargo test -p agentflow-tools --lib sandbox::linux` 9/9
+    Landlock）上 `cargo test -p yanshi-tools --lib sandbox::linux` 9/9
     过、`--test sandbox_linux` 10/10 过（含新测试，均走 skip 分支，无
     panic/编译错误）。**Landlock 真正强制生效路径下的最终验证留给 R4.5
     的真实 CI 跑**。
 
-- DONE R4.3 nodes-ai TTS 测试补 API key 门控：`agentflow-nodes-ai/src/nodes/
+- DONE R4.3 nodes-ai TTS 测试补 API key 门控：`yanshi-nodes-ai/src/nodes/
   tts.rs` 的 `test_tts_node_integration` 之前既没有 `#[ignore]` 也没有
   env var 跳过逻辑，是同目录 asr/image_to_image/image_understand 三个兄弟
   测试里唯一的例外（前两者用 `#[ignore]` + 内部 `STEP_API_KEY` 检查双保险，
   后者只用内部检查）——之前没进过 CI 矩阵所以没被发现，R0.3 扩矩阵后第一次
   真正跑到就必挂。补齐同款 `#[ignore]` + `if std::env::var("STEP_API_KEY")
   .is_err() { println!(...); return; }`，跟多数兄弟测试的模式对齐。
-  验收：`cargo test -p agentflow-nodes-ai --lib nodes::tts --features
+  验收：`cargo test -p yanshi-nodes-ai --lib nodes::tts --features
   mcp,rag` 显示 `1 ignored`（不再尝试真实 API 调用）；crate 全量测试
   `12 passed; 0 failed; 5 ignored`；`cargo clippy --all-targets
   --features mcp,rag -- -D warnings` / `cargo fmt --check` 全干净。
 
-- DONE R4.4 修复 `agentflow-server` 两个 DB 集成测试失败：
+- DONE R4.4 修复 `yanshi-server` 两个 DB 集成测试失败：
   - **真实根因只有一个，且不是功能 bug**：`list_runs_returns_recent_rows_
-    for_tenant`（`agentflow-server/tests/runs_routes.rs`）还在用
+    for_tenant`（`yanshi-server/tests/runs_routes.rs`）还在用
     `GET /v1/runs?tenant_id=tenant-a` 这个**已经在 Q1.4.1（Q-段安全加固，
     2026-05-24 审计修复波次）里被有意移除**的旧 API 契约——`?tenant_id=`
     query 参数当年被删是因为它能被任意认证客户端拿来越权列出别的租户的
     runs（见 `runs.rs::list_runs` 自己的文档注释），租户现在**只**从
-    `X-Agentflow-Tenant` 请求头解析。测试从 Q1.4.1 之后就一直是过期的，
-    只是从没在真实数据库前跑过（`AGENTFLOW_DATABASE_TEST_URL` 缺失时静默
+    `X-Yanshi-Tenant` 请求头解析。测试从 Q1.4.1 之后就一直是过期的，
+    只是从没在真实数据库前跑过（`YANSHI_DATABASE_TEST_URL` 缺失时静默
     跳过），R0.3 加 postgres service 后第一次真正执行就现形。
   - **诊断方法**：本地用 Apple `container` CLI 起了一个和 CI 同配置
-    （`agentflow`/`agentflow`/`agentflow`）的临时 postgres 容器，直接
-    `AGENTFLOW_DATABASE_TEST_URL=... cargo test -p agentflow-server --test
+    （`yanshi`/`yanshi`/`yanshi`）的临时 postgres 容器，直接
+    `YANSHI_DATABASE_TEST_URL=... cargo test -p yanshi-server --test
     runs_routes` 复现——第一次单独跑这两个测试，`submit_run_executes_
     fixed_dag_and_persists_workflow_events` 反而通过了，只有
     `list_runs_returns_recent_rows_for_tenant` 报 `left: 0, right: 2`
     （查询返回 0 条，不是断言目标错误，是列表真的空）——直接定位到请求没
     带租户信息。
   - **修复**：把测试的 GET 请求从 `?tenant_id=tenant-a&limit=10` 改成
-    `?limit=10` + `.header("X-Agentflow-Tenant", "tenant-a")`，与
+    `?limit=10` + `.header("X-Yanshi-Tenant", "tenant-a")`，与
     `harness_full_stack_e2e.rs`/`harness_live_executor.rs` 里已经在用的
     正确模式对齐。
   - **验证 `submit_run_executes_...` 不是真实 bug**：用干净数据库连续跑了
@@ -401,24 +401,24 @@ allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
     容器重跑测试導致的残留数据问题，不是 CI 或代码的真实缺陷**；每轮全新
     DB + 默认并发（不加 `--test-threads=1`，与 CI 矩阵的默认执行方式一致）
     跑全部 14 个测试，全部 14/14 通过，稳定复现。
-  - 验收：`cargo clippy -p agentflow-server --all-targets -- -D warnings` /
-    `cargo fmt --check` 干净；`cargo test -p agentflow-server --test
+  - 验收：`cargo clippy -p yanshi-server --all-targets -- -D warnings` /
+    `cargo fmt --check` 干净；`cargo test -p yanshi-server --test
     runs_routes`（干净 DB、默认并发）14/14 过，含两个原本失败的测试。
 
 - DONE R4.5（第一次实跑验证）push `aeca5a4..a22aa18`（R4.1–R4.4 全部修复）
   后，`release gate` 从"1 通过/13 全红"变成"3 红"，关键信号：**R4.2 的
   Landlock 修复在真实 GitHub Actions x86_64 硬件上确认生效**——
-  `agentflow-tools` 的 `sandbox_linux` 集成测试从"1 passed, 8 failed"变成
+  `yanshi-tools` 的 `sandbox_linux` 集成测试从"1 passed, 8 failed"变成
   "8 passed, 2 failed"，之前失败的 `linux_seccomp_allows_baseline_echo`/
   两个 landlock 测试/新增的 exec 回归测试全部转绿。剩余 3 红拆开看：
   - `clippy --lib (unwrap/expect deny)` 又红——不是 R4.1 修的那两处
     （`code_exec.rs`）复发，是**另一处独立的、同样预先存在的违规**：
-    `agentflow-rag/src/chunking/paragraph.rs:65` 的
+    `yanshi-rag/src/chunking/paragraph.rs:65` 的
     `group.last().expect("group is non-empty")`。两个调用点都在
     `!group.is_empty()` 检查内部（`push_group` 前几行的 `group[0]` 索引
     本身已经无条件依赖同一个不变量），确认是构建期不变量，补
     `#[allow(clippy::expect_used, reason=...)]`，同 R4.1 的模式。
-  - `agentflow-tools` 集成测试剩 2 个：`linux_cgroup_enforces_max_memory_
+  - `yanshi-tools` 集成测试剩 2 个：`linux_cgroup_enforces_max_memory_
     bytes` / `linux_cgroup_enforces_max_pids`，同样是 `Os { code: 13,
     kind: PermissionDenied }`——但和 R4.2 是**同一类 bug 的另一个实例，
     不是 R4.2 没修干净**：这两个测试直接构造裸 `SandboxScope::new()`
@@ -432,22 +432,22 @@ allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
     等）都正确地把 `temp.path()` 放进了 `allowed_paths`，这两个 S3.2
     测试当初漏了。补 `.with_read_paths([dir.path()])`。
   - 验收：本地两台 VM 复测（aarch64 无 Landlock，只验证不 panic/编译过；
-    macOS host 跑 `agentflow-rag` 的 clippy + `chunking::paragraph` 5 个
+    macOS host 跑 `yanshi-rag` 的 clippy + `chunking::paragraph` 5 个
     单测）全绿；`cargo fmt --all -- --check` / `cargo check --workspace
     --all-features` 干净。真正的绿灯判定见 R4.6（第二次 push 实跑）。
 
-- DONE R4.6（第二次实跑验证）push `4cb3ba1` 后，`agentflow-tools` 的
+- DONE R4.6（第二次实跑验证）push `4cb3ba1` 后，`yanshi-tools` 的
   `sandbox_linux` 集成测试确认 **9/9 全过**——R4.2 的 Landlock 修复 + R4.5
   的两个 cgroup 测试 tempdir 授权修复在真实 GitHub Actions x86_64 硬件上
   双双验证生效。但 `clippy-lib-deny` 还是红，而且**又是不同的违规**：
-  `agentflow-memory/src/project.rs`（3 处）+ `agentflow-memory/src/
+  `yanshi-memory/src/project.rs`（3 处）+ `yanshi-memory/src/
   task_summary.rs`（3 处）的 `Mutex::lock().expect("... poisoned")`。
   - **没有在本地反复"再跑一次 CI 才发现下一批"**——这次直接在本地跑了完整
     `cargo clippy --workspace --all-features --lib --no-deps -- -A warnings
     -D clippy::unwrap_used -D clippy::expect_used`（等价于 CI 那条命令，
     本地 macOS host 就能跑全，不需要专门进 Linux VM），一次性挖出剩余
     全部违规，避免再来回 push 试探。挖出两批：
-    1. `agentflow-memory` 的 6 处 mutex-poisoned expect——**这批和 R0.1/
+    1. `yanshi-memory` 的 6 处 mutex-poisoned expect——**这批和 R0.1/
        R4.1/R4.5 那些"编译期不变量"性质不同**：mutex 中毒是真实的运行时
        可能性（同一把锁的某次持锁期间如果 panic，之后所有 `.lock()` 都会
        返回 `Err`），不是"逻辑上不可能发生"，所以**没有**套用
@@ -458,19 +458,19 @@ allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
        `InMemoryProjectMemoryStore`/`InMemoryTaskSummaryStore` 都是"进程
        生命周期内的尽力而为缓存"（各自文档注释写明），改动后行为更符合
        "失败走 Result，不是 panic"的仓库整体风格。
-    2. `agentflow-agents/src/citation.rs:73` 的 `citation_marker_regex()`
+    2. `yanshi-agents/src/citation.rs:73` 的 `citation_marker_regex()`
        ——和 R0.1/R4.1 同款"编译期静态正则字面量"模式，补
        `#[allow(clippy::expect_used, reason=...)]`。
   - 验收：`cargo clippy --workspace --all-features --lib --no-deps -- ...`
     在 macOS host 上跑到 `Finished`、零 error；
-    `cargo test -p agentflow-memory --lib project::`（7 测）+
-    `task_summary::`（5 测）+ `cargo test -p agentflow-agents --lib
+    `cargo test -p yanshi-memory --lib project::`（7 测）+
+    `task_summary::`（5 测）+ `cargo test -p yanshi-agents --lib
     citation`（15 测）全过；`cargo check --workspace --all-features` /
     `cargo run -p xtask -- check-arch`（OK） / `cargo fmt --all --check`
     干净。
 
 - DONE R4.7（第三次实跑验证）push `83f040f` 后，`clippy-lib-deny` 确认全绿
-  （本地全量扫描替代 push 试探生效）；`agentflow-tools` 只剩
+  （本地全量扫描替代 push 试探生效）；`yanshi-tools` 只剩
   `linux_cgroup_enforces_max_memory_bytes`/`linux_cgroup_enforces_max_pids`
   两个红——这次是**限制没有真正生效**（fixture 进程能起来、能跑完，只是
   OOM-kill / fork 数量封顶都没发生），不再是"进程起不来"那类问题。
@@ -507,16 +507,16 @@ allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
     **没有为了让本地"看起来通过"而继续深挖或引入未经证实的修复**——只保留
     了已经用真实 GH Actions 硬件确认过的那部分修复（探测更准确地识别
     "system.slice vs user.slice"这种权限不可行的场景）。
-  - 验收：`cargo clippy -p agentflow-tools --all-targets -- -D warnings` /
+  - 验收：`cargo clippy -p yanshi-tools --all-targets -- -D warnings` /
     `cargo fmt --check` / `cargo check --workspace --all-features` 干净；
-    两台本地 Linux VM 上 `cargo test -p agentflow-tools --lib sandbox::linux`
+    两台本地 Linux VM 上 `cargo test -p yanshi-tools --lib sandbox::linux`
     9/9 过，不引入编译错误或恐慌。**cgroup 限制在真实生效场景下是否完整
     工作，仍然只能靠下一次真实 CI 验证**——如果 R4.8 显示这两个测试还是红,
     说明还有本条目没抓到的第三层原因，需要继续跟进（不属于本轮"发现即
     修复"的范围，会转成独立 TODO）。
 
 - DONE R4.8（第四次实跑验证，2026-07-29）push `3c00b0f` 后，`release gate`
-  **`conclusion=success`**——`agentflow-tools` 的 `sandbox_linux` 集成测试
+  **`conclusion=success`**——`yanshi-tools` 的 `sandbox_linux` 集成测试
   全部转绿，R4.7 记录的"本地怪癖"（探测通过但真实 spawn 未被限制）没有在
   GH Actions 上复现，证实那确实是本地反复重用的调试 VM 自身状态导致的
   噪音，不影响真实交付目标。**R4 段（CI 首次实跑暴露的问题）全部 DONE，
@@ -525,10 +525,10 @@ allow 模式，mutex-poisoned 的 6 处改成走 `Result` 而不是 panic）；
 
 ## Recently Closed
 
-- **2026-07-29 — R 段（工程化审计修复）全闭环**：R0（`agentflow-rag` HTML
+- **2026-07-29 — R 段（工程化审计修复）全闭环**：R0（`yanshi-rag` HTML
   loader panic 修复 + CI 测试矩阵扩到全部 23 crate + clippy 补
   `--all-features`）→ R1（`agent-spi→llm` 违规依赖烧掉、`LlmTraceContext`
-  下沉到 `agentflow-value`、`check-arch` 新增 kernel-isolation 第三条 law）
+  下沉到 `yanshi-value`、`check-arch` 新增 kernel-isolation 第三条 law）
   → R2（4 处文档陈旧/矛盾修复：K8s 部署文档标废弃、模块优化报告补历史
   banner、`CURRENT_STATUS.md` 补 S/L 收口摘要、`STABILITY.md` 内部矛盾修复）
   → R3（`_to_delete/` + `.github/copilot-instructions.md`/`.github/

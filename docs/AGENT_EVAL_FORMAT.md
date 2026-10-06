@@ -1,8 +1,8 @@
 # Agent Eval Format
 
 Status: design as of `P4.3`.
-Crate (forthcoming impl): `agentflow-agents::eval` + CLI
-`agentflow eval run`.
+Crate (forthcoming impl): `yanshi-agents::eval` + CLI
+`yanshi eval run`.
 Implements: P4.4 (runner + CLI).
 
 The agent eval harness measures *whether the agent produced the right
@@ -13,8 +13,8 @@ the final answer must mention 'OAuth'") and run a live agent loop
 end to end against the dataset.
 
 It is a sibling of the existing RAG eval harness
-(`agentflow-rag::eval`) and reuses its on-disk style (JSONL + a
-small TOML manifest) so the two halves of "is the AgentFlow stack
+(`yanshi-rag::eval`) and reuses its on-disk style (JSONL + a
+small TOML manifest) so the two halves of "is the Yanshi stack
 working?" feel like one tool to operators.
 
 ## When to use
@@ -24,7 +24,7 @@ working?" feel like one tool to operators.
 - Regression catch: a refactor of `ReActAgent`, the reflection
   strategy, or memory layering should not silently change which
   tools the agent picks.
-- Skill verification: a skill author runs `agentflow eval run` on
+- Skill verification: a skill author runs `yanshi eval run` on
   the skill's bundled fixtures before publishing.
 
 It is **not** suitable for:
@@ -47,7 +47,7 @@ my_eval_dataset/
     customer_export.csv
 ```
 
-The format intentionally mirrors `agentflow-rag/eval_datasets/`:
+The format intentionally mirrors `yanshi-rag/eval_datasets/`:
 JSONL keeps the file diff-friendly and append-friendly, and a
 manifest TOML lets the dataset declare defaults that every case
 inherits.
@@ -115,7 +115,7 @@ One `EvalCase` per line:
 | `max_tool_calls` | int | no | `defaults.max_tool_calls` | Maps to `RuntimeLimits::max_tool_calls`. |
 | `cost_limit_usd` | float | no | `defaults.cost_limit_usd` | Hard cap on accumulated provider cost. Run fails with `CostLimitExceeded` when crossed. |
 | `latency_limit_ms` | int | no | `defaults.latency_limit_ms` | Maps to `RuntimeLimits::timeout_ms`. |
-| `model` | string | no | `defaults.model` or skill manifest | Provider model id; honours the same lookup as `agentflow workflow run --model`. |
+| `model` | string | no | `defaults.model` or skill manifest | Provider model id; honours the same lookup as `yanshi workflow run --model`. |
 | `expected_assertions` | array | yes | — | See below. Empty array is a hard error (always-pass cases are a mistake). |
 | `notes` | string | no | — | Free-form human note. Surfaced in failure reports. |
 
@@ -200,7 +200,7 @@ If the skill has no validator declared, this assertion fails with
 
 ## Output schema
 
-`agentflow eval run <dataset>` produces one report per invocation.
+`yanshi eval run <dataset>` produces one report per invocation.
 Default output is human-readable; `--format json` emits the
 machine-readable envelope.
 
@@ -272,40 +272,40 @@ machine-readable envelope.
 | `skipped` | Case was filtered out (`--filter`, `--skill`, manifest gate, etc.). Skipped cases do not count toward pass/fail. |
 
 `stop_reason` values map 1:1 to `AgentStopReason` variants (see
-[`agentflow-agent-spi/src/runtime.rs`](../agentflow-agent-spi/src/runtime.rs))
+[`yanshi-agent-spi/src/runtime.rs`](../yanshi-agent-spi/src/runtime.rs))
 plus the new `CostLimitExceeded` value introduced by the eval
 harness when `cost_limit_usd` is crossed.
 
 ## Cross-reference with trace replay
 
 Every failed case carries a `trace_id` that resolves through the
-existing `agentflow trace replay` machinery:
+existing `yanshi trace replay` machinery:
 
 ```bash
-agentflow eval run my_dataset --format json > report.json
+yanshi eval run my_dataset --format json > report.json
 # Pick a failed case from the report:
 jq -r '.cases[] | select(.status=="failed") | .trace_id' report.json | \
-  xargs -n1 agentflow trace replay
+  xargs -n1 yanshi trace replay
 ```
 
-The eval runner writes traces under the same `AGENTFLOW_TRACE_DIR`
+The eval runner writes traces under the same `YANSHI_TRACE_DIR`
 the rest of the stack uses, so `trace replay` works without any
 extra flag plumbing. For TUI debugging, swap `replay` for `tui`.
 
 ## Reusing Flow as the eval pipeline
 
-The runner is internally a `Flow` (`agentflow-core::Flow`) with one
+The runner is internally a `Flow` (`yanshi-core::Flow`) with one
 node per case. This is a deliberate choice:
 
 - The concurrency budget is the same as everywhere else: `Flow`'s
   `FlowExecutionMode::Concurrent` with `max_concurrency = N` runs
   cases in parallel.
-- Checkpoints land in the normal `~/.agentflow/checkpoints/<run_id>`
-  tree so a long eval can be resumed via `agentflow workflow
+- Checkpoints land in the normal `~/.yanshi/checkpoints/<run_id>`
+  tree so a long eval can be resumed via `yanshi workflow
   resume-plan <eval_run_id>`.
 - Trace events emit through the existing `EventListener` chain, so
   `--otel` flags Just Work.
-- The `Flow` itself can be inspected with `agentflow workflow validate`.
+- The `Flow` itself can be inspected with `yanshi workflow validate`.
 
 Concretely, the runner constructs:
 
@@ -329,29 +329,29 @@ captured `AgentStep`s + final answer, and emits a per-case JSON row.
 
 ```bash
 # Run a dataset and print a human-readable summary
-agentflow eval run path/to/dataset
+yanshi eval run path/to/dataset
 
 # Machine-readable JSON envelope
-agentflow eval run path/to/dataset --format json --output report.json
+yanshi eval run path/to/dataset --format json --output report.json
 
 # Filter by case id glob
-agentflow eval run path/to/dataset --filter "rust-expert-*"
+yanshi eval run path/to/dataset --filter "rust-expert-*"
 
 # Force a parallelism for local debugging
-agentflow eval run path/to/dataset --parallelism 1
+yanshi eval run path/to/dataset --parallelism 1
 
 # Treat eval failure as a hard CI signal
-agentflow eval run path/to/dataset --fail-on-status failed
+yanshi eval run path/to/dataset --fail-on-status failed
 
 # Compare against a checked-in baseline (mirrors `rag eval --compare-baseline`)
-agentflow eval run path/to/dataset --compare-baseline baselines/main.json
+yanshi eval run path/to/dataset --compare-baseline baselines/main.json
 
 # Regenerate the baseline file after a deliberate change (T2.1)
-agentflow eval run path/to/dataset --dump-baseline baselines/main.json
+yanshi eval run path/to/dataset --dump-baseline baselines/main.json
 ```
 
 `--compare-baseline`/`--dump-baseline` are implemented (T2.1) via
-`agentflow_agents::eval::{EvalBaseline, compare_against_baseline}`. The
+`yanshi_agents::eval::{EvalBaseline, compare_against_baseline}`. The
 baseline JSON is three summary numbers computed over non-skipped cases
 — `success_rate`, `avg_step_count`, `avg_tool_call_count` — not a
 per-case diff. Comparison is regression-only tolerance checking (a
@@ -359,8 +359,8 @@ metric moving in the favorable direction never fails the gate), not
 RAG eval's paired significance test: a smoke-scale dataset (a handful
 of cases) doesn't have RAG eval's per-query granularity to test
 significance against. `.github/workflows/quality.yml::agent-eval-smoke`
-runs this against `agentflow-agents/eval_datasets/ci_offline` and
-`agentflow-agents/eval_baselines/ci_offline/baseline.json` on every PR.
+runs this against `yanshi-agents/eval_datasets/ci_offline` and
+`yanshi-agents/eval_baselines/ci_offline/baseline.json` on every PR.
 `--compare-baseline` and `--dump-baseline` are mutually exclusive.
 
 Exit codes:
@@ -376,7 +376,7 @@ CI runs the eval harness against the `mock` provider by default. The
 mock provider replays canned responses, so a green eval is a strict
 contract that the agent loop, memory layer, and tool dispatcher
 haven't drifted. Live provider runs are opt-in via
-`AGENTFLOW_LIVE_PROVIDER=1` and gated on the relevant API key —
+`YANSHI_LIVE_PROVIDER=1` and gated on the relevant API key —
 matching the P3.6 pattern.
 
 Reproducibility checklist for case authors:
@@ -384,7 +384,7 @@ Reproducibility checklist for case authors:
 - Pin the model id (`model = "mock-model"` in `dataset.toml`
   `[defaults]`).
 - Seed any randomness in tools (e.g. `web_search` mocks should
-  honour `AGENTFLOW_MOCK_SEED`).
+  honour `YANSHI_MOCK_SEED`).
 - Provide every external input through `inputs` or `fixtures/`,
   never via env vars.
 - Avoid `Timeout`-based assertions for non-mock runs; use
@@ -407,7 +407,7 @@ See `docs/STABILITY.md` for tier definitions.
 - `docs/AGENT_RUNTIME.md` — `AgentStep`, `AgentStopReason`,
   `RuntimeLimits` reference.
 - `docs/STABILITY.md` — what "stable" means for the assertion DSL.
-- [`agentflow-agent-spi/src/runtime.rs`](../agentflow-agent-spi/src/runtime.rs) —
+- [`yanshi-agent-spi/src/runtime.rs`](../yanshi-agent-spi/src/runtime.rs) —
   source of truth for `AgentStopReason` and `RuntimeLimits`.
-- [`agentflow-rag/src/eval/`](../agentflow-rag/src/eval/) — implementation
+- [`yanshi-rag/src/eval/`](../yanshi-rag/src/eval/) — implementation
   reference for the JSONL + manifest + runner pattern.

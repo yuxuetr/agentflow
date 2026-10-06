@@ -1,11 +1,11 @@
 # Security Profiles
 
-AgentFlow uses `AGENTFLOW_SECURITY_PROFILE` to select a coarse security
+Yanshi uses `YANSHI_SECURITY_PROFILE` to select a coarse security
 posture. The supported values are `dev`, `local`, and `production`.
 
-If the variable is unset, AgentFlow uses `local`. This preserves the current
+If the variable is unset, Yanshi uses `local`. This preserves the current
 single-user CLI/server defaults while making the active posture visible to
-operators through `agentflow doctor` and server startup logs.
+operators through `yanshi doctor` and server startup logs.
 
 ## Profile Defaults
 
@@ -23,13 +23,13 @@ operators through `agentflow doctor` and server startup logs.
 
 ## Current Wiring
 
-P1.1 defines the shared model in `agentflow-tools` and wires profile
+P1.1 defines the shared model in `yanshi-tools` and wires profile
 selection into:
 
-- `agentflow-server`: reads `AGENTFLOW_SECURITY_PROFILE`, defaults to
+- `yanshi-server`: reads `YANSHI_SECURITY_PROFILE`, defaults to
   `local`, stores the selected defaults in `AppState`, and logs the active
   profile. When the selected profile requires auth, startup fails unless
-  `AGENTFLOW_API_TOKEN` and/or `AGENTFLOW_API_TOKEN_TENANTS` is set to a
+  `YANSHI_API_TOKEN` and/or `YANSHI_API_TOKEN_TENANTS` is set to a
   non-empty value (either satisfies the requirement — see
   [DEPLOYMENT.md § Multi-tenant deployments](DEPLOYMENT.md#multi-tenant-deployments-bind-tokens-to-tenants-u11)
   for the token→tenant binding that closes cross-tenant header spoofing,
@@ -40,23 +40,23 @@ selection into:
   bind (e.g. `0.0.0.0`, what the `PORT` env var always produces) with
   no token refuses to start regardless of the nominal profile. See
   [DEPLOYMENT.md § PORT and PaaS-style public binding](DEPLOYMENT.md#port-and-paas-style-public-binding-v31).
-- `agentflow doctor`: reports the selected profile, effective defaults, and
+- `yanshi doctor`: reports the selected profile, effective defaults, and
   invalid profile warnings in text and JSON output.
 
 Server startup also accepts explicit HTTP policy overrides:
 
-- `AGENTFLOW_CORS_ALLOWED_ORIGINS`: comma-separated browser origins. In
+- `YANSHI_CORS_ALLOWED_ORIGINS`: comma-separated browser origins. In
   `production`, only these origins receive `Access-Control-Allow-Origin`.
-- `AGENTFLOW_MAX_REQUEST_BODY_BYTES`: global documented request-body budget.
-- `AGENTFLOW_MAX_WORKFLOW_SUBMIT_BYTES`: max JSON body for `POST /v1/runs`.
-- `AGENTFLOW_MAX_SKILL_RUN_BYTES`: max JSON body for
+- `YANSHI_MAX_REQUEST_BODY_BYTES`: global documented request-body budget.
+- `YANSHI_MAX_WORKFLOW_SUBMIT_BYTES`: max JSON body for `POST /v1/runs`.
+- `YANSHI_MAX_SKILL_RUN_BYTES`: max JSON body for
   `POST /v1/skills/{name}:run`.
-- `AGENTFLOW_MAX_CONCURRENT_RUNS_PER_TENANT` (V3.4): overrides
+- `YANSHI_MAX_CONCURRENT_RUNS_PER_TENANT` (V3.4): overrides
   `run_admission.max_concurrent_runs_per_tenant` — the number of
   in-process executor tasks a single tenant may have running at once
   via `POST /v1/runs`. A submission over the limit is rejected
   immediately (HTTP 429), not queued.
-- `AGENTFLOW_RUN_SUBMIT_RATE_LIMIT_PER_MINUTE` (V3.4): overrides
+- `YANSHI_RUN_SUBMIT_RATE_LIMIT_PER_MINUTE` (V3.4): overrides
   `run_admission.max_run_submissions_per_minute_per_tenant` — a
   fixed-window (60s) cap on how many runs a tenant may submit per
   minute. Both limits are per-tenant, not global; one noisy tenant
@@ -73,13 +73,13 @@ The follow-up P1 tasks continue turning these defaults into enforcement:
 `local` is intentionally the default profile. It keeps permissive CORS,
 optional auth, optional OS sandboxing, subprocess plugins, and the existing
 tool capability surface so existing local workflows continue to run. This
-includes the Helm chart (`charts/agentflow/values.yaml`'s
+includes the Helm chart (`charts/yanshi/values.yaml`'s
 `securityProfile` defaults to `local` for the same reason, U1.2) and
-`docker-compose.yml` (`AGENTFLOW_SECURITY_PROFILE` unset) — see
+`docker-compose.yml` (`YANSHI_SECURITY_PROFILE` unset) — see
 [DEPLOYMENT.md § Security profile](DEPLOYMENT.md#security-profile-u12)
 for what production deployments must set explicitly.
 
 Use `production` only when the server or daemon may be reachable by other
-users or hosts. Production mode now requires `AGENTFLOW_API_TOKEN` before the
+users or hosts. Production mode now requires `YANSHI_API_TOKEN` before the
 server starts, but it is not yet a complete security boundary until the
 remaining P1 enforcement tasks land.

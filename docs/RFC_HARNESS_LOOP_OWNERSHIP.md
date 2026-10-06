@@ -5,12 +5,12 @@
 - Created: 2026-06-11
 - Related: `docs/HARNESS_MODE.md`, `docs/ROADMAP_v2.md` §F, `docs/STABILITY.md`,
   `docs/archive/PROJECT_EVALUATION_2026-06-06.md` §3.10
-- Affected crates: `agentflow-harness` (primary), `agentflow-agents` (contract
-  change), `agentflow-server` (wiring), `agentflow-llm` (tokenizer reuse)
+- Affected crates: `yanshi-harness` (primary), `yanshi-agents` (contract
+  change), `yanshi-server` (wiring), `yanshi-llm` (tokenizer reuse)
 
 ## TL;DR
 
-`agentflow-harness` today is a **governance + post-hoc translation shell** around
+`yanshi-harness` today is a **governance + post-hoc translation shell** around
 an agent loop it does not own. It nails the control/safety half of harness
 engineering (approval, hooks, audit, redaction, fail-closed) but delegates the
 two hardest pillars — **owning the loop** and **context engineering** — to the
@@ -45,9 +45,9 @@ end-state the title asks for. Each phase ships and delivers value on its own.
 | 2b — turn-driven driver (between-turn hook) | ✅ done | `feat(harness): turn-driven driver foundation …` | `BetweenTurnHook` seam: ReActAgent invokes a caller-supplied hook (`&dyn MemoryStore`) at the top of every turn before the LLM call; threaded through `HarnessRunOptions`. The control point for caller-owned mid-run context engineering — the loop-ownership value, via a single safe insertion rather than the full loop extraction |
 | 2b — full loop inversion (LoopSession extraction) | ✅ done | series steps 1–6 (`refactor/feat(agents): … steps 1–6`) | ReActAgent's ~750-line loop extracted into `init_run` + `run_one_turn(&mut LoopState)` behind phase methods (check_turn_limits / run_turn_llm_call / check_stop_conditions / dispatch_native_tool_calls_batch / dispatch_single_tool_call). `begin_turn_driven` → `ReActLoopSession::next_turn()` lets a caller literally *drive* iteration and compact between turns via `memory()`. Done as 6 behaviour-preserving steps, each green (178 lib tests) |
 
-| §6 — harness drives the loop + context refresh + CLI | ✅ done | `feat(agents): … TurnDrivenRuntime`, `feat(harness): … drive turn-driven runtimes`, `feat(harness,cli): … context-provider refresh` | Object-safe `TurnDrivenRuntime` / `LoopSession` traits (ReActAgent impls them); `HarnessRuntime::new_turn_driven` pumps `next_turn` itself; `with_context_refresh()` re-runs the context providers between turns and injects refreshed workspace context (as a user message) + emits `memory_summary_added(layer="context_refresh")`. Exposed as `agentflow harness run --context-refresh`. Also: CLI `--context-budget` / `--token-budget` expose Phase 0/2a context engineering. |
+| §6 — harness drives the loop + context refresh + CLI | ✅ done | `feat(agents): … TurnDrivenRuntime`, `feat(harness): … drive turn-driven runtimes`, `feat(harness,cli): … context-provider refresh` | Object-safe `TurnDrivenRuntime` / `LoopSession` traits (ReActAgent impls them); `HarnessRuntime::new_turn_driven` pumps `next_turn` itself; `with_context_refresh()` re-runs the context providers between turns and injects refreshed workspace context (as a user message) + emits `memory_summary_added(layer="context_refresh")`. Exposed as `yanshi harness run --context-refresh`. Also: CLI `--context-budget` / `--token-budget` expose Phase 0/2a context engineering. |
 
-Tests at landing: agentflow-agents 178 lib + integration green; agentflow-harness 93 green; agentflow-cli 12 harness CLI tests green; agentflow-server 179 lib green; clippy clean; workspace builds.
+Tests at landing: yanshi-agents 178 lib + integration green; yanshi-harness 93 green; yanshi-cli 12 harness CLI tests green; yanshi-server 179 lib green; clippy clean; workspace builds.
 
 ## 1. Background: where we are today
 
@@ -57,7 +57,7 @@ Tests at landing: agentflow-agents 178 lib + integration green; agentflow-harnes
 single opaque `await`, then reconstructs structured events *after the fact*:
 
 ```
-// agentflow-harness/src/runtime.rs:354
+// yanshi-harness/src/runtime.rs:354
 let inner_result = self.inner.run(agent_context).await?;
 // :360
 let translated = translate_inner_events(&inner_result, &session_id, &self.seq_counter);
@@ -83,7 +83,7 @@ The root cause is the contract: `AgentRuntime::run` is the only seam, and it is
 **run-to-completion**:
 
 ```
-// agentflow-agents/src/runtime.rs:658
+// yanshi-agents/src/runtime.rs:658
 pub trait AgentRuntime: Send {
   async fn run(&mut self, context: AgentContext) -> Result<AgentRunResult, AgentRuntimeError>;
   fn runtime_name(&self) -> &'static str;
@@ -102,8 +102,8 @@ The harness is structurally blind to the loop while it runs.
   `Critical` item is dropped silently while a small `Low` item may be admitted —
   a priority inversion. No per-item truncation, no summary of dropped items.
 - Token cost is a `chars / 4` heuristic (`providers.rs:31`) even though
-  `agentflow-llm` ships a real tokenizer
-  (`agentflow_llm::tokenizer::counter_for_model`, `tokenizer.rs:209`).
+  `yanshi-llm` ships a real tokenizer
+  (`yanshi_llm::tokenizer::counter_for_model`, `tokenizer.rs:209`).
 - **No compaction.** The `MemorySummaryAdded` variant exists in the frozen
   envelope (`event.rs:87`) but the runtime **never emits it**. Long-horizon
   window management lives inside `ReActAgent` (`MemorySummaryBackend` +
@@ -151,7 +151,7 @@ touch the governance pipeline's semantics.
 
 | Option | Idea | Verdict |
 |---|---|---|
-| **A. Harness owns a brand-new loop** | Reimplement the agentic loop in `agentflow-harness` directly against `LLMClient` + `ToolRegistry` + `MemoryStore`. | **Rejected.** Duplicates `agentflow-agents`, discards ReAct/PlanExecute/Supervisors, max blast radius, destroys composability. |
+| **A. Harness owns a brand-new loop** | Reimplement the agentic loop in `yanshi-harness` directly against `LLMClient` + `ToolRegistry` + `MemoryStore`. | **Rejected.** Duplicates `yanshi-agents`, discards ReAct/PlanExecute/Supervisors, max blast radius, destroys composability. |
 | **B. Live event seam (observe)** | Keep `AgentRuntime::run`; add an optional `AgentEventSink` to `AgentContext` so the inner agent streams `AgentEvent`s as they happen. | **Accepted as Phase 1.** Additive, low-risk; fixes the epoch split and unblocks streaming. Observe-only — does not give the harness control. |
 | **C. Turn-driven control (own)** | Add a turn-boundary contract so the harness calls the inner agent one turn at a time and interleaves its own context engineering between turns. | **Accepted as Phase 2.** The real "own the loop + own context." Bigger contract change; do it after B proves the seam. |
 
@@ -163,7 +163,7 @@ Standalone, ships first, buys immediate quality.
 
 1. **Real tokenizer.** Replace `estimate_tokens` (`providers.rs:33`) and the
    budget math in `trim_to_budget` with
-   `agentflow_llm::tokenizer::counter_for_model(&ctx.model)`. Keep a heuristic
+   `yanshi_llm::tokenizer::counter_for_model(&ctx.model)`. Keep a heuristic
    fallback for unknown models (the tokenizer crate already provides
    `HeuristicCounter`).
 2. **Trim that respects priority.** Rework `trim_to_budget` (`runtime.rs:415`):
@@ -186,7 +186,7 @@ test that asserts truncation-not-drop; a `params_summary` cap test.
 ### 5.1 New trait + additive `AgentContext` field
 
 ```rust
-// agentflow-agents/src/runtime.rs
+// yanshi-agents/src/runtime.rs
 #[async_trait]
 pub trait AgentEventSink: Send + Sync {
   /// Called for every AgentEvent at the moment it is produced, before the
@@ -237,13 +237,13 @@ fast-follow; they keep working untouched until then because the field defaults t
 memory exceeds budget (`apply_memory_prompt_budget`). Emit it:
 
 ```rust
-// agentflow-agents AgentEvent (additive variant)
+// yanshi-agents AgentEvent (additive variant)
 MemorySummaryAdded { session_id, layer: String, summary: String, token_estimate: usize, timestamp }
 ```
 
 ### 5.4 Harness bridge replaces post-hoc translation
 
-Add `HarnessAgentEventBridge` in `agentflow-harness`: an `AgentEventSink` that
+Add `HarnessAgentEventBridge` in `yanshi-harness`: an `AgentEventSink` that
 maps each live `AgentEvent` → `HarnessEvent` using the *existing* translation
 logic, dispatches through the `SinkChain` with the shared `seq_counter`, and
 redacts `params_summary` exactly as `translate_inner_events` does today.
@@ -265,7 +265,7 @@ Then:
 
 ### 5.5 Server wiring
 
-`agentflow-server/src/harness_live.rs:404-422` already builds the runtime with a
+`yanshi-server/src/harness_live.rs:404-422` already builds the runtime with a
 shared seq counter and wraps the registry. It gains one line: the bridge is
 constructed against the same `SinkChain` + `seq_counter` and threaded via
 `HarnessRunOptions`. No route or DB change.
@@ -288,7 +288,7 @@ which is the prerequisite for the harness owning context engineering.
 ### 6.1 Turn-boundary contract
 
 ```rust
-// agentflow-agents
+// yanshi-agents
 #[async_trait]
 pub trait TurnDrivenRuntime: Send {
   /// Initialize a run and return a session the caller pumps one turn at a
@@ -326,7 +326,7 @@ internal loop structure; its per-turn logic is unchanged.
 ### 6.2 Harness becomes the loop owner
 
 ```rust
-// agentflow-harness, conceptual
+// yanshi-harness, conceptual
 let mut session = inner.begin(agent_context).await?;
 loop {
   // HARNESS owns the context window now:
@@ -379,7 +379,7 @@ From the harness-engineering rubric used in the evaluation:
 
 ## 8. Risks & mitigations
 
-- **Contract creep in `agentflow-agents`.** Mitigation: Phase 1 is one additive
+- **Contract creep in `yanshi-agents`.** Mitigation: Phase 1 is one additive
   `#[serde(skip)] Option` field + one trait; Phase 2's `TurnDrivenRuntime` is
   opt-in, with `run()` retained as a wrapper. No existing caller breaks.
 - **Performance of inline `emit`.** One extra `await` per event. Sinks are
@@ -395,11 +395,11 @@ From the harness-engineering rubric used in the evaluation:
 
 ## 9. Rollout plan
 
-1. **Phase 0** — one PR in `agentflow-harness` (+ `providers.rs`). No contract
+1. **Phase 0** — one PR in `yanshi-harness` (+ `providers.rs`). No contract
    change. Ship immediately.
-2. **Phase 1** — `agentflow-agents` additive seam + `ReActAgent` emit +
-   `MemorySummaryAdded` variant; `agentflow-harness` bridge; delete
-   `translate_inner_events`; `agentflow-server` one-line wiring. Fast-follow:
+2. **Phase 1** — `yanshi-agents` additive seam + `ReActAgent` emit +
+   `MemorySummaryAdded` variant; `yanshi-harness` bridge; delete
+   `translate_inner_events`; `yanshi-server` one-line wiring. Fast-follow:
    PlanExecute / supervisors adopt `record_event`.
 3. **Phase 2** — `TurnDrivenRuntime` / `LoopSession` traits; refactor
    `ReActAgent` loop to a turn driver; harness loop owner + compaction + refresh.
@@ -431,7 +431,7 @@ From the harness-engineering rubric used in the evaluation:
 ## 12. Follow-ups / backlog (post-landing, 2026-06-12)
 
 The loop-ownership + context-engineering work (§0) and the interactive
-`agentflow harness chat` REPL (multi-turn, slash-commands `/help` `/session`
+`yanshi harness chat` REPL (multi-turn, slash-commands `/help` `/session`
 `/new` `/model` `/skill`, persistent `--session` resume) both landed and
 merged. The items below are **non-blocking** polish + deferred work that fell
 out of that effort. Short-term execution is mirrored in the local `TODOs.md`
@@ -469,7 +469,7 @@ RoadMap non-goal.
    `--skill` path's memory is manifest-configured, so `/clear` must first
    locate the real backend to avoid surprising the user.
 6. **DEFERRED — multi-node server shared conversation-memory backend.** The
-   `AGENTFLOW_HARNESS_MEMORY_DB` opt-in uses a shared SQLite file (single-node
+   `YANSHI_HARNESS_MEMORY_DB` opt-in uses a shared SQLite file (single-node
    assumption, documented in `docs/DEPLOYMENT.md`). Multi-node deployments need
    a Postgres-backed or external `MemoryStore` — an architecture decision to
    make when a real multi-node need appears (see `docs/ROADMAP_v2.md` Theme B/C).

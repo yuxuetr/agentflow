@@ -1,4 +1,4 @@
-# AgentFlow 运维手册
+# Yanshi 运维手册
 
 > 面向日常使用者的排查 + 优化速查手册。目标：出问题时知道先跑哪个命令、看哪个字段；想优化时知道有哪些旋钮可以调。
 >
@@ -9,14 +9,14 @@
 ## 1. 快速自检（每次遇到问题前先跑）
 
 ```bash
-agentflow doctor --format json --profile local
+yanshi doctor --format json --profile local
 ```
 
 看 `status` 字段：`ok` / `warning` / `fail`（对应 exit code 0/1/2，可以直接用于脚本判断）。重点看这几个子字段：
 
 - [ ] `config.missing_env_vars` — 非空说明有 provider 的 API key 没配，对应模型会直接失败
 - [ ] `sandbox.enforcing` — 生产环境应为 `true`；`permissive`/`disabled` 在 `--profile production` 下会直接判 `fail`
-- [ ] `environment.agentflow_run_dir` / `agentflow_trace_dir` — 确认 run/trace 目录是你预期的路径，不是意外落到 `~/.agentflow/{runs,traces}`
+- [ ] `environment.yanshi_run_dir` / `yanshi_trace_dir` — 确认 run/trace 目录是你预期的路径，不是意外落到 `~/.yanshi/{runs,traces}`
 - [ ] `disk.*` 三项（`run_dir`/`trace_dir`/`marketplace_cache`）的 `exists`/`writable` — 目录存在但不可写是最容易被忽略的一类
 
 如果怀疑是 server/DB 问题，加 `--server <url>`（探测 `/health`，3s 超时）；如果怀疑是磁盘/权限问题，加 `--backup-check`；如果怀疑是 Skill/Plugin/MCP 声明的可执行文件缺失，加 `--check-installations`。
@@ -27,19 +27,19 @@ agentflow doctor --format json --profile local
 
 1. **先验证定义本身没问题**，不要直接假设是运行时 bug：
    ```bash
-   agentflow workflow validate <file> --format json --strict --explain-permissions
+   yanshi workflow validate <file> --format json --strict --explain-permissions
    ```
 2. **已经跑过一次** → 看 trace，而不是猜：
    ```bash
-   agentflow trace tui <run_id> --filter workflow --details
+   yanshi trace tui <run_id> --filter workflow --details
    # 或非交互：
-   agentflow trace replay <run_id> --json
+   yanshi trace replay <run_id> --json
    ```
-   trace 目录默认是 `AGENTFLOW_TRACE_DIR` 或 `~/.agentflow/traces`，跟 doctor 里 `environment.agentflow_trace_dir` 对应。
-3. **`--max-retries` 不是你以为的"节点级重试"** —— 它是整个 `Flow` 重跑 `max_retries + 1` 次，每次都受 `--timeout` 独立限制（`agentflow-cli/src/commands/workflow/run.rs`）。真正的节点级 `timeout_ms`/`max_retries` 目前**只有 `mcp` 节点类型**支持；其他节点想要"失败后重试当前步骤"要用 `while` 节点包一层循环（`condition` + `max_iterations` + `do:`）。排查思路：先分清是"整个流程要重跑"还是"某一个节点要重试"，用错级别会白调半天参数。
+   trace 目录默认是 `YANSHI_TRACE_DIR` 或 `~/.yanshi/traces`，跟 doctor 里 `environment.yanshi_trace_dir` 对应。
+3. **`--max-retries` 不是你以为的"节点级重试"** —— 它是整个 `Flow` 重跑 `max_retries + 1` 次，每次都受 `--timeout` 独立限制（`yanshi-cli/src/commands/workflow/run.rs`）。真正的节点级 `timeout_ms`/`max_retries` 目前**只有 `mcp` 节点类型**支持；其他节点想要"失败后重试当前步骤"要用 `while` 节点包一层循环（`condition` + `max_iterations` + `do:`）。排查思路：先分清是"整个流程要重跑"还是"某一个节点要重试"，用错级别会白调半天参数。
 4. **中断后想续跑**，先看计划再动手：
    ```bash
-   agentflow workflow resume-plan <run_id> --format json
+   yanshi workflow resume-plan <run_id> --format json
    ```
    重点看每个 `tool_calls[]` 项的 `idempotency`（`idempotent`/`non_idempotent`/`unknown`）和 `decision`（`replay`/`skip`/`requires_manual`）——`requires_manual` 说明这一步不能自动续跑，需要人工确认后加 `--force-replay`。
 5. **`--execution-mode concurrent` 下"卡住"但其实是假象**：`--max-concurrency` 设太大可能触发下游限流/资源竞争看起来像挂起；设太小则并发节点排队看起来像变慢。先切回 `--execution-mode serial` 复现一遍，能排除是不是并发调度的问题。
@@ -57,19 +57,19 @@ agentflow doctor --format json --profile local
 - **一直循环到 `MaxSteps`**：多半是 agent 没找到"可以给出最终答案"的路径——查 trace 里最后几步的 `Plan`/`ToolResult`，看是不是工具返回的内容本身有歧义或不完整；确认后再考虑调大 `max_iterations`/`--max-steps`，不要一上来就调大掩盖问题。
 - **`TokenBudgetExceeded`**：说明 `RuntimeLimits::token_budget`（ReAct 默认 50 000）被打满。先看是不是 `MemorySummaryStrategy::Disabled`（默认值！）在无脑塞全量历史——开 `RecentOnly` 或 `Compact` 通常比单纯调大 budget 更治本，见 [§3.1](#31-tokencost-优化)。
 - **`Verify` 步骤反复出现 `approved=false`，最后被强制放行**：说明挂了 `VerificationStrategy` 但候选答案一直不达标，`max_verification_attempts`（默认 2）耗尽后**会强制接受而不是报错**——这是设计上的优雅降级，但意味着"最终答案"不代表"verifier 认可"。排查时读 `Verify` 步骤里的 `feedback` 字段：如果 feedback 每次都合理但 agent 没改进，问题在 agent 侧（没把 feedback 当回事）；如果 feedback 本身就在无理由拒绝，问题在 verifier 策略太严。
-- **`Cancelled` 但资源没释放干净**：`AgentCancellationToken` 是协作式取消，只中断了正在 `.await` 的 in-process Tokio future；已经 `tokio::spawn`/`spawn_blocking`/FFI 出去的工作**不会**被真的打断（见 `agentflow-agent-spi/src/runtime.rs`）。如果取消后还看到副作用继续发生，先确认是不是工具内部自己 spawn 了detached task。
-- **`CostLimitExceeded`**（T1.1 起 ReAct/PlanExecute 生产运行时都会真正执行）：`RuntimeLimits::cost_limit_usd`（或 `ReActConfig`/`PlanExecuteConfig::cost_limit_usd`）设置后，运行时用 `pricing_table`（`agentflow-agents::eval::pricing::PricingTable`，同一套定价表，不是另一套）估算每次 LLM 调用的花费并累加；**默认 `pricing_table` 是全零价格表**，不配置真实单价，`cost_limit_usd` 设了也不会触发——先确认价格表配的对不对。ReAct 在下一轮 turn 顶部检查（和 `TokenBudgetExceeded` 一样有一轮延迟：真正超预算的是上一次调用，停止发生在下一次调用之前）；PlanExecute 只有一次 planner 调用，检查在该调用之后、执行计划之前。`agentflow eval run` 的 `dataset.toml::cost_limit_usd` 是独立的事后核算层（`aggregate_cost` 用自己的 `--pricing` 表重新计算并在报告里改判 `Failed`），两者可以同时生效，互不依赖。**U1.3**：`agentflow harness run`/`chat` 的 `--cost-limit-usd <f64>` flag 以及 `POST
+- **`Cancelled` 但资源没释放干净**：`AgentCancellationToken` 是协作式取消，只中断了正在 `.await` 的 in-process Tokio future；已经 `tokio::spawn`/`spawn_blocking`/FFI 出去的工作**不会**被真的打断（见 `yanshi-agent-spi/src/runtime.rs`）。如果取消后还看到副作用继续发生，先确认是不是工具内部自己 spawn 了detached task。
+- **`CostLimitExceeded`**（T1.1 起 ReAct/PlanExecute 生产运行时都会真正执行）：`RuntimeLimits::cost_limit_usd`（或 `ReActConfig`/`PlanExecuteConfig::cost_limit_usd`）设置后，运行时用 `pricing_table`（`yanshi-agents::eval::pricing::PricingTable`，同一套定价表，不是另一套）估算每次 LLM 调用的花费并累加；**默认 `pricing_table` 是全零价格表**，不配置真实单价，`cost_limit_usd` 设了也不会触发——先确认价格表配的对不对。ReAct 在下一轮 turn 顶部检查（和 `TokenBudgetExceeded` 一样有一轮延迟：真正超预算的是上一次调用，停止发生在下一次调用之前）；PlanExecute 只有一次 planner 调用，检查在该调用之后、执行计划之前。`yanshi eval run` 的 `dataset.toml::cost_limit_usd` 是独立的事后核算层（`aggregate_cost` 用自己的 `--pricing` 表重新计算并在报告里改判 `Failed`），两者可以同时生效，互不依赖。**U1.3**：`yanshi harness run`/`chat` 的 `--cost-limit-usd <f64>` flag 以及 `POST
   /v1/harness/sessions` 请求体的可选 `cost_limit_usd` 字段是这个运行时限制的 CLI/API 入口（此前只能用 Rust API `.with_cost_limit_usd(...)`）；两者都直接透传进 `RuntimeLimits`，语义和上面完全一致（同样受空定价表影响、同样有一轮检查延迟）。
 
-### 2.3 Harness Session 排查（`agentflow harness run/chat`）
+### 2.3 Harness Session 排查（`yanshi harness run/chat`）
 
 ```bash
-agentflow harness list --run-dir <dir>
-agentflow harness inspect <session_id> --run-dir <dir>
-agentflow harness replay <session_id> --filter-kind approval_requested --filter-kind approval_decided
+yanshi harness list --run-dir <dir>
+yanshi harness inspect <session_id> --run-dir <dir>
+yanshi harness replay <session_id> --filter-kind approval_requested --filter-kind approval_decided
 ```
 
-run-dir 解析优先级（弄错目录是最常见的"查不到 session"原因）：`--run-dir` 显式指定 → `AGENTFLOW_RUN_DIR` → `AGENTFLOW_TRACE_DIR` → `~/.agentflow/runs`。session 文件实际落在 `<root>/harness/sessions/<session_id>.jsonl`。
+run-dir 解析优先级（弄错目录是最常见的"查不到 session"原因）：`--run-dir` 显式指定 → `YANSHI_RUN_DIR` → `YANSHI_TRACE_DIR` → `~/.yanshi/runs`。session 文件实际落在 `<root>/harness/sessions/<session_id>.jsonl`。
 
 - **卡在 `approval_requested` 没有对应 `approval_decided`**：先看 `--approve` 模式——`cli` 模式需要交互终端输入，非交互环境（CI、后台任务）用它会看起来"永远卡住"；`auto-deny` 模式下第一次 deny 会 `DenyAndStop` 直接终止后续所有工具调用，如果发现大量工具都没跑，先查是不是被第一个 deny 连坐了。
 - **`memory_summary_added` 频繁出现**：说明 `--context-budget`/`--token-budget` 被打满、正在持续压缩上下文——如果压缩后信息丢失导致 agent "失忆"，考虑调大 budget 或用 `--no-default-context` 减少默认注入的 AGENTS.md/TODOs.md 等 provider 内容。
@@ -77,19 +77,19 @@ run-dir 解析优先级（弄错目录是最常见的"查不到 session"原因�
 
 ### 2.4 LLM Provider 问题
 
-- `agentflow llm models --format json`：确认模型确实注册了、`vendor` 对不对。
-- `agentflow doctor` 的 `config.missing_env_vars`：最常见的"provider 报错"根因就是这个字段非空。
-- **`.agentflow/.env` 加载顺序**：进程环境变量优先于文件内容（dotenvy 默认行为）——如果你本地导出了一个旧的/错的 key，`.env` 文件里配对的新 key 不会生效，容易误以为改配置没生效。
-- **Mock provider 排查陷阱**：`AGENTFLOW_MOCK_RESPONSES`/`AGENTFLOW_MOCK_TOOL_CALLS` 是进程级环境变量，测试/调试脚本忘记清理会导致"明明改了代码，行为却没变"——这类诡异现象先 `env | grep AGENTFLOW_MOCK` 排除干扰。
+- `yanshi llm models --format json`：确认模型确实注册了、`vendor` 对不对。
+- `yanshi doctor` 的 `config.missing_env_vars`：最常见的"provider 报错"根因就是这个字段非空。
+- **`.yanshi/.env` 加载顺序**：进程环境变量优先于文件内容（dotenvy 默认行为）——如果你本地导出了一个旧的/错的 key，`.env` 文件里配对的新 key 不会生效，容易误以为改配置没生效。
+- **Mock provider 排查陷阱**：`YANSHI_MOCK_RESPONSES`/`YANSHI_MOCK_TOOL_CALLS` 是进程级环境变量，测试/调试脚本忘记清理会导致"明明改了代码，行为却没变"——这类诡异现象先 `env | grep YANSHI_MOCK` 排除干扰。
 
 ### 2.5 MCP 工具问题
 
 先脱离 agent 单独测通 MCP server，不要一上来就在完整 agent 循环里排查：
 
 ```bash
-agentflow mcp list-tools <server_command...> --format json
-agentflow mcp call-tool <server_command...> -t <tool> -p '<json_params>'
-agentflow mcp config list --format json   # 确认 mcp.toml 来源解析对不对
+yanshi mcp list-tools <server_command...> --format json
+yanshi mcp call-tool <server_command...> -t <tool> -p '<json_params>'
+yanshi mcp config list --format json   # 确认 mcp.toml 来源解析对不对
 ```
 
 如果是通过 Skill 声明的 MCP server，检查 `skill.toml [security]` 里的 `mcp_server_allowlist`/`mcp_command_allowlist`/`mcp_env_allowlist`（后两者默认白名单很窄：命令默认只允许 `python`/`python3`/`node`/`npx`/`uvx`，env 默认**一个都不转发**）——很多"MCP server 起不来"其实是被这层默认拒绝挡住了。
@@ -99,28 +99,28 @@ agentflow mcp config list --format json   # 确认 mcp.toml 来源解析对不�
 - 看具体是哪个工具调用被拒：`AgentEvent::ToolCapabilityDecision` 里的 `denied[]`/`deny_reason`。
 - **踩坑高发点**：`SandboxPolicy::allowed_paths`/`allowed_commands` 为空列表时语义是"全部拒绝"，不是"不限制"（这是有意为之的安全默认值，早期版本反过来过）；要放开必须显式配置列表或设 `allow_all_paths`/`allow_all_commands`。`allowed_domains` 则相反——空列表默认允许所有域名，是非对称设计，配置时容易搞混方向。
 - 对照 [§5.3 SecurityProfile 差异表](#53-securityprofile-差异表) 确认当前 profile（`dev`/`local`/`production`）下的默认权限集是不是符合预期，很多"本地能跑、线上跑不了"就是 profile 差异导致的权限收紧。
-- `agentflow doctor` 的 `sandbox.backend`/`sandbox.enforcement`（`enforcing`/`permissive`/`disabled`）——`permissive` 通常代表这台机器上沙箱二进制缺失或平台不支持，是配置问题而非代码问题。
+- `yanshi doctor` 的 `sandbox.backend`/`sandbox.enforcement`（`enforcing`/`permissive`/`disabled`）——`permissive` 通常代表这台机器上沙箱二进制缺失或平台不支持，是配置问题而非代码问题。
 
 ### 2.7 Checkpoint / Resume 问题
 
-同 [§2.1 第 4 点](#21-workflowdag-跑挂--失败--结果不对)：先 `resume-plan` 看计划,不要直接 rerun。`--checkpoint-dir` 默认 `~/.agentflow/checkpoints`。
+同 [§2.1 第 4 点](#21-workflowdag-跑挂--失败--结果不对)：先 `resume-plan` 看计划,不要直接 rerun。`--checkpoint-dir` 默认 `~/.yanshi/checkpoints`。
 
-### 2.8 Server / DB 问题（用了 `agentflow serve`）
+### 2.8 Server / DB 问题（用了 `yanshi serve`）
 
 ```bash
-agentflow doctor --server <url> --format json   # 探测 /health
-agentflow serve --check                          # 就地读性检查，不绑定端口
+yanshi doctor --server <url> --format json   # 探测 /health
+yanshi serve --check                          # 就地读性检查，不绑定端口
 ```
 
-清理/备份相关：`agentflow cleanup --dry-run` 先看会删什么再真删；`agentflow backup -o <dir> --dry-run` 同理。两者都支持 `--database-url`/`AGENTFLOW_RUN_DIR`/`AGENTFLOW_TRACE_DIR` 覆盖。
+清理/备份相关：`yanshi cleanup --dry-run` 先看会删什么再真删；`yanshi backup -o <dir> --dry-run` 同理。两者都支持 `--database-url`/`YANSHI_RUN_DIR`/`YANSHI_TRACE_DIR` 覆盖。
 
 ### 2.9 RAG 检索质量问题
 
 先脱离 agent 单独测检索本身，不要怀疑到 agent 循环上：
 
 ```bash
-agentflow rag ops search --qdrant-url <url> -c <collection> -q "<query>" --rerank
-agentflow rag eval -d <dataset_dir> -r hybrid --compare-baseline <path>
+yanshi rag ops search --qdrant-url <url> -c <collection> -q "<query>" --rerank
+yanshi rag eval -d <dataset_dir> -r hybrid --compare-baseline <path>
 ```
 
 `eval --compare-baseline` 会做配对符号检验（paired sign test），比单看 Recall/nDCG 数字更能判断"这次调整是不是真的有效还是噪声"。
@@ -131,7 +131,7 @@ agentflow rag eval -d <dataset_dir> -r hybrid --compare-baseline <path>
 
 - [ ] **默认是 `MemorySummaryStrategy::Disabled`**（全量历史塞进每次 prompt）——多轮对话/长任务优先切到 `RecentOnly`（简单、可预测）或 `Compact`（token 占用最省，但依赖摘要质量）。
 - [ ] 分清两层 budget：`RuntimeLimits::token_budget`（硬限制，超了直接 `TokenBudgetExceeded` 停止）vs `ReActConfig::memory_prompt_token_budget`（软限制，配合 summary 策略压缩而不是停止）——只调硬限制只会让 agent 更早报错,不会让它更省。
-- [ ] 配 `pricing.yml`（`AGENTFLOW_PRICING_TABLE` 或 `~/.agentflow/pricing.yml`）跑 `agentflow eval run`，用真实 `input_per_1k`/`output_per_1k` 而不是拍脑袋估算模型选型的成本差异。
+- [ ] 配 `pricing.yml`（`YANSHI_PRICING_TABLE` 或 `~/.yanshi/pricing.yml`）跑 `yanshi eval run`，用真实 `input_per_1k`/`output_per_1k` 而不是拍脑袋估算模型选型的成本差异。
 - [ ] 长期看用 `AgentEvent::LlmCallCompleted` 里的 `prompt_tokens`/`completion_tokens`/`duration_ms` 搭自己的仪表盘——注意这俩字段是 `Option`,`None` 代表"未知"不是 0,聚合时别当零处理。
 
 ### 3.2 并发 / 吞吐 优化
@@ -153,31 +153,31 @@ agentflow rag eval -d <dataset_dir> -r hybrid --compare-baseline <path>
 
 ### 3.5 Trace / 可观测性开销
 
-- [ ] `AGENTFLOW_TRACE_DIR` 会持续增长,定期 `agentflow cleanup`（可先 `--dry-run`）或 `agentflow backup` 后清理,别等磁盘写满了才发现。
-- [ ] 排查性能问题时 trace 本身是免费的观测手段（不用额外插桩）,优先用 `agentflow trace tui --filter tool` 定位慢的具体是哪个工具调用,而不是猜。
+- [ ] `YANSHI_TRACE_DIR` 会持续增长,定期 `yanshi cleanup`（可先 `--dry-run`）或 `yanshi backup` 后清理,别等磁盘写满了才发现。
+- [ ] 排查性能问题时 trace 本身是免费的观测手段（不用额外插桩）,优先用 `yanshi trace tui --filter tool` 定位慢的具体是哪个工具调用,而不是猜。
 
 ## 4. 命令速查表
 
 | 场景 | 命令 |
 | --- | --- |
-| 每日健康检查 | `agentflow doctor --format json --profile local` |
-| 生产环境健康检查 | `agentflow doctor --format json --profile production --server <url> --backup-check --check-installations` |
-| 验证 workflow 定义 | `agentflow workflow validate <file> --format json --strict --explain-permissions` |
-| 干跑不执行 | `agentflow workflow run <file> --dry-run` |
-| 并发执行 | `agentflow workflow run <file> --execution-mode concurrent --max-concurrency <N>` |
-| 看某次运行的 trace | `agentflow trace tui <run_id> --filter workflow --details` |
-| 断点续跑评估 | `agentflow workflow resume-plan <run_id> --format json` |
-| LLM 生成计划再执行（沙箱工具） | `agentflow workflow dynamic --goal "<goal>" -m <model> --allow-path <p> --allow-domain <d> --dry-run` |
-| 起一个 Harness 会话 | `agentflow harness run "<input>" --skill <path> --approve cli --output stream-json` |
-| 列出 Harness 会话 | `agentflow harness list --run-dir <dir>` |
-| 查看 Harness 会话事件 | `agentflow harness replay <session_id> --filter-kind approval_requested` |
-| 恢复 Harness 会话 | `agentflow harness resume <session_id>` |
-| 测试一个 MCP server | `agentflow mcp list-tools <cmd...> --format json` |
-| 检查已注册模型 | `agentflow llm models --format json` |
-| 校验 Skill | `agentflow skill validate <dir>` / `agentflow skill inspect <dir> --explain-permissions` |
-| RAG 检索质量对比 | `agentflow rag eval -d <dataset> -r hybrid --compare-baseline <path>` |
-| Trace/Run 目录清理 | `agentflow cleanup --dry-run` → 确认后去掉 `--dry-run` |
-| 全量备份 | `agentflow backup -o <dir> --dry-run` → 确认后去掉 `--dry-run` |
+| 每日健康检查 | `yanshi doctor --format json --profile local` |
+| 生产环境健康检查 | `yanshi doctor --format json --profile production --server <url> --backup-check --check-installations` |
+| 验证 workflow 定义 | `yanshi workflow validate <file> --format json --strict --explain-permissions` |
+| 干跑不执行 | `yanshi workflow run <file> --dry-run` |
+| 并发执行 | `yanshi workflow run <file> --execution-mode concurrent --max-concurrency <N>` |
+| 看某次运行的 trace | `yanshi trace tui <run_id> --filter workflow --details` |
+| 断点续跑评估 | `yanshi workflow resume-plan <run_id> --format json` |
+| LLM 生成计划再执行（沙箱工具） | `yanshi workflow dynamic --goal "<goal>" -m <model> --allow-path <p> --allow-domain <d> --dry-run` |
+| 起一个 Harness 会话 | `yanshi harness run "<input>" --skill <path> --approve cli --output stream-json` |
+| 列出 Harness 会话 | `yanshi harness list --run-dir <dir>` |
+| 查看 Harness 会话事件 | `yanshi harness replay <session_id> --filter-kind approval_requested` |
+| 恢复 Harness 会话 | `yanshi harness resume <session_id>` |
+| 测试一个 MCP server | `yanshi mcp list-tools <cmd...> --format json` |
+| 检查已注册模型 | `yanshi llm models --format json` |
+| 校验 Skill | `yanshi skill validate <dir>` / `yanshi skill inspect <dir> --explain-permissions` |
+| RAG 检索质量对比 | `yanshi rag eval -d <dataset> -r hybrid --compare-baseline <path>` |
+| Trace/Run 目录清理 | `yanshi cleanup --dry-run` → 确认后去掉 `--dry-run` |
+| 全量备份 | `yanshi backup -o <dir> --dry-run` → 确认后去掉 `--dry-run` |
 
 ## 5. 关键参考表
 
@@ -225,14 +225,14 @@ agentflow rag eval -d <dataset_dir> -r hybrid --compare-baseline <path>
 
 | 变量 | 作用 |
 | --- | --- |
-| `AGENTFLOW_RUN_DIR` | Workflow/Harness 运行产物根目录 |
-| `AGENTFLOW_TRACE_DIR` | Trace 目录；也是 Harness run-dir 解析的第 3 优先级兜底 |
-| `AGENTFLOW_API_TOKEN` | Server 认证 Bearer token |
-| `AGENTFLOW_SECURITY_PROFILE` | `dev`/`local`/`production` |
-| `AGENTFLOW_MODELS_CONFIG` | 覆盖 `models.yml` 路径 |
-| `AGENTFLOW_MCP_CONFIG` | 覆盖 `mcp.toml` 路径 |
-| `AGENTFLOW_PRICING_TABLE` | eval harness 成本表路径 |
-| `AGENTFLOW_MOCK_RESPONSES` / `AGENTFLOW_MOCK_TOOL_CALLS` | Mock provider 排队响应（**调试/CI 环境记得清理，否则会污染后续运行**） |
+| `YANSHI_RUN_DIR` | Workflow/Harness 运行产物根目录 |
+| `YANSHI_TRACE_DIR` | Trace 目录；也是 Harness run-dir 解析的第 3 优先级兜底 |
+| `YANSHI_API_TOKEN` | Server 认证 Bearer token |
+| `YANSHI_SECURITY_PROFILE` | `dev`/`local`/`production` |
+| `YANSHI_MODELS_CONFIG` | 覆盖 `models.yml` 路径 |
+| `YANSHI_MCP_CONFIG` | 覆盖 `mcp.toml` 路径 |
+| `YANSHI_PRICING_TABLE` | eval harness 成本表路径 |
+| `YANSHI_MOCK_RESPONSES` / `YANSHI_MOCK_TOOL_CALLS` | Mock provider 排队响应（**调试/CI 环境记得清理，否则会污染后续运行**） |
 
 ## 6. 相关文档索引
 

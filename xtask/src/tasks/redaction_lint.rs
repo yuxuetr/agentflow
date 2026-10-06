@@ -1,15 +1,15 @@
-//! `redaction-lint` (Q5.2) — grep every `agentflow-*/src/**/*.rs` for
+//! `redaction-lint` (Q5.2) — grep every `yanshi-*/src/**/*.rs` for
 //! `(debug|info|warn|error)!(... danger = %text, ...)` patterns
 //! that interpolate raw user prompt / response / content / body /
 //! params into a log macro without going through
-//! `agentflow_tracing::redaction` or `prompt_fingerprint`. Backs
+//! `yanshi_tracing::redaction` or `prompt_fingerprint`. Backs
 //! the Q5.2 workspace redaction audit.
 //!
-//! Walks `agentflow-*/src/**/*.rs` looking for `tracing::*!` macro calls
+//! Walks `yanshi-*/src/**/*.rs` looking for `tracing::*!` macro calls
 //! (also bare `debug!` / `info!` / `warn!` / `error!`) that interpolate raw
 //! user-supplied data — prompts, LLM responses, request/response bodies,
 //! tool params, chat content — without going through
-//! `agentflow_tracing::redaction` or `agentflow_llm::prompt_fingerprint`.
+//! `yanshi_tracing::redaction` or `yanshi_llm::prompt_fingerprint`.
 //!
 //! The grammar of a "bad" call is intentionally narrow:
 //!   (debug|info|warn|error)!(... <danger> = (%|?) ...)
@@ -72,7 +72,7 @@ pub(crate) fn redaction_lint_at(
   let mut crate_dirs: Vec<PathBuf> = Vec::new();
   for entry in entries.flatten() {
     let name = entry.file_name().to_string_lossy().into_owned();
-    if name.starts_with("agentflow-") && entry.path().is_dir() {
+    if name.starts_with("yanshi-") && entry.path().is_dir() {
       let src = entry.path().join("src");
       if src.is_dir() {
         crate_dirs.push(src);
@@ -110,7 +110,7 @@ pub(crate) fn redaction_lint_at(
   } else {
     let _ = writeln!(
       stderr,
-      "\nredaction-lint: {} hit(s); see `agentflow-tracing::redaction::redact_text/value` or `agentflow_llm::prompt_fingerprint` for the canonical helpers. Suppress a false-positive with `// allow-redaction-lint: <reason>` on the same line.",
+      "\nredaction-lint: {} hit(s); see `yanshi-tracing::redaction::redact_text/value` or `yanshi_llm::prompt_fingerprint` for the canonical helpers. Suppress a false-positive with `// allow-redaction-lint: <reason>` on the same line.",
       hits.len()
     );
     bail!("redaction-lint failed: {} hit(s)", hits.len());
@@ -260,7 +260,7 @@ mod redaction_lint_tests {
   fn allow_redaction_lint_comment_suppresses_hit() {
     let dir = TempDir::new().unwrap();
     let workspace = dir.path();
-    let crate_src = workspace.join("agentflow-fake").join("src");
+    let crate_src = workspace.join("yanshi-fake").join("src");
     fs::create_dir_all(&crate_src).unwrap();
     fs::write(
       crate_src.join("lib.rs"),
@@ -291,7 +291,7 @@ mod redaction_lint_tests {
   fn green_run_emits_ok_summary() {
     let dir = TempDir::new().unwrap();
     let workspace = dir.path();
-    let crate_src = workspace.join("agentflow-clean").join("src");
+    let crate_src = workspace.join("yanshi-clean").join("src");
     fs::create_dir_all(&crate_src).unwrap();
     fs::write(
       crate_src.join("lib.rs"),

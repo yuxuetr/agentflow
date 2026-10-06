@@ -1,11 +1,11 @@
 # Workflow Debugging Guide
 
 **Status**: ✅ Implemented (v0.2.0)
-**Module**: `agentflow-cli::commands::workflow::debug`
+**Module**: `yanshi-cli::commands::workflow::debug`
 
 ## Overview
 
-AgentFlow provides comprehensive debugging tools to help you inspect, analyze, and validate workflows before execution. The `workflow debug` command offers multiple inspection modes to understand workflow structure, dependencies, and execution plans.
+Yanshi provides comprehensive debugging tools to help you inspect, analyze, and validate workflows before execution. The `workflow debug` command offers multiple inspection modes to understand workflow structure, dependencies, and execution plans.
 
 ## Features
 
@@ -20,17 +20,17 @@ AgentFlow provides comprehensive debugging tools to help you inspect, analyze, a
 
 ```bash
 # Show all debug information
-agentflow workflow debug my_workflow.yml
+yanshi workflow debug my_workflow.yml
 
 # Specific analysis modes
-agentflow workflow debug my_workflow.yml --visualize
-agentflow workflow debug my_workflow.yml --validate
-agentflow workflow debug my_workflow.yml --analyze
-agentflow workflow debug my_workflow.yml --plan
-agentflow workflow debug my_workflow.yml --dry-run
+yanshi workflow debug my_workflow.yml --visualize
+yanshi workflow debug my_workflow.yml --validate
+yanshi workflow debug my_workflow.yml --analyze
+yanshi workflow debug my_workflow.yml --plan
+yanshi workflow debug my_workflow.yml --dry-run
 
 # Combine flags
-agentflow workflow debug my_workflow.yml --visualize --plan --verbose
+yanshi workflow debug my_workflow.yml --visualize --plan --verbose
 ```
 
 ## Command Reference
@@ -38,7 +38,7 @@ agentflow workflow debug my_workflow.yml --visualize --plan --verbose
 ### Basic Usage
 
 ```bash
-agentflow workflow debug <workflow_file> [FLAGS]
+yanshi workflow debug <workflow_file> [FLAGS]
 ```
 
 ### Flags
@@ -61,7 +61,7 @@ agentflow workflow debug <workflow_file> [FLAGS]
 Validates workflow configuration and detects common issues:
 
 ```bash
-agentflow workflow debug my_workflow.yml --validate
+yanshi workflow debug my_workflow.yml --validate
 ```
 
 **Checks for**:
@@ -95,7 +95,7 @@ Node types summary:
 Displays workflow structure as a text-based tree:
 
 ```bash
-agentflow workflow debug my_workflow.yml --visualize
+yanshi workflow debug my_workflow.yml --visualize
 ```
 
 **Shows**:
@@ -132,7 +132,7 @@ Dependencies:
 Analyzes workflow complexity and structure:
 
 ```bash
-agentflow workflow debug my_workflow.yml --analyze
+yanshi workflow debug my_workflow.yml --analyze
 ```
 
 **Metrics Provided**:
@@ -176,7 +176,7 @@ Node Type Distribution:
 Shows how the workflow will execute with parallelism information:
 
 ```bash
-agentflow workflow debug my_workflow.yml --plan
+yanshi workflow debug my_workflow.yml --plan
 ```
 
 **Shows**:
@@ -217,7 +217,7 @@ Maximum parallelism: 2
 Simulates workflow execution without actually running nodes:
 
 ```bash
-agentflow workflow debug my_workflow.yml --dry-run
+yanshi workflow debug my_workflow.yml --dry-run
 ```
 
 **Shows**:
@@ -261,7 +261,7 @@ Simulating workflow execution: AI Research Assistant
 Before running a complex workflow, validate its configuration:
 
 ```bash
-agentflow workflow debug production_pipeline.yml --validate
+yanshi workflow debug production_pipeline.yml --validate
 ```
 
 This catches:
@@ -275,7 +275,7 @@ This catches:
 Analyze workflow to maximize parallel execution:
 
 ```bash
-agentflow workflow debug data_pipeline.yml --analyze --plan
+yanshi workflow debug data_pipeline.yml --analyze --plan
 ```
 
 Look for:
@@ -288,7 +288,7 @@ Look for:
 Visualize large or unfamiliar workflows:
 
 ```bash
-agentflow workflow debug complex_workflow.yml --visualize --verbose
+yanshi workflow debug complex_workflow.yml --visualize --verbose
 ```
 
 Quickly understand:
@@ -301,7 +301,7 @@ Quickly understand:
 When a workflow fails or behaves unexpectedly:
 
 ```bash
-agentflow workflow debug failing_workflow.yml --analyze --dry-run --verbose
+yanshi workflow debug failing_workflow.yml --analyze --dry-run --verbose
 ```
 
 Identify:
@@ -315,28 +315,28 @@ Identify:
 
 ```bash
 # Validate and show structure
-agentflow workflow debug workflow.yml --validate --visualize
+yanshi workflow debug workflow.yml --validate --visualize
 ```
 
 ### Performance Analysis
 
 ```bash
 # Analyze parallelism and bottlenecks
-agentflow workflow debug workflow.yml --analyze --plan --verbose
+yanshi workflow debug workflow.yml --analyze --plan --verbose
 ```
 
 ### Pre-production Verification
 
 ```bash
 # Comprehensive check before deployment
-agentflow workflow debug workflow.yml
+yanshi workflow debug workflow.yml
 ```
 
 ### Development Workflow
 
 ```bash
 # Quick validation during development
-agentflow workflow debug workflow.yml --validate --plan
+yanshi workflow debug workflow.yml --validate --plan
 ```
 
 ## Validation Error Examples
@@ -375,7 +375,7 @@ agentflow workflow debug workflow.yml --validate --plan
 Always validate workflows before execution:
 
 ```bash
-agentflow workflow debug workflow.yml --validate
+yanshi workflow debug workflow.yml --validate
 ```
 
 ### 2. Use Verbose Mode for Details
@@ -383,7 +383,7 @@ agentflow workflow debug workflow.yml --validate
 When debugging issues, use verbose mode:
 
 ```bash
-agentflow workflow debug workflow.yml --verbose
+yanshi workflow debug workflow.yml --verbose
 ```
 
 ### 3. Optimize for Parallelism
@@ -391,7 +391,7 @@ agentflow workflow debug workflow.yml --verbose
 Review execution plans to identify parallelism opportunities:
 
 ```bash
-agentflow workflow debug workflow.yml --plan --analyze
+yanshi workflow debug workflow.yml --plan --analyze
 ```
 
 Look for bottlenecks and restructure if needed.
@@ -401,7 +401,7 @@ Look for bottlenecks and restructure if needed.
 For large workflows, check complexity metrics:
 
 ```bash
-agentflow workflow debug large_workflow.yml --analyze
+yanshi workflow debug large_workflow.yml --analyze
 ```
 
 Consider splitting if:
@@ -414,7 +414,7 @@ Consider splitting if:
 Generate visualizations for documentation:
 
 ```bash
-agentflow workflow debug workflow.yml --visualize > docs/workflow_structure.txt
+yanshi workflow debug workflow.yml --visualize > docs/workflow_structure.txt
 ```
 
 ## Integration with CI/CD
@@ -432,12 +432,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - name: Install AgentFlow
-        run: cargo install agentflow-cli
+      - name: Install Yanshi
+        run: cargo install yanshi-cli
       - name: Validate Workflows
         run: |
           for workflow in workflows/*.yml; do
-            agentflow workflow debug "$workflow" --validate
+            yanshi workflow debug "$workflow" --validate
           done
 ```
 
@@ -448,7 +448,7 @@ jobs:
 # .git/hooks/pre-commit
 
 for workflow in workflows/*.yml; do
-  if ! agentflow workflow debug "$workflow" --validate > /dev/null 2>&1; then
+  if ! yanshi workflow debug "$workflow" --validate > /dev/null 2>&1; then
     echo "❌ Workflow validation failed: $workflow"
     exit 1
   fi
@@ -469,7 +469,7 @@ If no output is shown:
 Use verbose mode for more details:
 
 ```bash
-agentflow workflow debug workflow.yml --validate --verbose
+yanshi workflow debug workflow.yml --validate --verbose
 ```
 
 ### Performance Issues
@@ -484,7 +484,7 @@ For very large workflows (>100 nodes), consider:
 The debug functionality can also be used programmatically:
 
 ```rust
-use agentflow_cli::commands::workflow::debug;
+use yanshi_cli::commands::workflow::debug;
 
 // Debug a workflow
 debug::execute(

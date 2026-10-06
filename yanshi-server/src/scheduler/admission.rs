@@ -1,0 +1,1012 @@
+//! P5.5 — worker admission policy.
+//!
+//! The control plane consults a [`WorkerAdmissionPolicy`] before
+//! letting a worker claim tasks, report results, or heartbeat. The
+//! policy decides three orthogonal questions:
+//!
+//! 1. **Identity** — is this worker on the allowlist? If a worker is
+//!    not in `allowed_workers` it is rejected with
+//!    [`AdmissionError::UnknownWorker`].
+//! 2. **Credential** — if the worker has a pre-shared-key entry in
+//!    `pre_shared_keys`, does the presented token match one of the
+//!    valid PSKs for that worker? PSKs are stored as a `HashSet` per
+//!    worker to support token rotation (overlap-add-then-remove): an
+//!    operator adds a new token, the worker rolls over, then the
+//!    operator removes the old token. In-flight tasks survive the
+//!    rotation because admission is checked per-call, not per-task.
+//! 3. **Capacity** — does admitting this worker / this claim push the
+//!    fleet past `max_workers` or this worker past
+//!    `max_concurrent_tasks_per_worker`?
+//!
+//! Stability tier: **experimental**. The pre-shared-key flavour ships
+//! with v0.4.0 as a hardening building block. Signed JWT identity is
+//! intentionally deferred until the wider auth story (single signing
+//! authority, key rotation, audience scoping) stabilizes.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use thiserror::Error;
+use tokio::sync::Mutex;
+use uuid::Uuid;
+use yanshi_tools::SecurityProfile;
+
+use super::jwt::verify_worker_jwt_at;
+use super::{
+  JwtPolicy, SchedulerError, WorkerControlPlane, WorkerHeartbeat, WorkerId, WorkerProtocol,
+  WorkerTask, WorkerTaskResult,
+};
+
+/// Pluggable thin shim around the JWT verifier so the policy layer
+/// doesn't depend on the `verify_worker_jwt_at` symbol directly. Lets
+/// future test doubles intercept the call site without a feature
+/// gate.
+/// Q3.4.2: constant-time byte slice comparison. Returns `true` iff `a == b`,
+/// without short-circuiting on the first mismatched byte — equal-length inputs
+/// take the same number of CPU cycles whether they match or not. Mirrors
+/// `src/auth.rs::constant_time_eq` so the worker PSK path matches the bearer
+/// token path. Length-mismatch is allowed to return immediately because the
+/// length is not a secret.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+  if a.len() != b.len() {
+    return false;
+  }
+  let mut diff: u8 = 0;
+  for (x, y) in a.iter().zip(b.iter()) {
+    diff |= x ^ y;
+  }
+  diff == 0
+}
+
+fn verify_worker_jwt_for_check(
+  token: &str,
+  policy: &JwtPolicy,
+  worker_id: &str,
+  now_secs: i64,
+) -> Result<(), super::jwt::JwtVerifyError> {
+  verify_worker_jwt_at(token, policy, worker_id, now_secs).map(|_| ())
+}
+
+/// Reasons the control plane may reject a worker call.
+///
+/// `AdmissionError` is not transport-aware on purpose: each adapter
+/// (gRPC, in-memory) maps these variants to its own wire shape (e.g.
+/// `tonic::Status::permission_denied` for the gRPC surface).
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum AdmissionError {
+  #[error("worker '{worker_id}' is not on the admission allowlist")]
+  UnknownWorker { worker_id: String },
+  #[error("worker '{worker_id}' did not present a credential, but one is required")]
+  MissingCredential { worker_id: String },
+  /// `reason` is the specific verifier message ("psk did not match
+  /// any rotation entry", "token expired at …", "token issuer
+  /// mismatch …", etc.). The transport adapter forwards it to
+  /// operators as a `tonic::Status::permission_denied` detail so the
+  /// gateway logs identify *why* a token was rejected, not just that
+  /// it was. The message is intentionally generic at the credential
+  /// level (no token fragments) — JWT internals appear in the JWT
+  /// verifier's own error chain, not here.
+  #[error("worker '{worker_id}' presented an invalid credential: {reason}")]
+  InvalidCredential { worker_id: String, reason: String },
+  #[error("max worker fleet size reached ({max})")]
+  WorkerFleetExhausted { max: usize },
+  #[error("worker '{worker_id}' exceeded its concurrent-task quota ({max})")]
+  WorkerQuotaExhausted { worker_id: String, max: u32 },
+}
+
+/// T0.2: startup-time configuration error from
+/// [`WorkerAdmissionPolicy::for_profile`]. Distinct from
+/// [`AdmissionError`], which is a per-call rejection — this fires once,
+/// before the control plane accepts any connections.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum AdmissionConfigError {
+  #[error(
+    "worker admission requires at least one of allowed_workers / pre_shared_keys / jwt to be configured when {} is 'production'",
+    yanshi_tools::SECURITY_PROFILE_ENV
+  )]
+  MissingCredentialConfig { profile: SecurityProfile },
+}
+
+/// Credential a worker presents on every call.
+///
+/// The token is optional; whether one is required depends on the
+/// per-worker PSK configuration. A `None` token against a worker that
+/// has any PSK entries is rejected with
+/// [`AdmissionError::MissingCredential`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerCredential {
+  pub worker_id: WorkerId,
+  pub token: Option<String>,
+}
+
+impl WorkerCredential {
+  pub fn new(worker_id: WorkerId, token: Option<String>) -> Self {
+    Self { worker_id, token }
+  }
+
+  /// Convenience: build a credential with no token presented.
+  pub fn anonymous(worker_id: WorkerId) -> Self {
+    Self {
+      worker_id,
+      token: None,
+    }
+  }
+}
+
+/// Admission policy consulted by [`WorkerControlPlane`] on every call.
+///
+/// All fields default to "no constraint" so a brand-new policy admits
+/// every worker — that's the dev / single-process path the existing
+/// tests rely on.
+///
+/// The credential flavour is per-worker: a worker may use **PSK** (in
+/// [`Self::pre_shared_keys`]) or **JWT** (in [`Self::jwt_workers`])
+/// but not both. A worker in neither set is anonymous — the existing
+/// dev / single-process default. See `jwt.rs` for the JWT semantics
+/// (issuer / audience / key rotation / leeway).
+#[derive(Debug, Clone, Default)]
+pub struct WorkerAdmissionPolicy {
+  /// If `Some`, only these worker IDs may join. `None` = any valid
+  /// worker id (the dev / single-process default).
+  pub allowed_workers: Option<HashSet<WorkerId>>,
+  /// Per-worker PSK rotation table. Each entry is a set so that
+  /// `add new token → flip worker → remove old token` works without
+  /// dropping in-flight tasks. Workers absent from this map are not
+  /// required to present a token *unless* they are in
+  /// [`Self::jwt_workers`].
+  pub pre_shared_keys: HashMap<WorkerId, HashSet<String>>,
+  /// Global JWT verification config (issuer / audience / key pool /
+  /// leeway). When `Some`, workers listed in [`Self::jwt_workers`]
+  /// present their token as a JWT and the control plane verifies it
+  /// against this policy.
+  pub jwt: Option<JwtPolicy>,
+  /// Worker IDs that must authenticate with a JWT against
+  /// [`Self::jwt`]. PSK and JWT are mutually exclusive per worker;
+  /// a worker listed in both `pre_shared_keys` and `jwt_workers` is
+  /// a config error and the PSK path is treated as authoritative to
+  /// avoid silent downgrades.
+  pub jwt_workers: HashSet<WorkerId>,
+  /// Cap on distinct admitted workers (workers with a recent
+  /// successful heartbeat). `None` = unbounded.
+  pub max_workers: Option<usize>,
+  /// Cap on simultaneously-claimed tasks per worker. `None` = unbounded.
+  pub max_concurrent_tasks_per_worker: Option<u32>,
+}
+
+impl WorkerAdmissionPolicy {
+  /// "Anything goes" policy — equivalent to `Default::default()`.
+  pub fn open() -> Self {
+    Self::default()
+  }
+
+  /// True when at least one worker-identity/credential mechanism is
+  /// configured (an explicit allowlist, a PSK table, or a JWT policy).
+  /// An empty policy (the `Default`/[`Self::open`] value) admits any
+  /// worker that shows up with any ID and no credential at all.
+  fn has_credential_config(&self) -> bool {
+    self.allowed_workers.as_ref().is_some_and(|w| !w.is_empty())
+      || !self.pre_shared_keys.is_empty()
+      || self.jwt.is_some()
+  }
+
+  /// T0.2 (evaluation §5 finding 2): validate `self` against `profile`'s
+  /// fail-closed requirement, mirroring `auth::resolve_auth_config`'s
+  /// shape for the worker gRPC control plane. Under
+  /// [`SecurityProfile::Production`], a policy with no
+  /// [`Self::allowed_workers`] / [`Self::pre_shared_keys`] / [`Self::jwt`]
+  /// configured admits any anonymous worker that connects — this fails
+  /// startup instead, so an operator can't accidentally run an
+  /// unauthenticated worker control plane in production. `dev`/`local`
+  /// keep the historical open-by-default behavior.
+  pub fn for_profile(self, profile: SecurityProfile) -> Result<Self, AdmissionConfigError> {
+    if profile
+      .defaults()
+      .worker_admission
+      .require_credential_config
+      && !self.has_credential_config()
+    {
+      return Err(AdmissionConfigError::MissingCredentialConfig { profile });
+    }
+    Ok(self)
+  }
+
+  /// V0.5: check whether `token` proves membership in the trusted fleet
+  /// for **some** configured identity, without pinning to one specific
+  /// `WorkerId`. Used by `submit_task` (gateway → server, not
+  /// worker → server): its wire message carries no worker identity to
+  /// check against [`Self::allowed_workers`] individually, but
+  /// `docs/DISTRIBUTED.md` § Worker Admission documents that "every RPC
+  /// carries `authorization: Bearer <token>` ... verified against the
+  /// active `WorkerAdmissionPolicy` before the call proceeds" — this
+  /// closes the gap between that documented contract and the
+  /// implementation for the one RPC that didn't check it.
+  ///
+  /// When no credential mechanism is configured at all (the fully-open
+  /// dev/local default), any caller is accepted, matching every other
+  /// admission-gated call's default. When one *is* configured (mandatory
+  /// under [`SecurityProfile::Production`] per [`Self::for_profile`]),
+  /// `token` must match at least one configured PSK across any worker,
+  /// or verify against the JWT policy for at least one `jwt_workers` id.
+  pub fn check_any(&self, token: Option<&str>) -> Result<(), AdmissionError> {
+    if !self.has_credential_config() {
+      return Ok(());
+    }
+    let Some(token) = token else {
+      return Err(AdmissionError::MissingCredential {
+        worker_id: "<submitter>".to_string(),
+      });
+    };
+    let psk_matches = self.pre_shared_keys.values().any(|keys| {
+      keys
+        .iter()
+        .any(|key| constant_time_eq(key.as_bytes(), token.as_bytes()))
+    });
+    if psk_matches {
+      return Ok(());
+    }
+    if let Some(jwt_policy) = &self.jwt {
+      let now_secs = chrono::Utc::now().timestamp();
+      let verifies_for_any_jwt_worker = self.jwt_workers.iter().any(|worker_id| {
+        verify_worker_jwt_for_check(token, jwt_policy, &worker_id.0, now_secs).is_ok()
+      });
+      if verifies_for_any_jwt_worker {
+        return Ok(());
+      }
+    }
+    Err(AdmissionError::InvalidCredential {
+      worker_id: "<submitter>".to_string(),
+      reason: "token did not match any configured worker credential".to_string(),
+    })
+  }
+
+  /// Check whether the worker may make admission-gated calls.
+  ///
+  /// `currently_active` is the count of distinct workers the control
+  /// plane has admitted recently (excluding this one). Callers pass
+  /// the count *before* the check so the policy can decide whether
+  /// adding this worker would breach the cap.
+  pub fn check(
+    &self,
+    credential: &WorkerCredential,
+    currently_active: usize,
+  ) -> Result<(), AdmissionError> {
+    self.check_at(credential, currently_active, chrono::Utc::now().timestamp())
+  }
+
+  /// Variant of [`Self::check`] that takes the "now" timestamp explicitly.
+  /// Exists so JWT-flavour tests can exercise expiry / nbf paths
+  /// deterministically without sleeping or mocking the clock at the
+  /// jsonwebtoken layer.
+  pub fn check_at(
+    &self,
+    credential: &WorkerCredential,
+    currently_active: usize,
+    now_secs: i64,
+  ) -> Result<(), AdmissionError> {
+    if let Some(allowed) = &self.allowed_workers
+      && !allowed.contains(&credential.worker_id)
+    {
+      return Err(AdmissionError::UnknownWorker {
+        worker_id: credential.worker_id.0.clone(),
+      });
+    }
+
+    // PSK takes precedence over JWT when a worker is misconfigured to
+    // be in both sets. The intent is "no silent downgrade" — an
+    // operator who fat-fingers a worker into both lists gets the
+    // stricter PSK check, not a weaker JWT-only path.
+    if let Some(valid_tokens) = self.pre_shared_keys.get(&credential.worker_id) {
+      let Some(presented) = credential.token.as_deref() else {
+        return Err(AdmissionError::MissingCredential {
+          worker_id: credential.worker_id.0.clone(),
+        });
+      };
+      // Q3.4.2: constant-time compare. `HashSet::contains` short-circuits
+      // on the first mismatched byte (string equality), leaking the
+      // matching prefix length through a timing side-channel; a network
+      // attacker can iterate one byte at a time to recover the PSK.
+      // Walk every configured token with a constant-time comparator and
+      // keep the result in a `subtle::Choice` so the loop's branch
+      // doesn't short-circuit either. Matches the bearer-token path in
+      // `src/auth.rs::constant_time_eq`.
+      let mut matched = false;
+      for valid in valid_tokens {
+        // Note: short-token mismatch is allowed to fast-fail because
+        // the length itself is not a secret (HashSet would have leaked
+        // it anyway via bucket lookup). The constant-time guarantee
+        // applies *within* each same-length comparison.
+        if constant_time_eq(valid.as_bytes(), presented.as_bytes()) {
+          matched = true;
+          // Don't `break` — keep the loop running so total compute time
+          // doesn't depend on which entry matched (or whether one did).
+        }
+      }
+      if !matched {
+        return Err(AdmissionError::InvalidCredential {
+          worker_id: credential.worker_id.0.clone(),
+          reason: "psk did not match any rotation entry".to_string(),
+        });
+      }
+    } else if self.jwt_workers.contains(&credential.worker_id) {
+      let Some(policy) = self.jwt.as_ref() else {
+        // The worker is listed as needing JWT but the policy never
+        // configured the verification keys / issuer / audience. This
+        // is purely a server-side config error; reject loudly so the
+        // operator sees the gap instead of accidentally admitting an
+        // unauthenticated worker.
+        return Err(AdmissionError::InvalidCredential {
+          worker_id: credential.worker_id.0.clone(),
+          reason: "worker is in jwt_workers but no JwtPolicy is configured".to_string(),
+        });
+      };
+      let Some(presented) = credential.token.as_deref() else {
+        return Err(AdmissionError::MissingCredential {
+          worker_id: credential.worker_id.0.clone(),
+        });
+      };
+      if let Err(err) =
+        verify_worker_jwt_for_check(presented, policy, credential.worker_id.0.as_str(), now_secs)
+      {
+        return Err(AdmissionError::InvalidCredential {
+          worker_id: credential.worker_id.0.clone(),
+          reason: err.to_string(),
+        });
+      }
+    }
+
+    if let Some(max) = self.max_workers
+      && currently_active >= max
+    {
+      // The "+1 would be" semantics: if `currently_active` already
+      // accounts for this worker (it's a re-heartbeat), the caller
+      // passes `currently_active - 1` so the policy never reject's
+      // already-admitted workers.
+      return Err(AdmissionError::WorkerFleetExhausted { max });
+    }
+
+    Ok(())
+  }
+
+  /// Check whether the worker may claim one more task right now.
+  pub fn check_claim_quota(
+    &self,
+    worker_id: &WorkerId,
+    in_flight: u32,
+  ) -> Result<(), AdmissionError> {
+    let Some(max) = self.max_concurrent_tasks_per_worker else {
+      return Ok(());
+    };
+    if in_flight >= max {
+      return Err(AdmissionError::WorkerQuotaExhausted {
+        worker_id: worker_id.0.clone(),
+        max,
+      });
+    }
+    Ok(())
+  }
+}
+
+/// Either an admission failure or a transport / state error from the
+/// underlying control plane. The gRPC adapter maps `Admission` to
+/// `permission_denied` and `Scheduler` to its current Status mapping.
+#[derive(Debug, Error)]
+pub enum ControlError {
+  #[error(transparent)]
+  Admission(#[from] AdmissionError),
+  #[error(transparent)]
+  Scheduler(#[from] SchedulerError),
+}
+
+/// Admission-gated façade over [`WorkerControlPlane`].
+///
+/// `AuthenticatedControlPlane` is the production-facing entry point
+/// for distributed workers: every call goes through the admission
+/// policy *and* updates the per-worker in-flight counter that backs
+/// `max_concurrent_tasks_per_worker`. The unauthenticated
+/// [`WorkerControlPlane`] is retained for the dev / single-process
+/// path (it's what the scheduler smokes still exercise directly).
+///
+/// **Stability:** experimental until the wider distributed worker
+/// promise stabilizes. See `docs/STABILITY.md` for the matrix.
+#[derive(Debug, Clone)]
+pub struct AuthenticatedControlPlane<P> {
+  inner: WorkerControlPlane<P>,
+  policy: Arc<WorkerAdmissionPolicy>,
+  state: Arc<Mutex<AuthenticatedState>>,
+}
+
+#[derive(Debug, Default)]
+struct AuthenticatedState {
+  /// Workers we've successfully admitted at least once. Used to
+  /// enforce `max_workers` and to recognize a returning worker as
+  /// "already counted" on subsequent calls.
+  admitted: HashSet<WorkerId>,
+  /// In-flight (claimed-but-not-reported) tasks per worker. Drives
+  /// the `max_concurrent_tasks_per_worker` cap.
+  in_flight: HashMap<WorkerId, u32>,
+}
+
+impl<P> AuthenticatedControlPlane<P>
+where
+  P: WorkerProtocol + Clone,
+{
+  pub fn new(inner: WorkerControlPlane<P>, policy: WorkerAdmissionPolicy) -> Self {
+    Self {
+      inner,
+      policy: Arc::new(policy),
+      state: Arc::new(Mutex::new(AuthenticatedState::default())),
+    }
+  }
+
+  /// Underlying control plane — useful for queue ingestion and run
+  /// snapshots, neither of which is gated by admission.
+  pub fn inner(&self) -> &WorkerControlPlane<P> {
+    &self.inner
+  }
+
+  /// Run the admission check and, on success, mark the worker as
+  /// admitted. Idempotent — re-admitting an existing worker is a
+  /// no-op (it doesn't double-count toward `max_workers`).
+  pub async fn admit(&self, credential: &WorkerCredential) -> Result<(), AdmissionError> {
+    let mut state = self.state.lock().await;
+    let already_admitted = state.admitted.contains(&credential.worker_id);
+    let currently_active = state.admitted.len() - usize::from(already_admitted);
+    self.policy.check(credential, currently_active)?;
+    state.admitted.insert(credential.worker_id.clone());
+    // P10.14.2-FU3: emit the admitted-worker gauge after every
+    // mutation so the Grafana "Worker fleet" panel tracks the
+    // distinct-worker count exactly. Idempotent re-admissions
+    // re-emit the same value, which is fine — gauges are set,
+    // not incremented.
+    crate::metrics::observe_workers_admitted(state.admitted.len());
+    Ok(())
+  }
+
+  /// V0.5: identity-agnostic admission check for `submit_task` — see
+  /// [`WorkerAdmissionPolicy::check_any`] for the rationale. Unlike
+  /// [`Self::admit`], this doesn't mark any worker as admitted (there's
+  /// no worker identity here to admit) and doesn't touch the
+  /// `max_workers` / in-flight bookkeeping.
+  pub async fn admit_any(&self, token: Option<&str>) -> Result<(), AdmissionError> {
+    self.policy.check_any(token)
+  }
+
+  /// Admission-gated heartbeat. Marks the worker admitted on first
+  /// successful call, then forwards to the inner control plane.
+  pub async fn heartbeat(
+    &self,
+    credential: WorkerCredential,
+    heartbeat: WorkerHeartbeat,
+  ) -> Result<(), ControlError> {
+    self.admit(&credential).await?;
+    self.inner.heartbeat(heartbeat).await?;
+    Ok(())
+  }
+
+  /// Admission-gated task claim. Checks both identity / credential /
+  /// fleet caps *and* the per-worker concurrency cap before letting
+  /// the worker pull another task off the queue.
+  pub async fn claim_task(
+    &self,
+    credential: WorkerCredential,
+  ) -> Result<Option<WorkerTask>, ControlError> {
+    self.admit(&credential).await?;
+
+    let in_flight = {
+      let state = self.state.lock().await;
+      state
+        .in_flight
+        .get(&credential.worker_id)
+        .copied()
+        .unwrap_or(0)
+    };
+    self
+      .policy
+      .check_claim_quota(&credential.worker_id, in_flight)?;
+
+    let task = self.inner.claim_task(credential.worker_id.clone()).await?;
+    if task.is_some() {
+      let mut state = self.state.lock().await;
+      let slot = state
+        .in_flight
+        .entry(credential.worker_id.clone())
+        .or_insert(0);
+      *slot += 1;
+      // P10.14.2-FU3: per-worker in-flight gauge.
+      crate::metrics::observe_worker_tasks_inflight(&credential.worker_id.0, *slot);
+    }
+    Ok(task)
+  }
+
+  /// Admission-gated result report. Always decrements the in-flight
+  /// counter so retries / restarts don't permanently inflate the
+  /// per-worker quota even when the inner protocol rejects the
+  /// result.
+  pub async fn report_result(
+    &self,
+    credential: WorkerCredential,
+    task_id: Uuid,
+    result: WorkerTaskResult,
+  ) -> Result<(), ControlError> {
+    self.admit(&credential).await?;
+
+    let inner_result = self
+      .inner
+      .report_result(credential.worker_id.clone(), task_id, result)
+      .await;
+
+    let mut state = self.state.lock().await;
+    let new_inflight = if let Some(slot) = state.in_flight.get_mut(&credential.worker_id) {
+      *slot = slot.saturating_sub(1);
+      *slot
+    } else {
+      0
+    };
+    // P10.14.2-FU3: keep the per-worker gauge current on every
+    // result report, including the "wasn't tracked" branch
+    // (gauge → 0) so a worker that reports without a prior
+    // claim doesn't poison the panel with a stale value.
+    crate::metrics::observe_worker_tasks_inflight(&credential.worker_id.0, new_inflight);
+    Ok(inner_result?)
+  }
+
+  /// Number of distinct workers currently admitted. Tests use this
+  /// to assert fleet-size enforcement; production paths shouldn't
+  /// need it.
+  pub async fn admitted_worker_count(&self) -> usize {
+    self.state.lock().await.admitted.len()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn worker(label: &str) -> WorkerId {
+    WorkerId::new(label).expect("valid worker label")
+  }
+
+  // ── T0.2: profile-aware fail-closed admission config ──────────────────
+
+  #[test]
+  fn production_profile_rejects_empty_admission_policy() {
+    let err = WorkerAdmissionPolicy::open()
+      .for_profile(SecurityProfile::Production)
+      .unwrap_err();
+    assert!(matches!(
+      err,
+      AdmissionConfigError::MissingCredentialConfig {
+        profile: SecurityProfile::Production
+      }
+    ));
+  }
+
+  #[test]
+  fn production_profile_accepts_allowed_workers_only() {
+    let policy = WorkerAdmissionPolicy {
+      allowed_workers: Some([worker("a")].into_iter().collect()),
+      ..Default::default()
+    };
+    assert!(policy.for_profile(SecurityProfile::Production).is_ok());
+  }
+
+  #[test]
+  fn production_profile_accepts_pre_shared_keys_only() {
+    let mut psks = HashMap::new();
+    psks.insert(worker("a"), HashSet::from(["secret".to_string()]));
+    let policy = WorkerAdmissionPolicy {
+      pre_shared_keys: psks,
+      ..Default::default()
+    };
+    assert!(policy.for_profile(SecurityProfile::Production).is_ok());
+  }
+
+  #[test]
+  fn production_profile_accepts_jwt_policy_only() {
+    let policy = WorkerAdmissionPolicy {
+      jwt: Some(crate::scheduler::jwt::JwtPolicy::new(
+        "issuer",
+        "yanshi-workers-prod",
+      )),
+      ..Default::default()
+    };
+    assert!(policy.for_profile(SecurityProfile::Production).is_ok());
+  }
+
+  #[test]
+  fn production_profile_rejects_empty_allowed_workers_set() {
+    // A `Some(empty set)` allowlist admits nobody by the `check()` logic
+    // above, but it is also not a real credential mechanism — treat it
+    // the same as `None` for the fail-closed startup check.
+    let policy = WorkerAdmissionPolicy {
+      allowed_workers: Some(HashSet::new()),
+      ..Default::default()
+    };
+    assert!(matches!(
+      policy.for_profile(SecurityProfile::Production).unwrap_err(),
+      AdmissionConfigError::MissingCredentialConfig { .. }
+    ));
+  }
+
+  #[test]
+  fn dev_and_local_profiles_accept_empty_admission_policy() {
+    assert!(
+      WorkerAdmissionPolicy::open()
+        .for_profile(SecurityProfile::Dev)
+        .is_ok()
+    );
+    assert!(
+      WorkerAdmissionPolicy::open()
+        .for_profile(SecurityProfile::Local)
+        .is_ok()
+    );
+  }
+
+  #[test]
+  fn open_policy_admits_anyone() {
+    let policy = WorkerAdmissionPolicy::open();
+    let cred = WorkerCredential::anonymous(worker("any"));
+    assert!(policy.check(&cred, 0).is_ok());
+  }
+
+  #[test]
+  fn allowlist_rejects_unknown_worker() {
+    let policy = WorkerAdmissionPolicy {
+      allowed_workers: Some([worker("a"), worker("b")].into_iter().collect()),
+      ..Default::default()
+    };
+    assert!(matches!(
+      policy.check(&WorkerCredential::anonymous(worker("intruder")), 0),
+      Err(AdmissionError::UnknownWorker { .. })
+    ));
+    assert!(
+      policy
+        .check(&WorkerCredential::anonymous(worker("a")), 0)
+        .is_ok()
+    );
+  }
+
+  #[test]
+  fn psk_rejects_missing_or_wrong_token() {
+    let mut psks = HashMap::new();
+    psks.insert(worker("a"), HashSet::from(["good".to_string()]));
+    let policy = WorkerAdmissionPolicy {
+      pre_shared_keys: psks,
+      ..Default::default()
+    };
+    assert!(matches!(
+      policy.check(&WorkerCredential::anonymous(worker("a")), 0),
+      Err(AdmissionError::MissingCredential { .. })
+    ));
+    assert!(matches!(
+      policy.check(
+        &WorkerCredential::new(worker("a"), Some("bad".to_string())),
+        0
+      ),
+      Err(AdmissionError::InvalidCredential { .. })
+    ));
+    // The reason field carries the verifier-specific message — useful
+    // for transports that surface it to operators.
+    if let Err(AdmissionError::InvalidCredential { reason, .. }) = policy.check(
+      &WorkerCredential::new(worker("a"), Some("bad".to_string())),
+      0,
+    ) {
+      assert!(
+        reason.contains("psk"),
+        "PSK rejection reason should name the credential flavour: {reason}"
+      );
+    }
+    assert!(
+      policy
+        .check(
+          &WorkerCredential::new(worker("a"), Some("good".to_string())),
+          0
+        )
+        .is_ok()
+    );
+  }
+
+  /// V0.5 regression: `check_any` (used by `submit_task`, which has no
+  /// worker identity to check against `allowed_workers`) is open when no
+  /// credential mechanism is configured at all — same default as every
+  /// other admission-gated call.
+  #[test]
+  fn check_any_admits_anyone_under_the_open_policy() {
+    let policy = WorkerAdmissionPolicy::open();
+    assert!(policy.check_any(None).is_ok());
+    assert!(policy.check_any(Some("anything")).is_ok());
+  }
+
+  /// V0.5 regression: once a PSK is configured for *any* worker,
+  /// `check_any` requires a token and it must match — this is the fix
+  /// for the original hole (`submit_task` accepted every call
+  /// unconditionally regardless of the configured admission policy).
+  #[test]
+  fn check_any_requires_a_matching_psk_once_any_worker_has_one() {
+    let mut psks = HashMap::new();
+    psks.insert(worker("a"), HashSet::from(["good".to_string()]));
+    let policy = WorkerAdmissionPolicy {
+      pre_shared_keys: psks,
+      ..Default::default()
+    };
+    assert!(matches!(
+      policy.check_any(None),
+      Err(AdmissionError::MissingCredential { .. })
+    ));
+    assert!(matches!(
+      policy.check_any(Some("bad")),
+      Err(AdmissionError::InvalidCredential { .. })
+    ));
+    assert!(policy.check_any(Some("good")).is_ok());
+  }
+
+  /// V0.5: `check_any` isn't pinned to one worker — a token that
+  /// matches *any* configured worker's PSK is accepted, since
+  /// `submit_task`'s wire message carries no identity to disambiguate.
+  #[test]
+  fn check_any_matches_a_psk_belonging_to_any_configured_worker() {
+    let mut psks = HashMap::new();
+    psks.insert(worker("a"), HashSet::from(["a-secret".to_string()]));
+    psks.insert(worker("b"), HashSet::from(["b-secret".to_string()]));
+    let policy = WorkerAdmissionPolicy {
+      pre_shared_keys: psks,
+      ..Default::default()
+    };
+    assert!(policy.check_any(Some("a-secret")).is_ok());
+    assert!(policy.check_any(Some("b-secret")).is_ok());
+    assert!(policy.check_any(Some("neither")).is_err());
+  }
+
+  /// V0.5: a policy that only configures `allowed_workers` (no PSK, no
+  /// JWT) still counts as "credential config present" per
+  /// `has_credential_config`, so `check_any` fails closed rather than
+  /// silently admitting everyone just because there's no PSK/JWT to
+  /// check the token against.
+  #[test]
+  fn check_any_fails_closed_when_only_an_allowlist_is_configured() {
+    let policy = WorkerAdmissionPolicy {
+      allowed_workers: Some([worker("a")].into_iter().collect()),
+      ..Default::default()
+    };
+    assert!(matches!(
+      policy.check_any(None),
+      Err(AdmissionError::MissingCredential { .. })
+    ));
+    assert!(matches!(
+      policy.check_any(Some("anything")),
+      Err(AdmissionError::InvalidCredential { .. })
+    ));
+  }
+
+  #[test]
+  fn psk_rotation_accepts_overlap_window() {
+    // Operator stages a rotation by adding "v2" alongside "v1":
+    // both tokens are valid until the rollout completes.
+    let mut psks = HashMap::new();
+    psks.insert(
+      worker("a"),
+      HashSet::from(["v1".to_string(), "v2".to_string()]),
+    );
+    let policy = WorkerAdmissionPolicy {
+      pre_shared_keys: psks,
+      ..Default::default()
+    };
+    assert!(
+      policy
+        .check(
+          &WorkerCredential::new(worker("a"), Some("v1".to_string())),
+          0
+        )
+        .is_ok()
+    );
+    assert!(
+      policy
+        .check(
+          &WorkerCredential::new(worker("a"), Some("v2".to_string())),
+          0
+        )
+        .is_ok()
+    );
+  }
+
+  #[test]
+  fn fleet_cap_rejects_when_full() {
+    let policy = WorkerAdmissionPolicy {
+      max_workers: Some(2),
+      ..Default::default()
+    };
+    assert!(
+      policy
+        .check(&WorkerCredential::anonymous(worker("a")), 1)
+        .is_ok()
+    );
+    assert!(matches!(
+      policy.check(&WorkerCredential::anonymous(worker("b")), 2),
+      Err(AdmissionError::WorkerFleetExhausted { max: 2 })
+    ));
+  }
+
+  #[test]
+  fn per_worker_concurrency_cap_rejects_when_full() {
+    let policy = WorkerAdmissionPolicy {
+      max_concurrent_tasks_per_worker: Some(4),
+      ..Default::default()
+    };
+    assert!(policy.check_claim_quota(&worker("a"), 3).is_ok());
+    assert!(matches!(
+      policy.check_claim_quota(&worker("a"), 4),
+      Err(AdmissionError::WorkerQuotaExhausted { max: 4, .. })
+    ));
+  }
+
+  mod jwt_flavor {
+    use super::*;
+    use crate::scheduler::jwt::{JwtPolicy, WorkerJwtClaims};
+    use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+
+    fn sign_hs256(secret: &[u8], claims: &WorkerJwtClaims) -> String {
+      encode(
+        &Header::new(Algorithm::HS256),
+        claims,
+        &EncodingKey::from_secret(secret),
+      )
+      .expect("sign HS256 test token")
+    }
+
+    fn jwt_policy() -> JwtPolicy {
+      JwtPolicy::new("test-issuer", "yanshi-workers-prod")
+        .with_hs256_secret(b"super-secret".to_vec())
+        .with_leeway_seconds(5)
+    }
+
+    fn jwt_claims(sub: &str, now: i64) -> WorkerJwtClaims {
+      WorkerJwtClaims {
+        iss: "test-issuer".into(),
+        aud: vec!["yanshi-workers-prod".into()],
+        sub: sub.into(),
+        exp: now + 300,
+        iat: Some(now),
+        nbf: None,
+      }
+    }
+
+    #[test]
+    fn jwt_worker_with_valid_token_admitted() {
+      let now = 1_700_000_000;
+      let policy = WorkerAdmissionPolicy {
+        jwt: Some(jwt_policy()),
+        jwt_workers: [worker("jwt-a")].into_iter().collect(),
+        ..Default::default()
+      };
+      let token = sign_hs256(b"super-secret", &jwt_claims("jwt-a", now));
+      let cred = WorkerCredential::new(worker("jwt-a"), Some(token));
+      assert!(policy.check_at(&cred, 0, now).is_ok());
+    }
+
+    #[test]
+    fn jwt_worker_without_token_is_missing_credential() {
+      let now = 1_700_000_000;
+      let policy = WorkerAdmissionPolicy {
+        jwt: Some(jwt_policy()),
+        jwt_workers: [worker("jwt-a")].into_iter().collect(),
+        ..Default::default()
+      };
+      let cred = WorkerCredential::anonymous(worker("jwt-a"));
+      assert!(matches!(
+        policy.check_at(&cred, 0, now),
+        Err(AdmissionError::MissingCredential { .. })
+      ));
+    }
+
+    #[test]
+    fn jwt_worker_with_wrong_subject_rejected_with_reason() {
+      let now = 1_700_000_000;
+      let policy = WorkerAdmissionPolicy {
+        jwt: Some(jwt_policy()),
+        jwt_workers: [worker("jwt-a")].into_iter().collect(),
+        ..Default::default()
+      };
+      // Token issued for jwt-b but presented by jwt-a.
+      let token = sign_hs256(b"super-secret", &jwt_claims("jwt-b", now));
+      let cred = WorkerCredential::new(worker("jwt-a"), Some(token));
+      match policy.check_at(&cred, 0, now) {
+        Err(AdmissionError::InvalidCredential { reason, .. }) => {
+          assert!(
+            reason.contains("subject mismatch"),
+            "reason should name the subject mismatch: {reason}"
+          );
+        }
+        other => panic!("expected InvalidCredential, got {other:?}"),
+      }
+    }
+
+    #[test]
+    fn jwt_worker_with_expired_token_rejected() {
+      let now = 1_700_000_000;
+      let policy = WorkerAdmissionPolicy {
+        jwt: Some(jwt_policy()),
+        jwt_workers: [worker("jwt-a")].into_iter().collect(),
+        ..Default::default()
+      };
+      let mut claims = jwt_claims("jwt-a", now);
+      claims.exp = now - 600;
+      let token = sign_hs256(b"super-secret", &claims);
+      let cred = WorkerCredential::new(worker("jwt-a"), Some(token));
+      match policy.check_at(&cred, 0, now) {
+        Err(AdmissionError::InvalidCredential { reason, .. }) => {
+          assert!(
+            reason.contains("expired"),
+            "reason should say expired: {reason}"
+          );
+        }
+        other => panic!("expected InvalidCredential, got {other:?}"),
+      }
+    }
+
+    #[test]
+    fn jwt_worker_without_jwt_policy_is_server_config_error() {
+      // Worker is listed in jwt_workers but the operator forgot to
+      // attach a JwtPolicy. We refuse to admit (better fail-closed
+      // than accidentally admit unauthenticated).
+      let now = 1_700_000_000;
+      let policy = WorkerAdmissionPolicy {
+        jwt: None,
+        jwt_workers: [worker("jwt-a")].into_iter().collect(),
+        ..Default::default()
+      };
+      let cred = WorkerCredential::new(worker("jwt-a"), Some("anything".into()));
+      match policy.check_at(&cred, 0, now) {
+        Err(AdmissionError::InvalidCredential { reason, .. }) => {
+          assert!(
+            reason.contains("no JwtPolicy"),
+            "reason should call out the misconfiguration: {reason}"
+          );
+        }
+        other => panic!("expected InvalidCredential, got {other:?}"),
+      }
+    }
+
+    #[test]
+    fn psk_takes_precedence_over_jwt_when_misconfigured() {
+      // Worker is listed in BOTH pre_shared_keys and jwt_workers. We
+      // run the PSK check (stricter / explicit shared-secret); a JWT
+      // is silently rejected here even if it would otherwise verify.
+      let now = 1_700_000_000;
+      let mut psks = HashMap::new();
+      psks.insert(worker("dual"), HashSet::from(["psk-only".to_string()]));
+      let policy = WorkerAdmissionPolicy {
+        pre_shared_keys: psks,
+        jwt: Some(jwt_policy()),
+        jwt_workers: [worker("dual")].into_iter().collect(),
+        ..Default::default()
+      };
+      let jwt_token = sign_hs256(b"super-secret", &jwt_claims("dual", now));
+      let cred = WorkerCredential::new(worker("dual"), Some(jwt_token));
+      // PSK gate runs first, sees the JWT string isn't in the PSK
+      // pool, rejects.
+      assert!(matches!(
+        policy.check_at(&cred, 0, now),
+        Err(AdmissionError::InvalidCredential { .. })
+      ));
+      // The PSK still admits its rightful token, confirming the gate
+      // didn't degrade to JWT logic.
+      let psk_cred = WorkerCredential::new(worker("dual"), Some("psk-only".to_string()));
+      assert!(policy.check_at(&psk_cred, 0, now).is_ok());
+    }
+
+    #[test]
+    fn unrelated_worker_still_anonymous_when_jwt_policy_present() {
+      // Adding a JwtPolicy must not retroactively require auth from
+      // workers who were anonymous before — only `jwt_workers`
+      // workers are affected.
+      let now = 1_700_000_000;
+      let policy = WorkerAdmissionPolicy {
+        jwt: Some(jwt_policy()),
+        jwt_workers: [worker("jwt-only")].into_iter().collect(),
+        ..Default::default()
+      };
+      let cred = WorkerCredential::anonymous(worker("anon-worker"));
+      assert!(policy.check_at(&cred, 0, now).is_ok());
+    }
+  }
+}

@@ -10,8 +10,8 @@ RUN apt-get update \
 
 COPY . .
 
-ARG PACKAGE=agentflow-server
-ARG BIN=agentflow-server
+ARG PACKAGE=yanshi-server
+ARG BIN=yanshi-server
 
 RUN cargo build --release -p "${PACKAGE}" --bin "${BIN}"
 
@@ -20,15 +20,15 @@ FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl libssl3 \
   && rm -rf /var/lib/apt/lists/* \
-  && useradd --create-home --uid 10001 --shell /usr/sbin/nologin agentflow
+  && useradd --create-home --uid 10001 --shell /usr/sbin/nologin yanshi
 
-ARG BIN=agentflow-server
+ARG BIN=yanshi-server
 
-COPY --from=builder /app/target/release/${BIN} /usr/local/bin/agentflow
+COPY --from=builder /app/target/release/${BIN} /usr/local/bin/yanshi
 
-USER agentflow
+USER yanshi
 ENV PORT=3000
 ENV RUST_LOG=info
 EXPOSE 3000
 
-ENTRYPOINT ["/usr/local/bin/agentflow"]
+ENTRYPOINT ["/usr/local/bin/yanshi"]

@@ -1,12 +1,12 @@
-# AgentFlow Database Migrations — Operator Playbook
+# Yanshi Database Migrations — Operator Playbook
 
-This document covers operational guidance for applying the `agentflow-db`
+This document covers operational guidance for applying the `yanshi-db`
 migrations against an existing production-sized Postgres deployment.
 
 For fresh installs (empty database), every migration applies in
 sub-second time; you can skip directly to **§ Standard upgrade**.
 
-The migrations themselves live in `agentflow-db/migrations/`. They are
+The migrations themselves live in `yanshi-db/migrations/`. They are
 applied automatically by `Database::connect_and_migrate(...)` at server
 boot and tracked in the `_sqlx_migrations` table.
 
@@ -23,7 +23,7 @@ warm storage:
 3. Start the new server binary. `connect_and_migrate` will apply
    pending migrations in order against the primary pool.
 4. Validate `SELECT MAX(version) FROM _sqlx_migrations` matches the
-   latest `.sql` file in `agentflow-db/migrations/`.
+   latest `.sql` file in `yanshi-db/migrations/`.
 
 Total downtime: seconds to a few minutes.
 
@@ -161,7 +161,9 @@ backfill in the `.sql` file and document the manual batched
 playbook here, the same shape this Q3.11.3 entry uses. Modifying
 **existing** migrations is a breaking change — `sqlx::migrate!`
 checksums every file at compile time and refuses to run when a
-deployed migration's hash drifts.
+deployed migration's hash drifts. This is why the comments in
+`0001`–`0010` still say "AgentFlow" (the project's name before it
+became Yanshi): the rename left those files byte-for-byte unchanged.
 
 For schema-only additions (new column, new index), use the
 `CONCURRENTLY` variants when the table is large.
@@ -170,7 +172,7 @@ For schema-only additions (new column, new index), use the
 
 ## Rollback
 
-`agentflow-db` migrations are **forward-only**. There are no `.down.sql`
+`yanshi-db` migrations are **forward-only**. There are no `.down.sql`
 files. Rolling back a migration requires restoring from backup or
 applying compensating SQL manually. The combination of column
 backfills and index builds in `0003` is particularly hard to undo

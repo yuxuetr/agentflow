@@ -1,6 +1,6 @@
 # Agent SDK
 
-This guide is for developers who want to **extend** AgentFlow's agent runtime
+This guide is for developers who want to **extend** Yanshi's agent runtime
 — plug in a custom planning loop, a custom reflection strategy, a custom
 memory-summary backend, a custom tool, or a custom memory store — without
 forking the workspace.
@@ -26,7 +26,7 @@ is a single trait with two methods, and the runtime accepts any
 
 ```bash
 # 1. Build and run the canonical example.
-cargo run -p agentflow-agents --example custom_reflection
+cargo run -p yanshi-agents --example custom_reflection
 ```
 
 Expected output (truncated):
@@ -45,7 +45,7 @@ Triggers observed by LoggingReflection: [Final]
    6: reflect: [logging] final answer at step 6: echo: sdk
 ```
 
-Read [`agentflow-agents/examples/custom_reflection.rs`](../agentflow-agents/examples/custom_reflection.rs)
+Read [`yanshi-agents/examples/custom_reflection.rs`](../yanshi-agents/examples/custom_reflection.rs)
 end-to-end. The whole example is ~120 lines and exercises:
 
 - The `ReflectionStrategy` trait (`name`, `reflect`).
@@ -57,13 +57,13 @@ end-to-end. The whole example is ~120 lines and exercises:
 
 | Trait | Crate | Purpose | Example |
 | --- | --- | --- | --- |
-| `AgentRuntime` | `agentflow-agents` | Replace the entire planning / execution loop | [`custom_runtime.rs`](../agentflow-agents/examples/custom_runtime.rs) |
-| `ReflectionStrategy` | `agentflow-agents` | Inject reflection text into the step trace | [`custom_reflection.rs`](../agentflow-agents/examples/custom_reflection.rs) |
-| `VerificationStrategy` | `agentflow-agents` | Gate a candidate final answer; reject to loop again | [`custom_verification.rs`](../agentflow-agents/examples/custom_verification.rs) |
-| `MemorySummaryBackend` | `agentflow-agents::react` | Compress prompt memory when it overflows the budget | [`custom_memory_summary.rs`](../agentflow-agents/examples/custom_memory_summary.rs) |
-| `AgentMemoryHook` | `agentflow-agents` | Non-failing observer for memory reads / writes | (in tests, see `react/agent.rs`) |
-| `Tool` | `agentflow-tools` | Add a new tool callable by any agent | [`agent_native_react.rs`](../agentflow-agents/examples/agent_native_react.rs) (`EchoTool`) |
-| `MemoryStore` | `agentflow-memory` | Add a new conversation memory backend | `SessionMemory` / `SqliteMemory` impls |
+| `AgentRuntime` | `yanshi-agents` | Replace the entire planning / execution loop | [`custom_runtime.rs`](../yanshi-agents/examples/custom_runtime.rs) |
+| `ReflectionStrategy` | `yanshi-agents` | Inject reflection text into the step trace | [`custom_reflection.rs`](../yanshi-agents/examples/custom_reflection.rs) |
+| `VerificationStrategy` | `yanshi-agents` | Gate a candidate final answer; reject to loop again | [`custom_verification.rs`](../yanshi-agents/examples/custom_verification.rs) |
+| `MemorySummaryBackend` | `yanshi-agents::react` | Compress prompt memory when it overflows the budget | [`custom_memory_summary.rs`](../yanshi-agents/examples/custom_memory_summary.rs) |
+| `AgentMemoryHook` | `yanshi-agents` | Non-failing observer for memory reads / writes | (in tests, see `react/agent.rs`) |
+| `Tool` | `yanshi-tools` | Add a new tool callable by any agent | [`agent_native_react.rs`](../yanshi-agents/examples/agent_native_react.rs) (`EchoTool`) |
+| `MemoryStore` | `yanshi-memory` | Add a new conversation memory backend | `SessionMemory` / `SqliteMemory` impls |
 
 Each trait below has the same anatomy: **what it does**, **the contract**,
 **how to plug it in**, and **gotchas**.
@@ -79,9 +79,9 @@ pub trait AgentRuntime: Send {
 ```
 
 **What it does.** Owns one full agent invocation. The runtime consumes an
-[`AgentContext`](../agentflow-agent-spi/src/runtime.rs) (session id, input, model,
+[`AgentContext`](../yanshi-agent-spi/src/runtime.rs) (session id, input, model,
 persona, limits, cancellation token) and returns a structured
-[`AgentRunResult`](../agentflow-agent-spi/src/runtime.rs) (answer, stop reason,
+[`AgentRunResult`](../yanshi-agent-spi/src/runtime.rs) (answer, stop reason,
 step trace, event stream).
 
 **Contract.** Implementations MUST:
@@ -126,7 +126,7 @@ let result = AgentRuntime::run(&mut runtime, AgentContext::new(...)).await?;
 - Long-running steps should still poll cancellation; otherwise users see
   unresponsive runs even after `cancel()`.
 
-See [`custom_runtime.rs`](../agentflow-agents/examples/custom_runtime.rs)
+See [`custom_runtime.rs`](../yanshi-agents/examples/custom_runtime.rs)
 for the smallest viable shell — no LLM, no tools, just the
 trait contract.
 
@@ -168,7 +168,7 @@ let agent = ReActAgent::new(config, memory, tools)
 ```
 
 Built-ins: `NoOpReflection`, `FailureReflection`, `FinalReflection` (in
-`agentflow_agents::reflection`).
+`yanshi_agents::reflection`).
 
 ### `VerificationStrategy`
 
@@ -222,11 +222,11 @@ Disable the gate at runtime with `ReActConfig::with_verification_enabled(false)`
 — no `Verify` step or `VerificationCompleted` event is recorded even with a
 strategy attached.
 
-Built-in: `AlwaysApprove` (in `agentflow_agents::verification`) — useful as a
+Built-in: `AlwaysApprove` (in `yanshi_agents::verification`) — useful as a
 base to wrap with real domain logic (an LLM-judge call, a test-runner
 invocation, a schema check, ...).
 
-See [`custom_verification.rs`](../agentflow-agents/examples/custom_verification.rs)
+See [`custom_verification.rs`](../yanshi-agents/examples/custom_verification.rs)
 for a strategy that rejects a candidate answer missing a citation marker and
 approves the revised one.
 
@@ -267,7 +267,7 @@ let agent = ReActAgent::new(config, memory, tools)
 Built-ins: `RecentOnlyMemorySummary` (records what was dropped),
 `CompactMemorySummary` (deterministic rule-based bullet list).
 
-See [`custom_memory_summary.rs`](../agentflow-agents/examples/custom_memory_summary.rs)
+See [`custom_memory_summary.rs`](../yanshi-agents/examples/custom_memory_summary.rs)
 for both direct invocation (drives the trait without a full run) and the
 production wiring.
 
@@ -326,9 +326,9 @@ pub trait Tool: Send + Sync {
   failures (the agent loop handles it) and `Err(ToolError)` only for
   protocol-level failures (the run aborts).
 
-See [`agent_native_react.rs`](../agentflow-agents/examples/agent_native_react.rs)
+See [`agent_native_react.rs`](../yanshi-agents/examples/agent_native_react.rs)
 (`EchoTool`) and the built-in implementations under
-`agentflow-tools/src/builtin/`.
+`yanshi-tools/src/builtin/`.
 
 ### `MemoryStore`
 
@@ -347,7 +347,7 @@ pub trait MemoryStore: Send + Sync {
 
 **What it does.** Pluggable conversation memory backend. Built-ins:
 `SessionMemory` (in-process, token-windowed), `SqliteMemory` (persistent),
-`SemanticMemory` (similarity search via `agentflow-rag`).
+`SemanticMemory` (similarity search via `yanshi-rag`).
 
 **Contract.**
 
@@ -380,17 +380,17 @@ honest.
 Two patterns:
 
 1. **No model**: implement `AgentRuntime` directly. See
-   [`custom_runtime.rs`](../agentflow-agents/examples/custom_runtime.rs).
+   [`custom_runtime.rs`](../yanshi-agents/examples/custom_runtime.rs).
 2. **Mock provider**: register the `mock` provider and pre-load it via
-   `AGENTFLOW_MOCK_RESPONSES` (a JSON-encoded list of canned replies).
-   See [`agent_native_react.rs`](../agentflow-agents/examples/agent_native_react.rs),
-   [`custom_reflection.rs`](../agentflow-agents/examples/custom_reflection.rs),
-   and [`custom_verification.rs`](../agentflow-agents/examples/custom_verification.rs)
+   `YANSHI_MOCK_RESPONSES` (a JSON-encoded list of canned replies).
+   See [`agent_native_react.rs`](../yanshi-agents/examples/agent_native_react.rs),
+   [`custom_reflection.rs`](../yanshi-agents/examples/custom_reflection.rs),
+   and [`custom_verification.rs`](../yanshi-agents/examples/custom_verification.rs)
    for the standard wiring.
 
 ## FlowValue field reference (F-DOC-2)
 
-`agentflow_core::value::FlowValue` is the data wrapper passed
+`yanshi_core::value::FlowValue` is the data wrapper passed
 between nodes. Custom `AsyncNode` implementations that produce
 file / URL outputs must use the **exact** field names below — they
 won't autocomplete and `media_type` is a common wrong guess.
@@ -411,28 +411,28 @@ The Serialize impl tags each variant with an explicit `type`
 field (`"json"` / `"file"` / `"url"`) so trace JSON is
 self-describing.
 
-## Loading `~/.agentflow/.env` from standalone binaries (F-A7-7)
+## Loading `~/.yanshi/.env` from standalone binaries (F-A7-7)
 
-The `agentflow` CLI auto-loads `~/.agentflow/.env` on every
-invocation (P9.3). Standalone binaries that link `agentflow-llm`
+The `yanshi` CLI auto-loads `~/.yanshi/.env` on every
+invocation (P9.3). Standalone binaries that link `yanshi-llm`
 directly — e.g. `examples/applications/blog-to-podcast/`,
 `code-reviewer-write`, `research-assistant` — don't go through the
 CLI entry point and need to load the env themselves before
-`AgentFlow::init()`.
+`Yanshi::init()`.
 
 Canonical snippet (used by every standalone example in this repo):
 
 ```rust
-fn load_agentflow_dotenv() {
+fn load_yanshi_dotenv() {
   if let Some(home) = std::env::home_dir() {
-    let _ = dotenvy::from_path(home.join(".agentflow").join(".env"));
+    let _ = dotenvy::from_path(home.join(".yanshi").join(".env"));
   }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-  load_agentflow_dotenv();
-  AgentFlow::init().await?;
+  load_yanshi_dotenv();
+  Yanshi::init().await?;
   // ... rest of the binary
 }
 ```
@@ -440,10 +440,10 @@ async fn main() -> Result<()> {
 `dotenvy::from_path` is best-effort by design — missing file
 returns `Err` which the snippet swallows. That's correct
 behaviour for an optional env file; production deployments that
-require specific keys should let `AgentFlow::init()` surface its
+require specific keys should let `Yanshi::init()` surface its
 own "missing API key" error rather than gating on dotenv presence.
 
-A future `agentflow-dotenv` helper crate could DRY this snippet
+A future `yanshi-dotenv` helper crate could DRY this snippet
 across the example binaries; for now the duplication is
 acknowledged ergonomics-debt (F-A7-7) and the snippet above is
 the canonical form to copy.
@@ -461,6 +461,6 @@ the canonical form to copy.
 
 ## Documentation hygiene
 
-`cargo doc -p agentflow-agents -p agentflow-tools -p agentflow-memory --no-deps`
+`cargo doc -p yanshi-agents -p yanshi-tools -p yanshi-memory --no-deps`
 must report **zero** warnings. The SDK extension surface is the contract
 this guide describes; if rustdoc breaks, this guide is broken.

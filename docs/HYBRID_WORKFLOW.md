@@ -1,9 +1,9 @@
 # Hybrid Workflow
 
-AgentFlow supports two complementary execution modes:
+Yanshi supports two complementary execution modes:
 
-- Deterministic DAG workflows through `agentflow_core::Flow`.
-- Agent-native loops through `agentflow_agents::AgentRuntime` and `ReActAgent`.
+- Deterministic DAG workflows through `yanshi_core::Flow`.
+- Agent-native loops through `yanshi_agents::AgentRuntime` and `ReActAgent`.
 
 Hybrid workflow support connects those modes in both directions, plus a third
 bridge where an agent *authors* a DAG up front:
@@ -76,12 +76,12 @@ Minimal shape:
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use agentflow_agents::nodes::AgentNode;
-use agentflow_agents::react::{ReActAgent, ReActConfig};
-use agentflow_core::flow::{Flow, GraphNode, NodeType};
-use agentflow_core::FlowValue;
-use agentflow_memory::SessionMemory;
-use agentflow_tools::ToolRegistry;
+use yanshi_agents::nodes::AgentNode;
+use yanshi_agents::react::{ReActAgent, ReActConfig};
+use yanshi_core::flow::{Flow, GraphNode, NodeType};
+use yanshi_core::FlowValue;
+use yanshi_memory::SessionMemory;
+use yanshi_tools::ToolRegistry;
 use serde_json::json;
 
 let agent = ReActAgent::new(
@@ -126,8 +126,8 @@ Minimal shape:
 use std::sync::Arc;
 use std::time::Duration;
 
-use agentflow_agents::tools::WorkflowTool;
-use agentflow_tools::ToolRegistry;
+use yanshi_agents::tools::WorkflowTool;
+use yanshi_tools::ToolRegistry;
 
 let workflow_tool = WorkflowTool::new(
   "format_summary_workflow",
@@ -159,13 +159,13 @@ The flow:
 goal (natural language)
   -> DynamicWorkflowAgent::plan        # one LLM call -> WorkflowPlan (JSON)
        WorkflowPlan { steps: [ WorkflowPlanStep { id, tool, params, depends_on } ] }
-  -> compile_plan_to_flow              # plan -> agentflow_graph::Flow
+  -> compile_plan_to_flow              # plan -> yanshi_graph::Flow
        depends_on -> graph edges (independent steps run in parallel,
                      dependent steps receive their deps' outputs)
   -> FlowRunner::run                   # execute the Flow deterministically
 ```
 
-The pieces live in `agentflow_agents::dynamic`:
+The pieces live in `yanshi_agents::dynamic`:
 
 - **`WorkflowPlan` / `WorkflowPlanStep`** — the declarative, LLM-shaped plan
   (`{ id, tool, params, depends_on }`). Validated for duplicate ids + dangling
@@ -181,13 +181,13 @@ The pieces live in `agentflow_agents::dynamic`:
   steps are carried forward as precomputed pass-throughs (never re-run), and
   the planner is asked for a revised plan covering just what's still missing,
   up to `max_replans` rounds. The `FlowRunner` injection (rather than a direct
-  dependency on the executor) is what keeps `agentflow-agents` off
-  `agentflow-core`; surfaces inject `agentflow_core::CoreFlowRunner::concurrent(n)`.
+  dependency on the executor) is what keeps `yanshi-agents` off
+  `yanshi-core`; surfaces inject `yanshi_core::CoreFlowRunner::concurrent(n)`.
 
 ### CLI surface
 
 ```bash
-agentflow workflow dynamic \
+yanshi workflow dynamic \
   --goal "Fetch the changelog and summarize the last release" \
   --model gpt-4o \
   --allow-domain raw.githubusercontent.com \
@@ -223,9 +223,9 @@ agent-authored plan is not a security hole:
 
 > **Bare invocation runs unsupervised (U4.1).** `--profile` defaults to `dev`,
 > which (per the `--approve` doc above) resolves to `--approve none` when
-> `--approve` itself is unset. That means `agentflow workflow dynamic --goal
+> `--approve` itself is unset. That means `yanshi workflow dynamic --goal
 > ... --model ...` with no other flags executes every LLM-authored tool call
-> immediately, with no approval prompt — unlike `agentflow harness run`/`chat`,
+> immediately, with no approval prompt — unlike `yanshi harness run`/`chat`,
 > which default to `--profile local` (interactive `cli` approval) since U2.3.
 > This asymmetry is intentional, not an oversight: `workflow dynamic`'s `dev`
 > default predates U2.3 and existing scripts/users rely on bare invocation
@@ -240,7 +240,7 @@ agent-authored plan is not a security hole:
 Run the self-contained mock example:
 
 ```bash
-cargo run -p agentflow-agents --example hybrid_workflow_agent
+cargo run -p yanshi-agents --example hybrid_workflow_agent
 ```
 
 The example:
@@ -346,7 +346,7 @@ Current support includes:
 - Checkpoint resume that skips completed agent outputs.
 - Trace extraction from nested `agent_result`.
 - Dynamic workflow: `WorkflowPlan` -> `compile_plan_to_flow` -> `FlowRunner`, the
-  `DynamicWorkflowAgent` LLM planner, and the `agentflow workflow dynamic` CLI
+  `DynamicWorkflowAgent` LLM planner, and the `yanshi workflow dynamic` CLI
   with sandbox + approval governance.
 
 Known follow-up work:

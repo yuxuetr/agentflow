@@ -33,11 +33,11 @@
 //!   endpoint and verify the hard-coded text-model default still
 //!   exists. Reports per-provider status + suggests replacements
 //!   when the default 404s (P10.3.4).
-//! - `redaction-lint` — grep every `agentflow-*/src/**/*.rs` for
+//! - `redaction-lint` — grep every `yanshi-*/src/**/*.rs` for
 //!   `(debug|info|warn|error)!(... danger = %text, ...)` patterns
 //!   that interpolate raw user prompt / response / content / body /
 //!   params into a log macro without going through
-//!   `agentflow_tracing::redaction` or `prompt_fingerprint`. Backs
+//!   `yanshi_tracing::redaction` or `prompt_fingerprint`. Backs
 //!   the Q5.2 workspace redaction audit.
 //! - `check-arch` — assert the subset of the eight crate-dependency laws
 //!   (`docs/RFC_CRATE_ARCHITECTURE.md` §7) checkable today: runtime-isolation,
@@ -169,7 +169,7 @@ fn print_usage(sink: &mut impl Write) {
   );
   let _ = writeln!(
     sink,
-    "  check-agent-sdk-doc  fail if {AGENT_SDK_DOC} references a CamelCase type that does not exist under any agentflow-*/src/**/*.rs"
+    "  check-agent-sdk-doc  fail if {AGENT_SDK_DOC} references a CamelCase type that does not exist under any yanshi-*/src/**/*.rs"
   );
   let _ = writeln!(
     sink,
@@ -189,11 +189,11 @@ fn print_usage(sink: &mut impl Write) {
   );
   let _ = writeln!(
     sink,
-    "  refresh-live-models  ping each provider's /models endpoint with the key from ~/.agentflow/.env (or env), report whether the live-test default still exists, suggest replacements on 404 (P10.3.4)"
+    "  refresh-live-models  ping each provider's /models endpoint with the key from ~/.yanshi/.env (or env), report whether the live-test default still exists, suggest replacements on 404 (P10.3.4)"
   );
   let _ = writeln!(
     sink,
-    "  redaction-lint       grep agentflow-*/src/**/*.rs for `(debug|info|warn|error)!(... <danger> = %...)` patterns that interpolate raw user prompt / response / content / body into a log macro without redaction (Q5.2)"
+    "  redaction-lint       grep yanshi-*/src/**/*.rs for `(debug|info|warn|error)!(... <danger> = %...)` patterns that interpolate raw user prompt / response / content / body into a log macro without redaction (Q5.2)"
   );
   let _ = writeln!(
     sink,
@@ -201,7 +201,7 @@ fn print_usage(sink: &mut impl Write) {
   );
   let _ = writeln!(
     sink,
-    "  println-lint         fail if agentflow-core/agentflow-nodes/agentflow-nodes-ai contain println!/eprintln! used as logging outside test code (V1.7); suppress a documented exception with `// allow-println-lint: <reason>`"
+    "  println-lint         fail if yanshi-core/yanshi-nodes/yanshi-nodes-ai contain println!/eprintln! used as logging outside test code (V1.7); suppress a documented exception with `// allow-println-lint: <reason>`"
   );
 }
 

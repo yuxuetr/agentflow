@@ -14,7 +14,7 @@
 #   - 100+ file stress test would need a larger input/ corpus.
 #
 # Run:
-#   agentflow workflow run examples/applications/doc-translator/workflow-iter4.yml
+#   yanshi workflow run examples/applications/doc-translator/workflow-iter4.yml
 
 name: "doc-translator iteration 4"
 description: "Discover *.md via shell, then translate the file × lang cross product in parallel."

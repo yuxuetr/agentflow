@@ -1,4 +1,4 @@
-# AgentFlow 模块优化评估报告
+# Yanshi 模块优化评估报告
 
 > **Historical reference（R2.2，2026-07-28 补标）**：本报告保留 2025-01-04 的
 > 评估上下文，其中的完成度百分比（如 agents 30%、RAG 80%）已被后续近一年半
@@ -16,7 +16,7 @@
 
 ### ✅ 生产就绪模块
 
-#### 1. agentflow-core (v0.2.0) - 95% 完成 ⭐⭐⭐⭐⭐
+#### 1. yanshi-core (v0.2.0) - 95% 完成 ⭐⭐⭐⭐⭐
 **状态**: 生产就绪，无需立即优化
 
 **核心功能**:
@@ -35,7 +35,7 @@
 
 ---
 
-#### 2. agentflow-llm (v0.2.0) - 90% 完成 ⭐⭐⭐⭐⭐
+#### 2. yanshi-llm (v0.2.0) - 90% 完成 ⭐⭐⭐⭐⭐
 **状态**: 生产就绪，功能完善
 
 **核心功能**:
@@ -53,7 +53,7 @@
 
 ---
 
-#### 3. agentflow-nodes (v0.2.0) - 85% 完成 ⭐⭐⭐⭐
+#### 3. yanshi-nodes (v0.2.0) - 85% 完成 ⭐⭐⭐⭐
 **状态**: 生产就绪，16+节点可用
 
 **核心功能**:
@@ -74,7 +74,7 @@
 
 ---
 
-#### 4. agentflow-cli (v0.2.0) - 80% 完成 ⭐⭐⭐⭐
+#### 4. yanshi-cli (v0.2.0) - 80% 完成 ⭐⭐⭐⭐
 **状态**: 生产就绪，CLI工具完整
 
 **核心功能**:
@@ -88,12 +88,12 @@
 
 **建议优化**:
 - 🟡 **优先级：中** - 需要RAG和MCP命令
-- **待添加**: `agentflow rag` 命令（索引、搜索、管理）
-- **待添加**: `agentflow mcp` 命令（列表、调用、资源）
+- **待添加**: `yanshi rag` 命令（索引、搜索、管理）
+- **待添加**: `yanshi mcp` 命令（列表、调用、资源）
 
 ---
 
-#### 5. agentflow-mcp (v0.1.0-alpha) - 100% 完成 ⭐⭐⭐⭐⭐
+#### 5. yanshi-mcp (v0.1.0-alpha) - 100% 完成 ⭐⭐⭐⭐⭐
 **状态**: ✅ **完全集成** - 生产就绪 (2025-01-04完成)
 
 **核心功能**:
@@ -119,7 +119,7 @@
 
 ### 🔄 开发中模块
 
-#### 6. agentflow-rag (v0.3.0-alpha) - 80% 完成 ⭐⭐⭐⭐
+#### 6. yanshi-rag (v0.3.0-alpha) - 80% 完成 ⭐⭐⭐⭐
 **状态**: **Phase 4 刚完成！** 🎉
 
 **已完成**:
@@ -148,7 +148,7 @@
 
 ---
 
-#### 7. agentflow-agents (v0.2.0) - 30% 完成 ⭐⭐
+#### 7. yanshi-agents (v0.2.0) - 30% 完成 ⭐⭐
 **状态**: 基础功能，需要扩展
 
 **核心功能**:
@@ -167,10 +167,10 @@
 ### 🔴 高优先级（需要立即处理）
 
 #### 1. MCP工作流集成 ✅ 已完成！ (2025-01-04)
-**影响**: agentflow-mcp客户端已完成，并已完全集成到工作流
+**影响**: yanshi-mcp客户端已完成，并已完全集成到工作流
 **已完成项**:
-- [x] 在agentflow-nodes创建MCPNode (已完成)
-- [x] 在agentflow-cli添加MCP命令 (已完成)
+- [x] 在yanshi-nodes创建MCPNode (已完成)
+- [x] 在yanshi-cli添加MCP命令 (已完成)
 - [x] 创建工作流示例 (已完成)
 - [x] 更新文档 (已完成)
 
@@ -205,15 +205,15 @@
 #### 4. 测试覆盖率不均
 **影响**: 部分模块测试较少
 **现状**:
-- agentflow-core: 74测试 ✅
-- agentflow-mcp: 162测试 ✅
-- agentflow-rag: 41测试 ✅
-- agentflow-nodes: 需要更多集成测试 ⚠️
-- agentflow-cli: 需要端到端测试 ⚠️
+- yanshi-core: 74测试 ✅
+- yanshi-mcp: 162测试 ✅
+- yanshi-rag: 41测试 ✅
+- yanshi-nodes: 需要更多集成测试 ⚠️
+- yanshi-cli: 需要端到端测试 ⚠️
 
 **解决方案**:
-- [ ] 增加agentflow-nodes集成测试
-- [ ] 增加agentflow-cli端到端测试
+- [ ] 增加yanshi-nodes集成测试
+- [ ] 增加yanshi-cli端到端测试
 - [ ] 目标：80%+覆盖率
 
 **预计工作量**: 1周
@@ -241,15 +241,15 @@
 
 **任务清单** - ✅ 全部完成:
 1. **Day 1-3**: 实现MCPNode ✅
-   - 在agentflow-nodes/src/nodes/创建mcp.rs ✅
+   - 在yanshi-nodes/src/nodes/创建mcp.rs ✅
    - 实现AsyncNode trait ✅
    - 工具调用和参数处理 ✅
    - 单元测试 ✅
 
 2. **Day 4-5**: CLI命令 ✅
-   - agentflow mcp list-tools ✅
-   - agentflow mcp call-tool ✅
-   - agentflow mcp list-resources ✅
+   - yanshi mcp list-tools ✅
+   - yanshi mcp call-tool ✅
+   - yanshi mcp list-resources ✅
 
 3. **Day 6-7**: 示例和文档 ✅
    - 工作流示例 ✅
@@ -329,7 +329,7 @@
 
 **编译质量**:
 - ✅ 所有模块编译成功
-- ⚠️ 修复3个死代码警告（agentflow-rag）
+- ⚠️ 修复3个死代码警告（yanshi-rag）
 
 **测试质量**:
 - ✅ 核心模块测试充分

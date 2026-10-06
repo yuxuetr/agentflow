@@ -1,0 +1,1329 @@
+use assert_cmd::Command;
+use predicates::prelude::*;
+use std::fs;
+use std::io::Cursor;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tempfile::TempDir;
+
+use yanshi_skills::{
+  ChecksumSha256SignatureVerifier, RemoteMarketplaceCache, RemoteMarketplaceClient,
+  RemoteMarketplaceEntry,
+};
+use yanshi_skills::{MarketplacePackageType, MarketplaceSignature, MarketplaceSource};
+
+const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/// V3.5: `RemoteMarketplaceCache::new()` now defaults to
+/// `Ed25519SignatureVerifier`. Every fixture in this file that
+/// pre-populates the on-disk cache directly (bypassing the CLI's own
+/// `cache_from_dir` verifier selection, which is what several of
+/// these tests actually exercise via `Command::cargo_bin`) uses a
+/// `checksum-sha256`-algorithm signature, so the pre-population cache
+/// must be built with `ChecksumSha256SignatureVerifier` explicitly.
+fn checksum_cache(root: impl Into<PathBuf>) -> RemoteMarketplaceCache {
+  RemoteMarketplaceCache::with_client_and_verifier(
+    root,
+    RemoteMarketplaceClient::new(),
+    Arc::new(ChecksumSha256SignatureVerifier),
+  )
+}
+
+fn write_marketplace(path: &Path, checksum: &str) {
+  fs::write(
+    path,
+    format!(
+      r#"
+schema_version = 1
+name = "remote-test"
+description = "Test remote marketplace"
+
+[[entries]]
+name = "rust-expert"
+version = "1.0.0"
+type = "skill"
+aliases = ["rust"]
+description = "Rust review skill"
+
+[entries.source]
+registry_url = "https://registry.example.com/marketplace.toml"
+artifact_url = "https://registry.example.com/rust-expert.tar.gz"
+checksum_sha256 = "{checksum}"
+
+[entries.signature]
+algorithm = "checksum-sha256"
+key_id = "test"
+value = "{checksum}"
+
+[[entries]]
+name = "echo-plugin"
+version = "0.1.0"
+type = "plugin"
+
+[entries.source]
+registry_url = "https://registry.example.com/marketplace.toml"
+artifact_url = "https://registry.example.com/echo-plugin.tar.gz"
+checksum_sha256 = "{DIGEST}"
+"#
+    ),
+  )
+  .unwrap();
+}
+
+fn entry_for_bytes(bytes: &[u8]) -> RemoteMarketplaceEntry {
+  let checksum = sha256_hex(bytes);
+  RemoteMarketplaceEntry {
+    name: "rust-expert".into(),
+    version: "1.0.0".into(),
+    package_type: MarketplacePackageType::Skill,
+    source: MarketplaceSource {
+      registry_url: "https://registry.example.com/marketplace.toml".into(),
+      artifact_url: "https://registry.example.com/rust-expert.tar.gz".into(),
+      checksum_sha256: checksum.clone(),
+    },
+    signature: Some(MarketplaceSignature {
+      algorithm: "checksum-sha256".into(),
+      key_id: "test".into(),
+      value: checksum,
+    }),
+    aliases: vec!["rust".into()],
+    description: Some("Rust review skill".into()),
+  }
+}
+
+#[cfg(feature = "plugin")]
+fn plugin_entry_for_bytes(bytes: &[u8]) -> RemoteMarketplaceEntry {
+  let checksum = sha256_hex(bytes);
+  RemoteMarketplaceEntry {
+    name: "echo-plugin".into(),
+    version: "0.1.0".into(),
+    package_type: MarketplacePackageType::Plugin,
+    source: MarketplaceSource {
+      registry_url: "https://registry.example.com/marketplace.toml".into(),
+      artifact_url: "https://registry.example.com/echo-plugin.tar".into(),
+      checksum_sha256: checksum.clone(),
+    },
+    signature: Some(MarketplaceSignature {
+      algorithm: "checksum-sha256".into(),
+      key_id: "test".into(),
+      value: checksum,
+    }),
+    aliases: vec![],
+    description: Some("Echo plugin".into()),
+  }
+}
+
+fn write_marketplace_for_entry(path: &Path, entry: &RemoteMarketplaceEntry) {
+  let aliases = if entry.aliases.is_empty() {
+    String::new()
+  } else {
+    format!(
+      "aliases = [{}]\n",
+      entry
+        .aliases
+        .iter()
+        .map(|alias| format!("\"{alias}\""))
+        .collect::<Vec<_>>()
+        .join(", ")
+    )
+  };
+  let signature = entry
+    .signature
+    .as_ref()
+    .map_or_else(String::new, |signature| {
+      format!(
+        r#"
+[entries.signature]
+algorithm = "{}"
+key_id = "{}"
+value = "{}"
+"#,
+        signature.algorithm, signature.key_id, signature.value
+      )
+    });
+  fs::write(
+    path,
+    format!(
+      r#"
+schema_version = 1
+name = "remote-test"
+
+[[entries]]
+name = "{}"
+version = "{}"
+type = "{}"
+{}description = "{}"
+
+[entries.source]
+registry_url = "{}"
+artifact_url = "{}"
+checksum_sha256 = "{}"
+{}
+"#,
+      entry.name,
+      entry.version,
+      entry.package_type.as_str(),
+      aliases,
+      entry.description.as_deref().unwrap_or_default(),
+      entry.source.registry_url,
+      entry.source.artifact_url,
+      entry.source.checksum_sha256,
+      signature
+    ),
+  )
+  .unwrap();
+}
+
+fn tar_bytes(entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
+  let mut bytes = Vec::new();
+  {
+    let cursor = Cursor::new(&mut bytes);
+    let mut builder = tar::Builder::new(cursor);
+    for (path, content, mode) in entries {
+      let mut header = tar::Header::new_gnu();
+      header.set_size(content.len() as u64);
+      header.set_mode(*mode);
+      header.set_cksum();
+      builder
+        .append_data(&mut header, path, Cursor::new(*content))
+        .unwrap();
+    }
+    builder.finish().unwrap();
+  }
+  bytes
+}
+
+fn tar_link_bytes(path: &str, target: &str, entry_type: tar::EntryType) -> Vec<u8> {
+  let mut bytes = Vec::new();
+  {
+    let cursor = Cursor::new(&mut bytes);
+    let mut builder = tar::Builder::new(cursor);
+    let mut header = tar::Header::new_gnu();
+    header.set_entry_type(entry_type);
+    header.set_size(0);
+    header.set_mode(0o644);
+    builder.append_link(&mut header, path, target).unwrap();
+    builder.finish().unwrap();
+  }
+  bytes
+}
+
+fn raw_tar_bytes(path: &str, content: &[u8]) -> Vec<u8> {
+  let mut header = [0u8; 512];
+  write_tar_field(&mut header[0..100], path.as_bytes());
+  write_octal(&mut header[100..108], 0o644);
+  write_octal(&mut header[108..116], 0);
+  write_octal(&mut header[116..124], 0);
+  write_octal(&mut header[124..136], content.len() as u64);
+  write_octal(&mut header[136..148], 0);
+  for byte in &mut header[148..156] {
+    *byte = b' ';
+  }
+  header[156] = b'0';
+  write_tar_field(&mut header[257..263], b"ustar\0");
+  write_tar_field(&mut header[263..265], b"00");
+  let checksum: u32 = header.iter().map(|byte| *byte as u32).sum();
+  write_checksum(&mut header[148..156], checksum);
+
+  let mut bytes = Vec::new();
+  bytes.extend_from_slice(&header);
+  bytes.extend_from_slice(content);
+  let padding = (512 - (content.len() % 512)) % 512;
+  bytes.extend(std::iter::repeat_n(0, padding));
+  bytes.extend_from_slice(&[0u8; 1024]);
+  bytes
+}
+
+fn write_tar_field(field: &mut [u8], value: &[u8]) {
+  let len = value.len().min(field.len());
+  field[..len].copy_from_slice(&value[..len]);
+}
+
+fn write_octal(field: &mut [u8], value: u64) {
+  let rendered = format!("{value:0width$o}\0", width = field.len() - 1);
+  field.copy_from_slice(rendered.as_bytes());
+}
+
+fn write_checksum(field: &mut [u8], value: u32) {
+  let rendered = format!("{value:06o}\0 ",);
+  field.copy_from_slice(rendered.as_bytes());
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+  use sha2::{Digest, Sha256};
+  let mut hasher = Sha256::new();
+  hasher.update(bytes);
+  format!("{:x}", hasher.finalize())
+}
+
+fn install_cached_skill_package_asserts_failure(package: &[u8], expected_stderr: &'static str) {
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  let cache_dir = work.path().join("cache");
+  let install_dir = work.path().join("skills");
+  let entry = entry_for_bytes(package);
+  write_marketplace_for_entry(&marketplace, &entry);
+  checksum_cache(&cache_dir)
+    .cache_artifact_bytes(&entry, package)
+    .unwrap();
+
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "install",
+      marketplace.to_str().unwrap(),
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--dir",
+      install_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains(expected_stderr));
+}
+
+#[test]
+fn marketplace_search_lists_matching_packages() {
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  write_marketplace(&marketplace, DIGEST);
+
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "search",
+      marketplace.to_str().unwrap(),
+      "rust",
+      "--type",
+      "skill",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("Marketplace: remote-test"))
+    .stdout(predicate::str::contains("rust-expert @ 1.0.0"))
+    .stdout(predicate::str::contains("type: skill"));
+}
+
+#[test]
+fn marketplace_search_json_format_emits_structured_payload() {
+  // P10.9.2 — `--format json` emits the bare structured body. The
+  // existing `--format text` path (above) stays unchanged; this test
+  // pins the JSON wire shape so scripts can rely on it.
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  write_marketplace(&marketplace, DIGEST);
+
+  let assert = Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "search",
+      marketplace.to_str().unwrap(),
+      "rust",
+      "--type",
+      "skill",
+      "--format",
+      "json",
+    ])
+    .assert()
+    .success();
+  let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+  let body: serde_json::Value = serde_json::from_str(&stdout).expect("body must be JSON");
+
+  // Pin the structural keys that operator scripts will read.
+  assert_eq!(body["registry"], marketplace.to_str().unwrap());
+  assert_eq!(body["query"], "rust");
+  assert_eq!(body["package_type_filter"], "skill");
+  assert_eq!(body["manifest"]["name"], "remote-test");
+  assert_eq!(body["manifest"]["total_entries"], 2);
+  assert_eq!(body["matched_count"], 1);
+  assert_eq!(body["entries"].as_array().unwrap().len(), 1);
+  assert_eq!(body["entries"][0]["name"], "rust-expert");
+  assert_eq!(body["entries"][0]["version"], "1.0.0");
+  assert_eq!(body["entries"][0]["type"], "skill");
+  // Aliases survive the round-trip.
+  assert_eq!(body["entries"][0]["aliases"][0], "rust");
+}
+
+#[test]
+fn marketplace_search_json_envelope_wraps_body_in_canonical_shape() {
+  // P10.9.2 — `--format json-envelope` wraps the body in the
+  // `yanshi.cli/1` shape. The envelope contract:
+  //   version + command + result + errors are the only top-level keys;
+  //   result is byte-identical to `--format json` output.
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  write_marketplace(&marketplace, DIGEST);
+
+  // Capture legacy `--format json` body as baseline.
+  let json_output = Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "search",
+      marketplace.to_str().unwrap(),
+      "rust",
+      "--type",
+      "skill",
+      "--format",
+      "json",
+    ])
+    .output()
+    .unwrap();
+  let legacy_body: serde_json::Value =
+    serde_json::from_slice(&json_output.stdout).expect("json body");
+
+  // Now request the envelope.
+  let env_output = Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "search",
+      marketplace.to_str().unwrap(),
+      "rust",
+      "--type",
+      "skill",
+      "--format",
+      "json-envelope",
+    ])
+    .output()
+    .unwrap();
+  assert!(env_output.status.success());
+  let env: serde_json::Value =
+    serde_json::from_slice(&env_output.stdout).expect("envelope must be JSON");
+
+  assert_eq!(env["version"], "yanshi.cli/1");
+  assert_eq!(env["command"], "marketplace search");
+  assert_eq!(env["result"], legacy_body);
+  assert_eq!(env["errors"].as_array().unwrap().len(), 0);
+  // No other top-level keys — pin the envelope shape so future
+  // additions are deliberate, not accidental.
+  let env_obj = env.as_object().expect("envelope is an object");
+  let mut keys: Vec<&str> = env_obj.keys().map(|s| s.as_str()).collect();
+  keys.sort();
+  assert_eq!(keys, vec!["command", "errors", "result", "version"]);
+}
+
+#[test]
+fn marketplace_search_json_format_empty_match_set_renders_empty_entries() {
+  // No matches → `entries` is an empty array, not null/missing.
+  // Scripts that iterate over the array shouldn't need to special-case
+  // the no-result path.
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  write_marketplace(&marketplace, DIGEST);
+
+  let assert = Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "search",
+      marketplace.to_str().unwrap(),
+      "no-such-package-xyzzy",
+      "--format",
+      "json",
+    ])
+    .assert()
+    .success();
+  let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+  let body: serde_json::Value = serde_json::from_str(&stdout).expect("json body");
+  assert_eq!(body["matched_count"], 0);
+  assert!(body["entries"].is_array());
+  assert_eq!(body["entries"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn marketplace_search_unknown_format_is_rejected_by_clap() {
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  write_marketplace(&marketplace, DIGEST);
+
+  // Unknown format strings must be rejected up front by the value_parser
+  // so misconfigured CI doesn't silently fall through to text mode.
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "search",
+      marketplace.to_str().unwrap(),
+      "rust",
+      "--format",
+      "yaml-with-comments",
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("invalid value"));
+}
+
+#[test]
+fn marketplace_update_writes_registry_cache() {
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  let cache = work.path().join("cache");
+  write_marketplace(&marketplace, DIGEST);
+
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "update",
+      marketplace.to_str().unwrap(),
+      "--cache-dir",
+      cache.to_str().unwrap(),
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+      "Updated marketplace registry cache",
+    ));
+
+  assert!(cache.join("registries").join("remote-test.toml").is_file());
+}
+
+#[test]
+fn marketplace_verify_checks_cached_artifact() {
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  let cache_dir = work.path().join("cache");
+  let bytes = b"verified package";
+  let entry = entry_for_bytes(bytes);
+  write_marketplace(&marketplace, &entry.source.checksum_sha256);
+  checksum_cache(&cache_dir)
+    .cache_artifact_bytes(&entry, bytes)
+    .unwrap();
+
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "verify",
+      marketplace.to_str().unwrap(),
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+      "Verified skill package: rust-expert",
+    ))
+    .stdout(predicate::str::contains("signature_checked: true"));
+}
+
+#[test]
+fn marketplace_verify_strict_rejects_unsigned_artifact() {
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  let cache_dir = work.path().join("cache");
+  let bytes = b"unsigned package";
+  let mut entry = entry_for_bytes(bytes);
+  entry.signature = None;
+  write_marketplace_for_entry(&marketplace, &entry);
+  checksum_cache(&cache_dir)
+    .cache_artifact_bytes(&entry, bytes)
+    .unwrap();
+
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "verify",
+      marketplace.to_str().unwrap(),
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--strict",
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains(
+      "Strict verification requires signature metadata",
+    ));
+}
+
+#[test]
+fn marketplace_install_skill_package_from_verified_cache() {
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  let cache_dir = work.path().join("cache");
+  let install_dir = work.path().join("skills");
+  let package = tar_bytes(&[(
+    "rust-expert/SKILL.md",
+    br#"---
+name: rust-expert
+description: Rust review skill
+allowed-tools: file
+---
+
+# Rust Expert
+
+Review Rust code.
+"#,
+    0o644,
+  )]);
+  let entry = entry_for_bytes(&package);
+  write_marketplace_for_entry(&marketplace, &entry);
+  checksum_cache(&cache_dir)
+    .cache_artifact_bytes(&entry, &package)
+    .unwrap();
+
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "install",
+      marketplace.to_str().unwrap(),
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--dir",
+      install_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+      "Cached skill package: rust-expert",
+    ))
+    .stdout(predicate::str::contains(
+      "Installed skill package: rust-expert",
+    ));
+
+  assert!(install_dir.join("rust-expert").join("SKILL.md").is_file());
+}
+
+#[test]
+fn marketplace_install_cache_only_skips_unpack() {
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  let cache_dir = work.path().join("cache");
+  let install_dir = work.path().join("skills");
+  let package = tar_bytes(&[(
+    "rust-expert/SKILL.md",
+    br#"---
+name: rust-expert
+description: Rust review skill
+---
+
+# Rust Expert
+"#,
+    0o644,
+  )]);
+  let entry = entry_for_bytes(&package);
+  write_marketplace_for_entry(&marketplace, &entry);
+  checksum_cache(&cache_dir)
+    .cache_artifact_bytes(&entry, &package)
+    .unwrap();
+
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "install",
+      marketplace.to_str().unwrap(),
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--dir",
+      install_dir.to_str().unwrap(),
+      "--cache-only",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("cache_only: true"));
+
+  assert!(!install_dir.join("rust-expert").exists());
+}
+
+#[test]
+fn marketplace_install_rejects_absolute_archive_path() {
+  let package = raw_tar_bytes("/tmp/yanshi-escape", b"escape");
+
+  install_cached_skill_package_asserts_failure(&package, "unsafe archive path");
+}
+
+#[test]
+fn marketplace_install_rejects_traversal_archive_path() {
+  let package = raw_tar_bytes("../yanshi-escape", b"escape");
+
+  install_cached_skill_package_asserts_failure(&package, "unsafe archive path");
+}
+
+#[test]
+fn marketplace_install_rejects_symlink_archive_entry() {
+  let package = tar_link_bytes("rust-expert/escape", "/tmp/escape", tar::EntryType::Symlink);
+
+  install_cached_skill_package_asserts_failure(&package, "unsafe archive entry");
+}
+
+#[test]
+fn marketplace_install_rejects_hardlink_archive_entry() {
+  let package = tar_link_bytes("rust-expert/escape", "/tmp/escape", tar::EntryType::Link);
+
+  install_cached_skill_package_asserts_failure(&package, "unsafe archive entry");
+}
+
+#[test]
+fn marketplace_install_rejects_duplicate_archive_path() {
+  let package = tar_bytes(&[
+    (
+      "rust-expert/SKILL.md",
+      br#"---
+name: rust-expert
+description: Rust review skill
+---
+
+# First
+"#,
+      0o644,
+    ),
+    (
+      "rust-expert/SKILL.md",
+      br#"---
+name: rust-expert
+description: Rust review skill
+---
+
+# Second
+"#,
+      0o644,
+    ),
+  ]);
+
+  install_cached_skill_package_asserts_failure(&package, "duplicate archive path");
+}
+
+#[test]
+fn marketplace_install_rejects_oversized_archive_file() {
+  let large = vec![b'x'; 16 * 1024 * 1024 + 1];
+  let package = tar_bytes(&[("rust-expert/large.bin", &large, 0o644)]);
+
+  install_cached_skill_package_asserts_failure(&package, "oversized archive file");
+}
+
+#[cfg(feature = "plugin")]
+#[test]
+fn marketplace_install_plugin_package_from_verified_cache() {
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  let cache_dir = work.path().join("cache");
+  let install_dir = work.path().join("plugins");
+  let package = tar_bytes(&[
+    (
+      "echo-plugin/plugin.toml",
+      br#"[plugin]
+name = "echo-plugin"
+version = "0.1.0"
+runtime = "subprocess"
+entrypoint = "bin/echo"
+protocol = "yanshi.plugin/1"
+
+[[plugin.nodes]]
+type = "echo"
+description = "Echo node"
+"#,
+      0o644,
+    ),
+    ("echo-plugin/bin/echo", b"#!/bin/sh\necho ok\n", 0o755),
+  ]);
+  let entry = plugin_entry_for_bytes(&package);
+  write_marketplace_for_entry(&marketplace, &entry);
+  checksum_cache(&cache_dir)
+    .cache_artifact_bytes(&entry, &package)
+    .unwrap();
+
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "install",
+      marketplace.to_str().unwrap(),
+      "echo-plugin",
+      "--type",
+      "plugin",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--dir",
+      install_dir.to_str().unwrap(),
+      "--force",
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains(
+      "Cached plugin package: echo-plugin",
+    ))
+    .stdout(predicate::str::contains(
+      "Installed plugin package: echo-plugin",
+    ));
+
+  assert!(
+    install_dir
+      .join("echo-plugin")
+      .join("plugin.toml")
+      .is_file()
+  );
+  assert!(
+    install_dir
+      .join("echo-plugin")
+      .join("bin")
+      .join("echo")
+      .is_file()
+  );
+}
+
+// ── P5.1: atomic install handoff ───────────────────────────────────────────
+//
+// The install pipeline stages each unpack into a sibling temp dir and
+// renames it into the install dir only after the copy fully succeeds. The
+// two tests below cover the success path (no temp dir visible after) and
+// the force-overwrite happy path (prior install replaced, with no orphan
+// `.installing` or `.replacing` directories left on disk).
+
+fn list_install_root_children(install_root: &Path) -> Vec<String> {
+  if !install_root.exists() {
+    return Vec::new();
+  }
+  let mut names: Vec<String> = std::fs::read_dir(install_root)
+    .unwrap()
+    .filter_map(|e| e.ok())
+    .map(|e| e.file_name().to_string_lossy().into_owned())
+    .collect();
+  names.sort();
+  names
+}
+
+#[test]
+fn marketplace_install_leaves_no_temp_dirs_on_success() {
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  let cache_dir = work.path().join("cache");
+  let install_dir = work.path().join("skills");
+  let package = tar_bytes(&[(
+    "rust-expert/SKILL.md",
+    br#"---
+name: rust-expert
+description: Rust review skill
+allowed-tools: file
+---
+
+# Rust Expert
+"#,
+    0o644,
+  )]);
+  let entry = entry_for_bytes(&package);
+  write_marketplace_for_entry(&marketplace, &entry);
+  checksum_cache(&cache_dir)
+    .cache_artifact_bytes(&entry, &package)
+    .unwrap();
+
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "install",
+      marketplace.to_str().unwrap(),
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--dir",
+      install_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .success();
+
+  // The install root must contain *exactly* the final destination and
+  // nothing else — no `.installing` / `.replacing` siblings left behind.
+  let children = list_install_root_children(&install_dir);
+  assert_eq!(
+    children,
+    vec!["rust-expert".to_string()],
+    "install root must contain only the final destination after a clean install; got {children:?}"
+  );
+}
+
+#[test]
+fn marketplace_install_force_overwrite_preserves_install_root_layout() {
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  let cache_dir = work.path().join("cache");
+  let install_dir = work.path().join("skills");
+
+  // First install — succeeds and creates the rust-expert directory.
+  let package_v1 = tar_bytes(&[(
+    "rust-expert/SKILL.md",
+    br#"---
+name: rust-expert
+description: Rust review skill v1
+allowed-tools: file
+---
+
+# Rust Expert v1
+"#,
+    0o644,
+  )]);
+  let entry = entry_for_bytes(&package_v1);
+  write_marketplace_for_entry(&marketplace, &entry);
+  checksum_cache(&cache_dir)
+    .cache_artifact_bytes(&entry, &package_v1)
+    .unwrap();
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "install",
+      marketplace.to_str().unwrap(),
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--dir",
+      install_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .success();
+
+  // Second install — same package id, --force overwrite.
+  let package_v2 = tar_bytes(&[(
+    "rust-expert/SKILL.md",
+    br#"---
+name: rust-expert
+description: Rust review skill v2
+allowed-tools: file
+---
+
+# Rust Expert v2
+"#,
+    0o644,
+  )]);
+  let entry_v2 = entry_for_bytes(&package_v2);
+  // Re-write the marketplace toml with the v2 checksum so install accepts it.
+  write_marketplace_for_entry(&marketplace, &entry_v2);
+  // Cache the v2 bytes under the v2 entry. The cache key is per-version,
+  // so v1 stays on disk; v2 is what install reads.
+  checksum_cache(&cache_dir)
+    .cache_artifact_bytes(&entry_v2, &package_v2)
+    .unwrap();
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "install",
+      marketplace.to_str().unwrap(),
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--dir",
+      install_dir.to_str().unwrap(),
+      "--force",
+    ])
+    .assert()
+    .success();
+
+  // The destination must now hold the v2 content; no temp dirs leaked.
+  let content = fs::read_to_string(install_dir.join("rust-expert").join("SKILL.md")).unwrap();
+  assert!(
+    content.contains("Rust Expert v2"),
+    "destination must hold the new install after --force, got: {content}"
+  );
+  let children = list_install_root_children(&install_dir);
+  assert_eq!(
+    children,
+    vec!["rust-expert".to_string()],
+    "force-overwrite must not leave .installing or .replacing siblings; got {children:?}"
+  );
+}
+
+#[test]
+fn marketplace_install_collision_without_force_leaves_existing_intact() {
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  let cache_dir = work.path().join("cache");
+  let install_dir = work.path().join("skills");
+
+  // Pre-create a sentinel install — a hand-rolled SKILL.md that the
+  // marketplace must NOT overwrite (collision without --force).
+  let dest_dir = install_dir.join("rust-expert");
+  fs::create_dir_all(&dest_dir).unwrap();
+  let sentinel_path = dest_dir.join("SKILL.md");
+  fs::write(&sentinel_path, "SENTINEL").unwrap();
+
+  let package = tar_bytes(&[(
+    "rust-expert/SKILL.md",
+    br#"---
+name: rust-expert
+description: Rust review skill
+allowed-tools: file
+---
+
+# Replacement
+"#,
+    0o644,
+  )]);
+  let entry = entry_for_bytes(&package);
+  write_marketplace_for_entry(&marketplace, &entry);
+  checksum_cache(&cache_dir)
+    .cache_artifact_bytes(&entry, &package)
+    .unwrap();
+
+  // Without --force, the install must fail and the sentinel must survive.
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "install",
+      marketplace.to_str().unwrap(),
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--dir",
+      install_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .failure();
+  let sentinel = fs::read_to_string(&sentinel_path).unwrap();
+  assert_eq!(
+    sentinel, "SENTINEL",
+    "without --force, an existing install must remain byte-identical; got {sentinel:?}"
+  );
+  // Atomic guarantee: no `.installing` staging dir leaked into the install
+  // root after the early collision check.
+  let children = list_install_root_children(&install_dir);
+  assert_eq!(
+    children,
+    vec!["rust-expert".to_string()],
+    "early-exit on collision must leave no staging artifacts; got {children:?}"
+  );
+}
+
+#[cfg(feature = "plugin")]
+#[test]
+fn marketplace_install_plugin_rejects_entrypoint_outside_package() {
+  let work = TempDir::new().unwrap();
+  let marketplace = work.path().join("marketplace.toml");
+  let cache_dir = work.path().join("cache");
+  let install_dir = work.path().join("plugins");
+  let package = tar_bytes(&[(
+    "echo-plugin/plugin.toml",
+    br#"[plugin]
+name = "echo-plugin"
+version = "0.1.0"
+runtime = "subprocess"
+entrypoint = "../outside-entry"
+protocol = "yanshi.plugin/1"
+
+[[plugin.nodes]]
+type = "echo"
+description = "Echo node"
+"#,
+    0o644,
+  )]);
+  let entry = plugin_entry_for_bytes(&package);
+  write_marketplace_for_entry(&marketplace, &entry);
+  checksum_cache(&cache_dir)
+    .cache_artifact_bytes(&entry, &package)
+    .unwrap();
+
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "install",
+      marketplace.to_str().unwrap(),
+      "echo-plugin",
+      "--type",
+      "plugin",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--dir",
+      install_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("entrypoint"))
+    .stderr(predicate::str::contains("outside package root"));
+}
+
+// ── T0.1: non-local registries default to real Ed25519 verification ───────
+//
+// A `registry` argument that is an http(s) URL is a genuinely remote
+// marketplace, so `install`/`verify` must default to
+// `Ed25519SignatureVerifier { require_signature: true }` rather than the
+// weak checksum-only re-hash. These tests spin up a throwaway blocking
+// HTTP server (the CLI subprocess fetches the manifest for real) and
+// pre-populate the artifact cache directly on disk — mirroring "already
+// downloaded" — so no artifact fetch over HTTP is needed.
+
+/// Serve `body` exactly once over a loopback HTTP server and return the URL.
+/// The server thread is intentionally left detached: the test only needs
+/// one GET to complete before the CLI subprocess parses the response.
+fn spawn_blocking_manifest_server(body: String) -> String {
+  use std::io::{Read, Write};
+  use std::net::TcpListener;
+
+  let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+  let addr = listener.local_addr().unwrap();
+  std::thread::spawn(move || {
+    if let Ok((mut socket, _)) = listener.accept() {
+      let mut buf = [0u8; 4096];
+      let _ = socket.read(&mut buf);
+      let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        body.len(),
+        body
+      );
+      let _ = socket.write_all(response.as_bytes());
+    }
+  });
+  format!("http://{addr}/marketplace.toml")
+}
+
+/// Write `entry`'s manifest TOML to a temp file (reusing
+/// `write_marketplace_for_entry`) and return its contents, ready to be
+/// served by [`spawn_blocking_manifest_server`].
+fn manifest_toml_for_entry(entry: &RemoteMarketplaceEntry) -> String {
+  let work = TempDir::new().unwrap();
+  let path = work.path().join("marketplace.toml");
+  write_marketplace_for_entry(&path, entry);
+  fs::read_to_string(&path).unwrap()
+}
+
+fn ed25519_signed_entry_for_bytes(
+  bytes: &[u8],
+  key_id: &str,
+  sk: &ed25519_dalek::SigningKey,
+) -> RemoteMarketplaceEntry {
+  use base64::Engine;
+  use ed25519_dalek::Signer;
+
+  let sig = sk.sign(bytes);
+  let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
+  RemoteMarketplaceEntry {
+    name: "rust-expert".into(),
+    version: "1.0.0".into(),
+    package_type: MarketplacePackageType::Skill,
+    source: MarketplaceSource {
+      registry_url: "https://registry.example.com/marketplace.toml".into(),
+      artifact_url: "https://registry.example.com/rust-expert.tar.gz".into(),
+      checksum_sha256: sha256_hex(bytes),
+    },
+    signature: Some(MarketplaceSignature {
+      algorithm: "ed25519".into(),
+      key_id: key_id.into(),
+      value: sig_b64,
+    }),
+    aliases: vec!["rust".into()],
+    description: Some("Rust review skill".into()),
+  }
+}
+
+fn write_ed25519_pub_key(dir: &Path, key_id: &str, sk: &ed25519_dalek::SigningKey) {
+  use base64::Engine;
+  let pub_b64 = base64::engine::general_purpose::STANDARD.encode(sk.verifying_key().to_bytes());
+  fs::create_dir_all(dir).unwrap();
+  fs::write(dir.join(format!("{key_id}.pub")), pub_b64).unwrap();
+}
+
+#[test]
+fn marketplace_verify_remote_registry_rejects_unsigned_by_default() {
+  let work = TempDir::new().unwrap();
+  let cache_dir = work.path().join("cache");
+  let bytes = b"unsigned remote package";
+  let mut entry = entry_for_bytes(bytes);
+  entry.signature = None;
+  let registry_url = spawn_blocking_manifest_server(manifest_toml_for_entry(&entry));
+  checksum_cache(&cache_dir)
+    .cache_artifact_bytes(&entry, bytes)
+    .unwrap();
+
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "verify",
+      &registry_url,
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("requires one"));
+}
+
+#[test]
+fn marketplace_verify_remote_registry_rejects_checksum_only_signature_by_default() {
+  // A `checksum-sha256` signature block is the pre-fix weak default — a
+  // remote registry must reject it outright by default, not silently
+  // downgrade to accepting it.
+  let work = TempDir::new().unwrap();
+  let cache_dir = work.path().join("cache");
+  let bytes = b"checksum-signed remote package";
+  let entry = entry_for_bytes(bytes);
+  let registry_url = spawn_blocking_manifest_server(manifest_toml_for_entry(&entry));
+  checksum_cache(&cache_dir)
+    .cache_artifact_bytes(&entry, bytes)
+    .unwrap();
+
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "verify",
+      &registry_url,
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("rejected algorithm"));
+}
+
+#[test]
+fn marketplace_verify_remote_registry_allow_unsigned_falls_back_to_checksum() {
+  let work = TempDir::new().unwrap();
+  let cache_dir = work.path().join("cache");
+  let bytes = b"checksum-signed remote package, opted out";
+  let entry = entry_for_bytes(bytes);
+  let registry_url = spawn_blocking_manifest_server(manifest_toml_for_entry(&entry));
+  checksum_cache(&cache_dir)
+    .cache_artifact_bytes(&entry, bytes)
+    .unwrap();
+
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "verify",
+      &registry_url,
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--allow-unsigned",
+    ])
+    .assert()
+    .success()
+    .stderr(predicate::str::contains("--allow-unsigned"))
+    .stdout(predicate::str::contains("signature_checked: true"))
+    .stdout(predicate::str::contains(
+      "signature_verification: checksum_only",
+    ));
+}
+
+#[test]
+fn marketplace_verify_remote_registry_accepts_valid_ed25519_signature_by_default() {
+  let work = TempDir::new().unwrap();
+  let cache_dir = work.path().join("cache");
+  let keys_dir = work.path().join("keys");
+  let bytes = b"a real ed25519-signed remote package";
+
+  let seed: [u8; 32] = *b"yanshi-cli-test-key-is-32-bytes!";
+  let sk = ed25519_dalek::SigningKey::from_bytes(&seed);
+  write_ed25519_pub_key(&keys_dir, "publisher-a", &sk);
+
+  let entry = ed25519_signed_entry_for_bytes(bytes, "publisher-a", &sk);
+  let registry_url = spawn_blocking_manifest_server(manifest_toml_for_entry(&entry));
+
+  // Populate the cache directly on disk (bypassing any verifier) to
+  // simulate "already downloaded" — `artifact_path()` only computes a
+  // filesystem path from the entry, it never invokes the cache's
+  // verifier, so which verifier `checksum_cache` picks here is
+  // irrelevant to this test.
+  let probe_cache = checksum_cache(&cache_dir);
+  let artifact_path = probe_cache.artifact_path(&entry).unwrap();
+  fs::create_dir_all(artifact_path.parent().unwrap()).unwrap();
+  fs::write(&artifact_path, bytes).unwrap();
+
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "verify",
+      &registry_url,
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--keys-dir",
+      keys_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .success()
+    .stdout(predicate::str::contains("signature_checked: true"))
+    .stdout(predicate::str::contains(
+      "signature_verification: cryptographic_signature",
+    ));
+}
+
+#[test]
+fn marketplace_install_remote_registry_rejects_unsigned_by_default() {
+  let work = TempDir::new().unwrap();
+  let cache_dir = work.path().join("cache");
+  let install_dir = work.path().join("skills");
+  let package = tar_bytes(&[(
+    "rust-expert/SKILL.md",
+    br#"---
+name: rust-expert
+description: Rust review skill
+---
+
+# Rust Expert
+"#,
+    0o644,
+  )]);
+  let mut entry = entry_for_bytes(&package);
+  entry.signature = None;
+  let registry_url = spawn_blocking_manifest_server(manifest_toml_for_entry(&entry));
+  checksum_cache(&cache_dir)
+    .cache_artifact_bytes(&entry, &package)
+    .unwrap();
+
+  Command::cargo_bin("yanshi")
+    .unwrap()
+    .args([
+      "marketplace",
+      "install",
+      &registry_url,
+      "rust-expert",
+      "--type",
+      "skill",
+      "--cache-dir",
+      cache_dir.to_str().unwrap(),
+      "--dir",
+      install_dir.to_str().unwrap(),
+    ])
+    .assert()
+    .failure()
+    .stderr(predicate::str::contains("requires one"));
+
+  assert!(
+    !install_dir.join("rust-expert").exists(),
+    "an artifact rejected by default signature policy must never be unpacked"
+  );
+}

@@ -28,13 +28,13 @@
 # dogfooding log.
 # A7 — changelog-writer (skill form)
 #
-# Validates agentflow's built-in `shell` tool + `allowed_commands`
-# admission + ReAct agent loop. agentflow eats its own dogfood —
-# this skill generates the release notes section for agentflow's
+# Validates yanshi's built-in `shell` tool + `allowed_commands`
+# admission + ReAct agent loop. yanshi eats its own dogfood —
+# this skill generates the release notes section for yanshi's
 # next tag from `git log <range>` + LLM categorization.
 #
 # Decision log: the original A7 spec called for `type: shell` in a
-# YAML workflow. Investigation showed agentflow's CLI factory
+# YAML workflow. Investigation showed yanshi's CLI factory
 # (executor/factory.rs) does NOT register a `shell` workflow node
 # type — schema validate.rs classifies it as Exec permission category
 # but no factory branch builds it. Filed as a finding (see A7 in
@@ -42,18 +42,18 @@
 # the same target surface (shell admission + sandbox).
 #
 # Usage:
-#   agentflow skill run examples/applications/changelog-writer \
+#   yanshi skill run examples/applications/changelog-writer \
 #     --message "Generate changelog for v1.0.0-rc.1..HEAD"
 #
 # Pipe to a file:
 #   ... --message "Generate changelog for v1.0.0..HEAD" > /tmp/CHANGELOG.md
 #
-# Requires: MOONSHOT_API_KEY (auto-loaded from ~/.agentflow/.env via P9.3)
+# Requires: MOONSHOT_API_KEY (auto-loaded from ~/.yanshi/.env via P9.3)
 
 [skill]
 name        = "changelog-writer"
 version     = "0.1.0"
-description = "Conventional-commits-categorized markdown changelog from a git tag range. Dogfoods agentflow's shell tool + admission gate."
+description = "Conventional-commits-categorized markdown changelog from a git tag range. Dogfoods yanshi's shell tool + admission gate."
 
 [persona]
 language = "zh-CN"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fresh-VM `agentflow doctor` smoke (P10.0.5).
+# Fresh-VM `yanshi doctor` smoke (P10.0.5).
 #
 # Builds the multi-stage image declared in `Containerfile` (rust builder
 # → fresh ubuntu:24.04 with the binary) and runs the canonical doctor
@@ -9,7 +9,7 @@
 # The script is intentionally idempotent: re-running picks up
 # incremental build cache, and re-overwrites `last-run.json`. The
 # checked-in fixture under the same directory is the canonical
-# "expected output on a fresh Ubuntu 24.04 with no AgentFlow state"
+# "expected output on a fresh Ubuntu 24.04 with no Yanshi state"
 # operators consult during release prep — see `README.md`.
 #
 # Usage:
@@ -24,7 +24,7 @@ set -euo pipefail
 RUNTIME="${DOCTOR_SMOKE_RUNTIME:-container}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-IMAGE_TAG="agentflow-doctor-smoke"
+IMAGE_TAG="yanshi-doctor-smoke"
 OUTPUT_PATH="${SCRIPT_DIR}/last-run.json"
 
 if ! command -v "${RUNTIME}" >/dev/null 2>&1; then
@@ -64,7 +64,7 @@ fi
 #   1 — `warning`. Recoverable issues (missing optional dirs in
 #       `local`/`dev` profile, advisory env vars, etc.).
 #   2 — `fail`. On `--profile production` against a fresh VM with no
-#       `~/.agentflow/*` dirs, this is the **documented expected**
+#       `~/.yanshi/*` dirs, this is the **documented expected**
 #       outcome: every directory check (`runs`, `traces`,
 #       `marketplace/cache`, `skills`, `plugins`) reports
 #       `exists: false`, which production-profile promotes to fail.

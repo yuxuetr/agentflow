@@ -17,7 +17,7 @@ full PR URL). Output: structured markdown review grouped by severity
 
 ```
 ┌─────────────────────────┐  spawns        ┌────────────────────┐
-│ agentflow skill run     │ ──shell tool──▶ │ git / gh subprocs  │
+│ yanshi skill run     │ ──shell tool──▶ │ git / gh subprocs  │
 │ kimi-k2.6 ReAct loop    │ ◀──stdout──── │ (admission-gated)  │
 │  - reads diff           │                 │                    │
 │  - decides what matters │                 │                    │
@@ -68,28 +68,28 @@ code-reviewer/
 | --- | --- |
 | `git` | System install (already on PATH for any dev box). |
 | `gh` CLI | `brew install gh` / `apt install gh`. For GitHub PR reviews, also `gh auth login` once. |
-| `MOONSHOT_API_KEY` | Auto-loaded from `~/.agentflow/.env` (P9.3). Default model is `kimi-k2.6` so it must be in the user's models.yml (use the workspace template's entry as reference; A7 dogfooding added it). |
+| `MOONSHOT_API_KEY` | Auto-loaded from `~/.yanshi/.env` (P9.3). Default model is `kimi-k2.6` so it must be in the user's models.yml (use the workspace template's entry as reference; A7 dogfooding added it). |
 
 ## Run
 
 ```bash
 # Review a local commit (no GitHub network needed):
-/Users/hal/.target/release/agentflow skill run \
+/Users/hal/.target/release/yanshi skill run \
   examples/applications/code-reviewer \
   --message "Review commit 11b3707"
 
 # Review a ref range:
-/Users/hal/.target/release/agentflow skill run \
+/Users/hal/.target/release/yanshi skill run \
   examples/applications/code-reviewer \
   --message "Review changes in HEAD~3..HEAD"
 
 # Review a GitHub PR (needs gh auth):
-/Users/hal/.target/release/agentflow skill run \
+/Users/hal/.target/release/yanshi skill run \
   examples/applications/code-reviewer \
   --message "Review PR #42 in owner/repo"
 
 # Capture the review markdown (avoids the F-A2-1 display bug below):
-/Users/hal/.target/release/agentflow skill run \
+/Users/hal/.target/release/yanshi skill run \
   examples/applications/code-reviewer \
   --message "Review commit <hash>" --trace 2>&1 \
   | python3 -c "
@@ -133,7 +133,7 @@ print(json.loads(raw[j:k]).get('answer', ''))
   F-A2-1 in findings). The Python extraction snippet above is the
   current workaround.
 
-## What this validates in AgentFlow
+## What this validates in Yanshi
 
 - L3 ReAct + shell tool path with multi-command admission
   (`allowed_commands = ["git", "gh"]`) works end-to-end.
@@ -191,7 +191,7 @@ for the live list.
 
 - **Harness Mode approval gate validation**: add a write-side
   `add_review_comment` tool, gated by Harness's approval flow.
-  Requires running via `agentflow harness run` instead of
+  Requires running via `yanshi harness run` instead of
   `skill run`; covers the third pillar of A2's original spec.
 - **MCP GitHub server alternative**: swap `gh` shell calls for
   the official `@modelcontextprotocol/server-github` MCP server

@@ -1,9 +1,9 @@
 [plugin]
-name = "agentflow-data-transform-plugin"
+name = "yanshi-data-transform-plugin"
 version = "1.0.0"
 runtime = "subprocess"
 entrypoint = "bin/data_transform_plugin.py"
-protocol = "agentflow.plugin/1"
+protocol = "yanshi.plugin/1"
 
 [[plugin.nodes]]
 type = "json_pick"

@@ -5,8 +5,8 @@
 .env.development
 */dashscope.env
 
-# AgentFlow user configuration
-.agentflow/
+# Yanshi user configuration
+.yanshi/
 
 # Common IDE files
 .vscode/

@@ -21,7 +21,7 @@ subtitles, with optional BGM / intro / outro / chapter markers.
 └────────────────┘    └──────────────────┘    └──────────────────────────┘    └────────┘
 ```
 
-The `PodcastNode` is a custom AgentFlow node defined in this directory's
+The `PodcastNode` is a custom Yanshi node defined in this directory's
 `src/` (created during implementation) that internally:
 
 1. Calls `phonon_podcast::OpenAiScriptGenerator` with the outline as topic.
@@ -39,7 +39,7 @@ fetch → outline → script_gen → tts (parallel per segment) →
   assemble → subtitle → file write
 ```
 
-…where each step is its own AgentFlow node and the script is checkpointed
+…where each step is its own Yanshi node and the script is checkpointed
 between `script_gen` and `tts`. Tracked in
 [`EXAMPLES_TODOs.md` A1 Findings](../../../EXAMPLES_TODOs.md#a1--blog-to-podcast).
 
@@ -54,7 +54,7 @@ between `script_gen` and `tts`. Tracked in
 
 | Step | Default (recommended) | Alternatives |
 | --- | --- | --- |
-| LLM (blog → outline → script) | **Moonshot** `kimi-k2-0905-preview` — long context, strong Chinese, OpenAI-compatible base URL (`https://api.moonshot.cn/v1`). Set `MOONSHOT_API_KEY`. | Any `agentflow-llm` provider (OpenAI / Anthropic / StepFun / DeepSeek / Mock). Pick via the workflow's `llm` node `model:` field. |
+| LLM (blog → outline → script) | **Moonshot** `kimi-k2-0905-preview` — long context, strong Chinese, OpenAI-compatible base URL (`https://api.moonshot.cn/v1`). Set `MOONSHOT_API_KEY`. | Any `yanshi-llm` provider (OpenAI / Anthropic / StepFun / DeepSeek / Mock). Pick via the workflow's `llm` node `model:` field. |
 | TTS (per-segment voice) | **MiniMax T2A v2** `speech-2.8-hd` via phonon-ai's `MiniMaxTts` — has documented `Cantonese_podacast_host_*` voices, 9 emotion levels (calm/whisper/happy/...), 32 kHz native. Set `MINIMAX_API_KEY`. | `EdgeTts` (free, no key; Microsoft anonymous endpoint), `OpenAiTts` (paid, English-leaning), `ElevenLabsTts` (premium, best English). |
 
 **Zero-OpenAI-key configuration**: Moonshot for LLM + MiniMax for TTS
@@ -62,7 +62,7 @@ covers the full pipeline using only mainland-Chinese providers, which
 matters for billing / network access in PRC and gives MiniMax's
 emotion control for a more podcast-feel result.
 
-**Free-tier configuration**: any `agentflow-llm` provider for LLM
+**Free-tier configuration**: any `yanshi-llm` provider for LLM
 (mock works for the script structure; a real model is needed for
 actual content) + `EdgeTts` for TTS (free, no key).
 
@@ -72,7 +72,7 @@ actual content) + `EdgeTts` for TTS (free, no key).
 blog-to-podcast/
 ├── README.md                # ← this file
 ├── Cargo.toml               # standalone Cargo project; path deps to
-│                            # agentflow-core + phonon-{ai,podcast,io,core}
+│                            # yanshi-core + phonon-{ai,podcast,io,core}
 ├── src/
 │   ├── main.rs              # binary entry; builds Flow(read_blog → produce_podcast)
 │   └── podcast_node.rs      # custom AsyncNode wrapping phonon's pipeline
@@ -86,7 +86,7 @@ blog-to-podcast/
 
 **Not yet shipped** (deferred until dogfooding shows we need them):
 - `workflow.yml` — the app is a standalone Rust binary, not a YAML
-  workflow. Plan B (split into multiple AgentFlow nodes via YAML)
+  workflow. Plan B (split into multiple Yanshi nodes via YAML)
   would introduce one.
 - `assets/` — intro / outro / BGM. phonon-podcast handles them when
   passed; this app's first run is bare voice-only.
@@ -147,7 +147,7 @@ It points at `fixtures/short_blog.md`, requests 4 segments to keep
 cost / time low, and asserts the produced `.wav` is non-trivial and
 the `.srt` exists.
 
-## What this validates in AgentFlow
+## What this validates in Yanshi
 
 - Custom Rust node integration with an external workspace via path dep
 - LLM node for content transformation (blog → outline)
@@ -155,7 +155,7 @@ the `.srt` exists.
 - Trace replay for per-segment TTS latency + LLM token usage
 - File output convention
 - Optional: skill packaging (`skill.toml`) so this becomes
-  `agentflow skill run podcast-producer`
+  `yanshi skill run podcast-producer`
 
 ## Findings during dogfooding
 

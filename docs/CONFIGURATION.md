@@ -1,4 +1,4 @@
-# AgentFlow Configuration
+# Yanshi Configuration
 
 Last updated: 2026-05-09
 
@@ -8,54 +8,54 @@ main validation commands.
 
 ## Model Configuration
 
-AgentFlow resolves model configuration with this priority:
+Yanshi resolves model configuration with this priority:
 
-1. `AGENTFLOW_MODELS_CONFIG`
-2. `~/.agentflow/models.yml`
-3. `~/.agentflow/models.yaml`
+1. `YANSHI_MODELS_CONFIG`
+2. `~/.yanshi/models.yml`
+3. `~/.yanshi/models.yaml`
 4. bundled `default_models.yml` when no user config exists
 
 `models.yml` is the canonical filename. `models.yaml` is supported as a
-legacy fallback. If both files exist, AgentFlow uses `models.yml` and prints a
+legacy fallback. If both files exist, Yanshi uses `models.yml` and prints a
 warning.
 
 Initialize local configuration with:
 
 ```bash
-agentflow config init
+yanshi config init
 ```
 
 This creates:
 
 ```text
-~/.agentflow/models.yml
-~/.agentflow/.env
+~/.yanshi/models.yml
+~/.yanshi/.env
 ```
 
 Inspect and validate the active configuration with:
 
 ```bash
-agentflow config show
-agentflow config show models
-agentflow config show providers
-agentflow config validate
-agentflow doctor
-agentflow doctor --format json
-agentflow llm models
-agentflow llm models --provider openai --detailed
+yanshi config show
+yanshi config show models
+yanshi config show providers
+yanshi config validate
+yanshi doctor
+yanshi doctor --format json
+yanshi llm models
+yanshi llm models --provider openai --detailed
 ```
 
 `config show`, `config validate`, `doctor`, and `llm models` all report or use
 the same resolved model configuration source.
 
-`agentflow llm` is limited to model discovery and diagnostics. Interactive model
-use should go through `agentflow skill run`, `agentflow skill chat`, or
-`agentflow workflow run`.
+`yanshi llm` is limited to model discovery and diagnostics. Interactive model
+use should go through `yanshi skill run`, `yanshi skill chat`, or
+`yanshi workflow run`.
 
 ## Secrets
 
 Do not store raw API keys in workflow YAML or `models.yml`. Store secrets in the
-shell environment or in `~/.agentflow/.env`, and let model/provider entries refer
+shell environment or in `~/.yanshi/.env`, and let model/provider entries refer
 to the environment variable name.
 
 Common variables:
@@ -72,8 +72,8 @@ STEPFUN_API_KEY=...
 Recommended local permissions:
 
 ```bash
-chmod 700 ~/.agentflow
-chmod 600 ~/.agentflow/.env ~/.agentflow/models.yml
+chmod 700 ~/.yanshi
+chmod 600 ~/.yanshi/.env ~/.yanshi/models.yml
 ```
 
 See [SECRET_MANAGEMENT.md](SECRET_MANAGEMENT.md) for the broader policy.
@@ -89,9 +89,9 @@ Model selection precedence is:
 Supported overrides include:
 
 ```bash
-agentflow workflow run flow.yml --model gpt-4o-mini
-agentflow skill run ./skills/code-reviewer --message "review this" --model gpt-4o-mini
-agentflow skill chat ./skills/code-reviewer --model gpt-4o-mini
+yanshi workflow run flow.yml --model gpt-4o-mini
+yanshi skill run ./skills/code-reviewer --message "review this" --model gpt-4o-mini
+yanshi skill chat ./skills/code-reviewer --model gpt-4o-mini
 ```
 
 ## Workflow YAML
@@ -104,7 +104,7 @@ inputs:
   topic:
     description: "Topic to pass into the workflow"
     required: false
-    default: "AgentFlow"
+    default: "Yanshi"
 nodes:
   - id: render_prompt
     type: template
@@ -177,29 +177,29 @@ their required/optional parameters.
 Run a workflow:
 
 ```bash
-agentflow workflow run flow.yml
-agentflow workflow run flow.yml --dry-run
-agentflow workflow run flow.yml --model gpt-4o-mini
-agentflow workflow run flow.yml --execution-mode concurrent --max-concurrency 4
-agentflow workflow run flow.yml --input topic AgentFlow
+yanshi workflow run flow.yml
+yanshi workflow run flow.yml --dry-run
+yanshi workflow run flow.yml --model gpt-4o-mini
+yanshi workflow run flow.yml --execution-mode concurrent --max-concurrency 4
+yanshi workflow run flow.yml --input topic Yanshi
 ```
 
 Validate without execution:
 
 ```bash
-agentflow workflow validate flow.yml
-agentflow workflow validate flow.yml --format json
-agentflow workflow validate flow.yml --strict
+yanshi workflow validate flow.yml
+yanshi workflow validate flow.yml --format json
+yanshi workflow validate flow.yml --strict
 ```
 
 Debug workflow structure:
 
 ```bash
-agentflow workflow debug flow.yml --validate
-agentflow workflow debug flow.yml --visualize
-agentflow workflow debug flow.yml --analyze
-agentflow workflow debug flow.yml --plan
-agentflow workflow debug flow.yml --dry-run --verbose
+yanshi workflow debug flow.yml --validate
+yanshi workflow debug flow.yml --visualize
+yanshi workflow debug flow.yml --analyze
+yanshi workflow debug flow.yml --plan
+yanshi workflow debug flow.yml --dry-run --verbose
 ```
 
 `workflow run` and `workflow run --dry-run` both execute schema validation before
@@ -210,27 +210,27 @@ building the graph.
 Workflow run artifacts default to:
 
 ```text
-~/.agentflow/runs
+~/.yanshi/runs
 ```
 
 Override the base directory with:
 
 ```bash
-agentflow workflow run flow.yml --run-dir /var/lib/agentflow/runs
-AGENTFLOW_RUN_DIR=/tmp/agentflow-runs agentflow workflow run flow.yml
+yanshi workflow run flow.yml --run-dir /var/lib/yanshi/runs
+YANSHI_RUN_DIR=/tmp/yanshi-runs yanshi workflow run flow.yml
 ```
 
 Trace files default to:
 
 ```text
-~/.agentflow/traces
+~/.yanshi/traces
 ```
 
 Inspect persisted traces with:
 
 ```bash
-agentflow trace replay <run_id>
-agentflow trace tui <run_id>
+yanshi trace replay <run_id>
+yanshi trace tui <run_id>
 ```
 
 ## Skills
@@ -239,13 +239,13 @@ Skills use `SKILL.md` as the recommended entry point, with `skill.toml` still
 supported for explicit structured overrides. Skill commands include:
 
 ```bash
-agentflow skill init ./my-skill --description "Describe this skill"
-agentflow skill validate ./my-skill
-agentflow skill inspect ./my-skill
-agentflow skill list-tools ./my-skill
-agentflow skill run ./my-skill --message "hello"
-agentflow skill chat ./my-skill
-agentflow skill test ./my-skill --dry-run
+yanshi skill init ./my-skill --description "Describe this skill"
+yanshi skill validate ./my-skill
+yanshi skill inspect ./my-skill
+yanshi skill list-tools ./my-skill
+yanshi skill run ./my-skill --message "hello"
+yanshi skill chat ./my-skill
+yanshi skill test ./my-skill --dry-run
 ```
 
 See [SKILLS.md](SKILLS.md), [SKILL_FORMAT.md](SKILL_FORMAT.md), and

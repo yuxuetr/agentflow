@@ -1,8 +1,8 @@
 # Skill Validator Protocol
 
 Status: design as of `P4.4 follow-up step 3`.
-Crate (forthcoming impl): `agentflow-skills::validator` + wiring in
-`agentflow-agents::eval::assertion::final_answer_matches_skill`.
+Crate (forthcoming impl): `yanshi-skills::validator` + wiring in
+`yanshi-agents::eval::assertion::final_answer_matches_skill`.
 Implements: the `final_answer_matches_skill` assertion variant from
 `docs/AGENT_EVAL_FORMAT.md`, P4.4 follow-up step 1's known gap.
 
@@ -121,7 +121,7 @@ Wire protocol:
      unrunnable: <stderr>" }`.
    - **Timeout** → fail with `reason: "validator timed out after Ns"`.
 3. Environment: stripped to `env_allowlist`. The default keeps `PATH`
-   and `LANG` only — no `AGENTFLOW_*`, no API keys, no `HOME`
+   and `LANG` only — no `YANSHI_*`, no API keys, no `HOME`
    override. Skills that need more must opt in explicitly.
 
 Security:
@@ -131,7 +131,7 @@ Security:
   `production` profile + `os_sandbox = true`, the command runs inside
   sandbox-exec (macOS) / seccomp (Linux), with read access to
   `working_dir` only.
-- `agentflow doctor --profile production --backup-check` already
+- `yanshi doctor --profile production --backup-check` already
   fails the host when sandbox isn't enforcing, so production
   deployments that declare a `command` validator inherit the same
   fail-closed posture.
@@ -144,7 +144,7 @@ Security:
 
 ### Validator surface in code
 
-A new trait in `agentflow-skills::validator`:
+A new trait in `yanshi-skills::validator`:
 
 ```rust
 pub trait SkillValidator: Send + Sync {
@@ -209,7 +209,7 @@ the contract.
 
 ## CLI surface
 
-`agentflow skill validate <skill-dir>` already exists. This proposal
+`yanshi skill validate <skill-dir>` already exists. This proposal
 extends it to:
 
 1. Verify the `[validation]` section parses (and compiles, for `regex`).
@@ -220,7 +220,7 @@ extends it to:
    against a sample answer and print the verdict. Useful for skill
    authors before publishing.
 
-`agentflow skill inspect --explain-permissions` (P3.5) gains a new
+`yanshi skill inspect --explain-permissions` (P3.5) gains a new
 section:
 
 ```
@@ -235,7 +235,7 @@ Validator:
 
 ## Eval harness integration
 
-Once this protocol ships, `agentflow eval run` populates
+Once this protocol ships, `yanshi eval run` populates
 `AssertionContext::skill_validator` from the case's resolved skill.
 The `final_answer_matches_skill` variant works without further code
 changes — the assertion layer already calls the closure.
@@ -282,9 +282,9 @@ emits — no new variants in `AssertionOutcome.reason`.
 - `docs/MCP_CAPABILITY_POLICY.md` — the precedence rules the command
   validator inherits when its executable goes through the
   `mcp_command_allowlist`.
-- `agentflow-skills/src/manifest.rs` — where `SecurityConfig` lives;
+- `yanshi-skills/src/manifest.rs` — where `SecurityConfig` lives;
   `[validation]` lands as a sibling section.
-- `agentflow-tools/src/sandbox/` — the OS sandbox the command
+- `yanshi-tools/src/sandbox/` — the OS sandbox the command
   validator wraps when `security.os_sandbox = true`.
 
 ## Open questions (deferred to implementation)

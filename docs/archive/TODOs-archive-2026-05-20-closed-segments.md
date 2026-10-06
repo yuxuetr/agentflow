@@ -45,7 +45,7 @@ auditable, and explicit.
 - DONE P1.6 Sandbox enforcement visibility.
 
 - DONE P1.7 Non-idempotent tool resume policy:
-  - New `agentflow-core::resume` module exposes `ResumePlan` /
+  - New `yanshi-core::resume` module exposes `ResumePlan` /
     `ResumeToolCall` / `ResumeDecision` / `ResumeIdempotency` /
     `ResumeSummary` / `ResumePlanOptions` + `build_resume_plan`. Plan
     schema version `1` (`RESUME_PLAN_SCHEMA_VERSION`).
@@ -56,7 +56,7 @@ auditable, and explicit.
     entry emits a `WorkflowEvent::ResumeDecisionRecorded` trace event
     carrying `resume.tool_call_id`, `resume.tool`, `resume.idempotency`,
     `resume.decision`, `resume.reason`, and `resume.force_replay`.
-  - CLI: `agentflow workflow resume-plan <run-id> [--checkpoint-dir]
+  - CLI: `yanshi workflow resume-plan <run-id> [--checkpoint-dir]
     [--force-replay] [--format text|json]` renders the plan offline
     (no LLM, no DB).
   - Server: `GET /v1/runs/{id}/resume-plan?checkpoint_dir=…&force_replay=…`
@@ -66,10 +66,10 @@ auditable, and explicit.
   - Tests: 10 `resume` unit tests + 7 CLI integration tests covering
     each `ResumeDecision` (replay / skip / requires_manual) plus the
     `--force-replay` opt-in and missing-checkpoint paths + 4 server
-    route integration tests (auto-skip without `AGENTFLOW_DATABASE_TEST_URL`).
+    route integration tests (auto-skip without `YANSHI_DATABASE_TEST_URL`).
 
 - DONE P1.8 Plugin execution policy:
-  - New `agentflow-tools::plugin_policy` module exposes
+  - New `yanshi-tools::plugin_policy` module exposes
     `PluginPolicy`, `PluginNetworkPolicy`, `PluginEvaluationInput`,
     and `PluginPolicyDecision`. `PluginPolicy::for_profile(profile)`
     returns the documented defaults:
@@ -82,10 +82,10 @@ auditable, and explicit.
       `network = ExplicitAllowOnly`. `--allow-unsandboxed-plugin`
       is recorded as a deny reason *unconditionally* so misuse is
       caught even when the active host happens to be sandboxed.
-  - `agentflow plugin install` now evaluates the policy before any
+  - `yanshi plugin install` now evaluates the policy before any
     filesystem write. New CLI flags: `--allow-unsandboxed-plugin`,
     `--signed`. Decision fields are emitted via
-    `tracing::info!(target = "agentflow.plugin.policy")` with
+    `tracing::info!(target = "yanshi.plugin.policy")` with
     structured fields (`plugin`, `profile`, `allowed`,
     `sandbox_active`, `signature_checked`, `network_policy`); a
     typed `WorkflowEvent` variant is intentionally deferred until
@@ -106,7 +106,7 @@ auditable, and explicit.
     rule for `--allow-unsandboxed-plugin`.
 
 - DONE P1.9 MCP capability + SkillSecurity merge policy:
-  - New `agentflow-skills::policy` module exposes
+  - New `yanshi-skills::policy` module exposes
     `resolve_tool_policy(PolicyResolutionInput) -> ResolvedToolPolicy`.
     `PolicyResolutionInput` carries every admission layer
     (`known_tools`, `skill_allowed_tools`, `skill_denied_tools`,
@@ -131,7 +131,7 @@ auditable, and explicit.
     allowlist gating + fallback policy allow + fallback policy
     deny + unmatched fail-closed + serde round-trip + allow/deny
     counter accuracy. All hermetic.
-  - CLI surface (`agentflow skill inspect --explain-permissions`,
+  - CLI surface (`yanshi skill inspect --explain-permissions`,
     `--allow-tool`, `--deny-tool`) is documented as the v1
     consumer of this surface; wiring the flags through every CLI
     entry point is tracked under `P3.5`.
@@ -143,12 +143,12 @@ auditable, and explicit.
 Goal: make the server a dependable local execution control plane without
 turning it into a channel hub.
 
-- DONE P2.1 `agentflow serve` command:
-  - `agentflow-server::serve` exposes `ServeConfig`, `run`,
+- DONE P2.1 `yanshi serve` command:
+  - `yanshi-server::serve` exposes `ServeConfig`, `run`,
     `run_check`, `build_startup_report`, `ServeReadiness`, and
-    `StartupReport`. Both the `agentflow-server` binary and the CLI
+    `StartupReport`. Both the `yanshi-server` binary and the CLI
     subcommand go through the same path.
-  - CLI `agentflow serve` spawns the `agentflow-server` binary (the
+  - CLI `yanshi serve` spawns the `yanshi-server` binary (the
     inverse dep already runs cli→server in the server crate, so cli
     cannot link the server library; the subprocess hop preserves the
     one-binary deploy model). Flags supported: `--bind`,
@@ -170,7 +170,7 @@ turning it into a channel hub.
     tests run hermetically — no Postgres or open ports required.
 
 - DONE P2.2 Run retention and cleanup policy:
-  - `agentflow-server::cleanup::cleanup_expired(db, run_dir_root,
+  - `yanshi-server::cleanup::cleanup_expired(db, run_dir_root,
     config)` runs the DB sweep + filesystem sweep in one call. Returns
     a structured `CleanupReport` (started_at/finished_at, per-category
     counts, targeted run id preview, `dry_run` flag).
@@ -188,21 +188,21 @@ turning it into a channel hub.
     on UUID-named subdirectories, queries the DB to skip dirs whose
     run is still active, and gates by directory mtime against the
     cutoff.
-  - `agentflow-server --cleanup [--dry-run]` runs the sweep once and
-    exits with the JSON `CleanupReport` on stdout. `agentflow serve`
+  - `yanshi-server --cleanup [--dry-run]` runs the sweep once and
+    exits with the JSON `CleanupReport` on stdout. `yanshi serve`
     spawns a background task that re-runs the sweep every
     `CleanupConfig::interval` and logs the report; failures retry on
     the next tick instead of crashing the gateway.
-  - `agentflow cleanup [--database-url] [--run-dir] [--trace-dir]
+  - `yanshi cleanup [--database-url] [--run-dir] [--trace-dir]
     [--security-profile] [--dry-run]` CLI subcommand spawns the
     server binary in `--cleanup` mode, mirroring the `serve` pattern
-    to avoid an `agentflow-cli` ↔ `agentflow-server` dep cycle.
+    to avoid an `yanshi-cli` ↔ `yanshi-server` dep cycle.
   - Tests:
     - 7 unit tests in `cleanup::tests` covering profile defaults,
       dry-run flag, serde round-trip, UUID-name filter, and the
       missing-root short-circuit.
     - 3 server integration tests in `tests/cleanup_route.rs` that
-      skip without `AGENTFLOW_DATABASE_TEST_URL`: dry-run targets
+      skip without `YANSHI_DATABASE_TEST_URL`: dry-run targets
       old terminal runs without deleting; actual sweep deletes old
       terminal runs but keeps active + young; filesystem sweep
       removes orphaned UUID dirs while leaving active-run dirs in
@@ -215,7 +215,7 @@ turning it into a channel hub.
 
 - DONE P2.3 Server end-to-end run tests:
   - The core happy / cancel / 4xx / mid-run-graph paths were already
-    covered by `agentflow-server/tests/runs_routes.rs` (12 tests).
+    covered by `yanshi-server/tests/runs_routes.rs` (12 tests).
     This slice closes the remaining cells the P2.3 spec calls out.
   - Feature additions (not just tests):
     - `RunRepo::list_filtered(tenant, status, limit, offset)` is the
@@ -225,7 +225,7 @@ turning it into a channel hub.
       closed `RunStatus` set — typos surface as 400 with the bad
       value echoed in the error message) and `?offset=` (clamped
       to ≥ 0) alongside the existing `?tenant_id` / `?limit`.
-  - New `agentflow-server/tests/e2e_runs.rs` (9 tests):
+  - New `yanshi-server/tests/e2e_runs.rs` (9 tests):
     - `list_runs_offset_pagination_returns_disjoint_pages` — two
       adjacent pages share no ids.
     - `list_runs_status_filter_isolates_running_rows` — `?status=running`
@@ -247,14 +247,14 @@ turning it into a channel hub.
     - `health_route_stays_open_under_auth` — `/health` keeps
       working for orchestrators without a token.
   - All 9 new tests + 12 pre-existing `runs_routes.rs` tests pass
-    against `AGENTFLOW_DATABASE_TEST_URL`; self-skip without it.
+    against `YANSHI_DATABASE_TEST_URL`; self-skip without it.
 
 - DONE P2.4 SSE robustness:
   - `EventBroker::finalise_with_grace(run_id, grace)` spawns a
     deferred teardown so subscribers can drain the terminal event
     from the broadcast buffer before the channel is removed.
   - `broker_finalize_grace()` reads
-    `AGENTFLOW_BROKER_FINALIZE_GRACE_MS` (default 500 ms) so
+    `YANSHI_BROKER_FINALIZE_GRACE_MS` (default 500 ms) so
     operators can tune the window without redeploying.
   - Every call site that previously did `broker.finalise(run_id)`
     inside `runs.rs` (stub executor success, real flow executor
@@ -276,16 +276,16 @@ turning it into a channel hub.
       run, and the disconnect-mid-stream path that asserts the
       broker drops the receiver count via the now-public
       `receiver_count()` accessor. They self-skip without
-      `AGENTFLOW_DATABASE_TEST_URL`.
+      `YANSHI_DATABASE_TEST_URL`.
 
 - DONE P2.5 CLI local-daemon mode (MVP — run/list/cancel/graph
   shipped; logs/skill remain follow-ups):
-  - New `agentflow-cli/src/server_client.rs` is the single HTTP layer
-    pointing at `agentflow-server`. Resolves `--server <url>` first,
-    `AGENTFLOW_SERVER_URL` env second; returns `None` to fall back to
+  - New `yanshi-cli/src/server_client.rs` is the single HTTP layer
+    pointing at `yanshi-server`. Resolves `--server <url>` first,
+    `YANSHI_SERVER_URL` env second; returns `None` to fall back to
     the in-process executor. `--auth-token` /
-    `AGENTFLOW_API_TOKEN` populate the `Authorization: Bearer` header;
-    `--tenant` / `AGENTFLOW_TENANT` populate `X-Agentflow-Tenant` (P2.6).
+    `YANSHI_API_TOKEN` populate the `Authorization: Bearer` header;
+    `--tenant` / `YANSHI_TENANT` populate `X-Yanshi-Tenant` (P2.6).
     `reqwest::Client::builder().no_proxy()` avoids the macOS
     Clash/V2Ray loopback footgun documented in `CLAUDE.md`.
   - `workflow run` keeps its existing in-process path as the default;
@@ -293,11 +293,11 @@ turning it into a channel hub.
     and POSTed to `/v1/runs`, then polled to terminal status.
   - New subcommands `workflow list`, `workflow cancel <run_id>`,
     `workflow graph <run_id>` — server-only, return a friendly error
-    when `--server` / `AGENTFLOW_SERVER_URL` is absent.
+    when `--server` / `YANSHI_SERVER_URL` is absent.
   - 10 unit tests cover the pure resolve_* helpers (flag/env
     precedence, trimming, blank handling); 6 CLI integration tests in
-    `agentflow-cli/tests/cli_server_mode.rs` spin up an in-process
-    `agentflow-server` against `AGENTFLOW_DATABASE_TEST_URL` and
+    `yanshi-cli/tests/cli_server_mode.rs` spin up an in-process
+    `yanshi-server` against `YANSHI_DATABASE_TEST_URL` and
     exercise the run/list/cancel/graph roundtrips end-to-end. Tests
     self-skip without the Postgres URL.
   - Follow-ups left for a separate slice:
@@ -319,7 +319,7 @@ turning it into a channel hub.
     `skill_installs` primary key is dropped and re-created as
     `(tenant_id, name, version)` so two tenants can install the same
     skill at the same version independently.
-  - `agentflow_db::models` (`Event` / `Artifact` / `SkillInstall`) +
+  - `yanshi_db::models` (`Event` / `Artifact` / `SkillInstall`) +
     `NewEvent` / `NewArtifact` gain `tenant_id` fields; the `New*`
     structs accept `Option<String>` so existing callers stay terse
     (defaults to `"default"`).
@@ -327,9 +327,9 @@ turning it into a channel hub.
     it on SELECT; the `(tenant_id, run_id, seq)` and
     `(tenant_id, run_id)` composite indexes back the WHERE-by-tenant
     filter path.
-  - New `agentflow-server/src/tenant.rs` introduces `TenantId`
+  - New `yanshi-server/src/tenant.rs` introduces `TenantId`
     extension + `extract_tenant_id` middleware reading the
-    `X-Agentflow-Tenant` header (default `"default"` for zero-config
+    `X-Yanshi-Tenant` header (default `"default"` for zero-config
     local-dev). Layered onto `/v1/*` in `create_router`.
   - `get_run` / `cancel_run` / `get_run_graph` / `get_run_resume_plan`
     extract the `TenantId` and return 404 (not 403) when the run's
@@ -344,7 +344,7 @@ turning it into a channel hub.
     cross-tenant 404 path for read + cancel, header-bound success
     path, header-vs-query precedence, header-absent → "default", and
     list-via-header scoping. All 15 e2e_runs + 12 runs_routes tests
-    pass against `AGENTFLOW_DATABASE_TEST_URL`.
+    pass against `YANSHI_DATABASE_TEST_URL`.
   - Test infrastructure: `fresh_state()` no longer TRUNCATEs (matched
     the M.3 cleanup); pre-existing P2.3 tests were updated to use
     per-invocation UUID-suffixed tenants so the TRUNCATE removal
@@ -356,12 +356,12 @@ turning it into a channel hub.
     cache / skills / plugins), the strict restore sequencing (DB
     before filesystem so the P2.2 cleanup sweep doesn't reap orphan
     artifact trees), and the per-profile exit code semantics for
-    `agentflow doctor --backup-check`.
-  - DONE: `agentflow doctor --backup-check` flag adds a `backup_check`
+    `yanshi doctor --backup-check`.
+  - DONE: `yanshi doctor --backup-check` flag adds a `backup_check`
     section to the doctor report with explicit writability probes for
     `run_dir`, `trace_dir`, `marketplace_cache`, `skills_dir`,
-    `plugins_dir`. Path resolution honors new `AGENTFLOW_SKILLS_DIR`
-    and `AGENTFLOW_PLUGINS_DIR` env overrides. Production profile
+    `plugins_dir`. Path resolution honors new `YANSHI_SKILLS_DIR`
+    and `YANSHI_PLUGINS_DIR` env overrides. Production profile
     escalates missing dirs to Fail (exit 2); local / dev escalate to
     Warning. Non-writable always escalates to Fail.
   - DONE: "First stable release validation checklist" section in the
@@ -375,18 +375,18 @@ turning it into a channel hub.
 - DONE P2.8 Worker LLM/HTTP/MCP/Agent node execution support:
   - PREREQ for the rest of P5 worker hardening (P5.5 admission, P5.6
     resource limits, P5.7 failure-domain matrix).
-  - DONE: `agentflow-worker::execute_supported_node_payload` now
+  - DONE: `yanshi-worker::execute_supported_node_payload` now
     dispatches `llm` / `http` / `mcp` / `agent` in addition to the
     existing `template` / `file` / `mock` types. Each `llm` / `http` /
-    `mcp` payload routes through the same `agentflow-nodes` builders
+    `mcp` payload routes through the same `yanshi-nodes` builders
     the local scheduler uses (`LlmNode`, `HttpNode`, `MCPNode`); the
     distributed `agent` dispatcher runs a minimal `ReActAgent` loop
     with `SessionMemory::default_window()` and an empty `ToolRegistry`.
-    `agentflow-worker` now depends on `agentflow-llm`, `agentflow-agents`,
-    `agentflow-memory`, `agentflow-tools`, and `agentflow-nodes` with
+    `yanshi-worker` now depends on `yanshi-llm`, `yanshi-agents`,
+    `yanshi-memory`, `yanshi-tools`, and `yanshi-nodes` with
     the `mcp` feature enabled.
   - DONE: tests. Three new integration files under
-    `agentflow-worker/tests/`:
+    `yanshi-worker/tests/`:
     - `dispatch_simple.rs`: HTTP / MCP / unsupported-type routing
       (verifies the dispatcher selects the right executor and that
       unknown node types return a non-retryable
@@ -394,11 +394,11 @@ turning it into a channel hub.
     - `dispatch_llm_and_agent.rs`: LLM happy path against the mock
       provider, plus the minimal agent ReAct loop driven by a queued
       mock response. Tests serialize on a `tokio::sync::Mutex` gate
-      because `AGENTFLOW_MOCK_RESPONSES` / `AGENTFLOW_MODELS_CONFIG` /
+      because `YANSHI_MOCK_RESPONSES` / `YANSHI_MODELS_CONFIG` /
       the LLM registry are all process-globals.
   - DONE: docs. `docs/DISTRIBUTED.md` carries the canonical supported
     node-type table with test cross-references, and the
-    `agentflow-worker` crate-level rustdoc carries the matching short
+    `yanshi-worker` crate-level rustdoc carries the matching short
     list (no separate README needed yet).
   - Deferred follow-ups (tracked under the prereq chain, NOT this
     line):
@@ -429,22 +429,22 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     multi-agent ×3 / SkillBuilder / MCP client / RAG / tracing
     JSONL). The one gap was the "tool policy + sandbox capability
     decision" row.
-  - New `agentflow-tools/examples/tool_policy_sandbox_demo.rs` fills
+  - New `yanshi-tools/examples/tool_policy_sandbox_demo.rs` fills
     the gap: walks through tool registration → `ToolPolicy::evaluate`
     (allow_tools and allow_permissions paths) → `SandboxPolicy`
     runtime constraints. Runs fully offline; never spawns a real
-    shell or HTTP request. `cargo run -p agentflow-tools --example
+    shell or HTTP request. `cargo run -p yanshi-tools --example
     tool_policy_sandbox_demo`.
   - All workspace examples compile under their owning crate's
     default + relevant feature set (`cargo check --workspace
     --examples` is clean). Per-flag combinations are covered by
     the Quality CI `features` matrix (P3.9).
-  - Documented `AGENTFLOW_LIVE_PROVIDER=1` convention in the README.
+  - Documented `YANSHI_LIVE_PROVIDER=1` convention in the README.
   - Follow-ups (not blocking):
     - Dedicated OTel exporter example (today the JSONL example
       covers the main path; OTel is exercised via the
-      `trace_context_propagation` test in `agentflow-llm/tests/`).
-    - Rust example invoking `agentflow_agents::eval::EvalRunner`
+      `trace_context_propagation` test in `yanshi-llm/tests/`).
+    - Rust example invoking `yanshi_agents::eval::EvalRunner`
       directly (today the CLI is the canonical eval entry point).
     - Per-example smoke CI lands under P3.2 / P3.10 / P7.3.
 
@@ -465,9 +465,9 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
 
 - DONE P3.3 CLI JSON output audit (contract + first command migrated;
   per-command migration tracked as follow-ups below):
-  - `agentflow-cli/src/json_envelope.rs` defines the canonical
+  - `yanshi-cli/src/json_envelope.rs` defines the canonical
     envelope `CliJsonEnvelope<T>` with the closed four-field shape
-    documented in the spec: `version` (`"agentflow.cli/1"`) +
+    documented in the spec: `version` (`"yanshi.cli/1"`) +
     `command` + `result` + `errors[]` (never null, defaults to
     empty on read). 5 unit tests cover ok/with_errors round trips,
     the closed-key set, `serde(default)` for `errors`, and the
@@ -476,11 +476,11 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     envelope shape, producer/consumer rules, P0.3 additive-field
     inheritance for per-command `result`, the per-command coverage
     matrix (which modes are migrated vs. planned), and the
-    `agentflow.cli/N` versioning policy.
+    `yanshi.cli/N` versioning policy.
   - `docs/STABILITY.md` gains a new "CLI JSON envelope" row at
     Stable tier, with the wire schema name and a pointer back to
     `docs/CLI_JSON_OUTPUT.md` for the field contract.
-  - First command migration: `agentflow doctor --format json-envelope`
+  - First command migration: `yanshi doctor --format json-envelope`
     wraps the existing `DoctorReport` in the envelope. The legacy
     `--format json` (bare report) stays for backward compat with
     the in-process `/v1/diagnostics` handler and CI tooling already
@@ -502,7 +502,7 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       `EvalReport`; each failed case surfaces in `errors[]` as
       `"case '<id>' failed: <reason>"` (runtime_error first, then
       joined assertion reasons). 8 new CLI integration tests in
-      `agentflow-cli/tests/json_envelope_migration_tests.rs` lock
+      `yanshi-cli/tests/json_envelope_migration_tests.rs` lock
       the envelope shape down and prove `result == legacy json
       body` on a hermetic workflow fixture.
     - DONE `harness run|list|inspect|resume` — all four
@@ -595,7 +595,7 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       `--format text|json-envelope` (text default). File output
       (`--output <path>`) keeps the legacy bare-body shape unchanged
       so downstream baseline / comparison tooling that parses
-      `agentflow-rag/eval_baselines/<dataset>/<retriever>.json`
+      `yanshi-rag/eval_baselines/<dataset>/<retriever>.json`
       keeps working. Envelope mode wraps the SAME payload `--output`
       writes on stdout, with two augmentations:
       - `rag search` envelope result: `{ query, collection,
@@ -612,7 +612,7 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
         regression gate still exits 1 in envelope mode for CI.
       4 new tests in `json_envelope_migration_tests.rs` (rag
       feature-gated): full envelope-shape round-trip against the
-      bundled `agentflow-rag/eval_datasets/ci_offline` fixture +
+      bundled `yanshi-rag/eval_datasets/ci_offline` fixture +
       help-surface guards for both `search` and `eval` + value-
       parser rejection.
     - DONE (partial) `trace replay` — gained `--format
@@ -649,9 +649,9 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       that needs its own design rather than the surgical stdout/
       stderr split this server-mode change uses.
 
-- DONE P3.4 `agentflow doctor` expansion:
+- DONE P3.4 `yanshi doctor` expansion:
   Library/CLI structural surface + deeper provider probes all closed.
-  PR.1 (plugin dry_run runner), PR.2 (mcp.toml + `agentflow mcp config`
+  PR.1 (plugin dry_run runner), PR.2 (mcp.toml + `yanshi mcp config`
   CLI), and PR.3 (doctor wiring) shipped in three commits. Subtasks:
   - DONE Tri-state `DoctorStatus` (`ok` / `warning` / `fail`) with
     exit codes `0` / `1` / `2`. Existing `--format text|json` modes
@@ -683,17 +683,17 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     as expected outcomes for missing-config scenarios.
   - DONE (lite) `--check-installations` flag adds an
     `installations` section to the doctor report: walks
-    `~/.agentflow/skills/*/skill.toml`, surfaces every declared
+    `~/.yanshi/skills/*/skill.toml`, surfaces every declared
     `[[mcp_servers]]` command and reports `reachable = true/false`
     based on whether the command resolves on PATH (or as an absolute
-    file). Walks `~/.agentflow/plugins/*/plugin.toml` (under
+    file). Walks `~/.yanshi/plugins/*/plugin.toml` (under
     `feature = "plugin"`) and surfaces every plugin name + version +
     entrypoint with `entrypoint_exists` set. Promotes the overall
     status to Warning (or Fail under `production`) when any probe
     fails. Doesn't replace the heavier deferred probes — see below.
   - DONE (PR.3) MCP server reachability via configured transport —
-    `doctor --check-installations` now walks `~/.agentflow/mcp.toml`
-    (via `AGENTFLOW_MCP_CONFIG` env-override-aware loader) in
+    `doctor --check-installations` now walks `~/.yanshi/mcp.toml`
+    (via `YANSHI_MCP_CONFIG` env-override-aware loader) in
     addition to skill-declared `[[mcp_servers]]`. Top-level entries
     appear in the same `mcp_servers` array with `skill` field
     absent; report-level `mcp_config_source` field documents where
@@ -702,21 +702,21 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     (Warning under local, Fail under production). Heavier
     transport-level handshake (spawn + `initialize` JSON-RPC +
     drain) stays a future enhancement when there's concrete demand.
-    - DONE P3.4-PR.2 `agentflow mcp config` schema + CLI surface
-      (the upstream prereq). New `~/.agentflow/mcp.toml` top-level
+    - DONE P3.4-PR.2 `yanshi mcp config` schema + CLI surface
+      (the upstream prereq). New `~/.yanshi/mcp.toml` top-level
       registry with the same `McpServerConfig` shape skill manifests
       already use (name / command / args / env / timeout_secs /
       max_concurrent_calls). Resolution mirrors the LLM models
-      config: `AGENTFLOW_MCP_CONFIG` env override →
-      `~/.agentflow/mcp.toml` → empty config. Validator catches
+      config: `YANSHI_MCP_CONFIG` env override →
+      `~/.yanshi/mcp.toml` → empty config. Validator catches
       duplicate names, empty `name`, empty `command`. CLI:
-      `agentflow mcp config {path | validate | list [--format
+      `yanshi mcp config {path | validate | list [--format
       text|json] | show <name>}` — covered by 10 unit tests +
       8 CLI integration tests (env-injected fixture mcp.toml).
       P3.4-PR.3 will plumb this into the doctor's MCP reachability
       probe.
   - DONE (PR.3) Plugin runtime spawn smoke — `doctor
-    --check-installations` now invokes `agentflow_core::plugin::
+    --check-installations` now invokes `yanshi_core::plugin::
     run_dry_run` for every plugin whose manifest declares
     `[plugin.dry_run]`. Outcome lands under
     `installations.plugins[].dry_run` as `{ duration_ms, outcome }`,
@@ -733,7 +733,7 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       (`args: Vec<String>`, `timeout_ms: u32` default 1000,
       `expected_exit: i32` default 0). `PluginManifest::validate`
       rejects empty args / zero timeout. New
-      `agentflow_core::plugin::run_dry_run` /
+      `yanshi_core::plugin::run_dry_run` /
       `run_dry_run_spec` async API that spawns the entrypoint
       (no sandbox wrapping — host diagnostic only,
       side-effect-free by contract), time-bounds it, returns
@@ -744,10 +744,10 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       spawn-driven ones, hermetic for the others).
       `docs/PLUGIN_DESIGN.md` §6.2 documents the new sub-table.
       Workspace `cargo clippy --workspace --all-targets
-      --features agentflow-core/plugin -- -D warnings` clean.
+      --features yanshi-core/plugin -- -D warnings` clean.
 
 - DONE P3.5 Permission explanation improvements:
-  - DONE Slice 1 — `agentflow skill inspect --explain-permissions`
+  - DONE Slice 1 — `yanshi skill inspect --explain-permissions`
     now wires the P1.9 `resolve_tool_policy` table alongside the
     existing capability decisions. New repeatable flags
     `--allow-tool <NAME>` and `--deny-tool <NAME>` feed the CLI
@@ -782,7 +782,7 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     `skill_cli_tests.rs` cover the opt-in hint (no
     `--explain-permissions`), the discovery happy path, and the
     negative path (no `--with-mcp-discovery` ⇒ no section).
-  - DONE Slice 2 — `agentflow workflow validate --explain-permissions
+  - DONE Slice 2 — `yanshi workflow validate --explain-permissions
     <yaml>` walks `FlowDefinitionV2` and emits a per-node permission
     report. Each node is classified into one of nine
     `PermissionCategory` variants (`pure` / `filesystem` / `network` /
@@ -799,7 +799,7 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     JSON envelope, off-by-default behaviour, and the shell-node
     capability surface.
   - DONE Slice 2 follow-up — agent-flavoured node permission tests.
-    `agentflow-cli/tests/workflow_tests.rs` ships four new CLI
+    `yanshi-cli/tests/workflow_tests.rs` ships four new CLI
     integration tests:
     `cli_workflow_validate_explain_permissions_mcp_node` (text:
     asserts `mcp` category + `[mcp.call, net]` capability + server_command
@@ -820,7 +820,7 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
     closed (slices 1-4 + slice 2 follow-up).
 
 - DONE P3.6 Native tool calling provider consistency tests:
-  - `agentflow-llm/tests/provider_consistency.rs` now covers all six
+  - `yanshi-llm/tests/provider_consistency.rs` now covers all six
     providers (OpenAI / Anthropic / Google / Moonshot / StepFun /
     Mock) across five axes:
     - Streaming text deltas with provider-native framing
@@ -841,16 +841,16 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       provider (11 new `_maps_*_to_http_error` tests close the
       remaining matrix cells alongside the 5 original).
   - Live runs already live in
-    `agentflow-llm/tests/provider_consistency_live.rs` gated on
-    `AGENTFLOW_LIVE_LLM_TESTS=1` and individual capability env vars
-    (`AGENTFLOW_LIVE_LLM_TEXT` / `…TOOLS` / `…VISION` / etc.).
-  - CI gate: `agentflow-llm` was added to the `test` matrix in
+    `yanshi-llm/tests/provider_consistency_live.rs` gated on
+    `YANSHI_LIVE_LLM_TESTS=1` and individual capability env vars
+    (`YANSHI_LIVE_LLM_TEXT` / `…TOOLS` / `…VISION` / etc.).
+  - CI gate: `yanshi-llm` was added to the `test` matrix in
     `.github/workflows/quality.yml`, which is already a
     release-gate dependency, so the consistency suite is now
     release-blocking (mock + recorded fixtures, no live calls).
   - Test count: 44 in `provider_consistency` (19 new on top of 25
     existing) + 98 lib + 4 matrix-doc + 3 trace = 169 hermetic
-    agentflow-llm tests pass on every PR.
+    yanshi-llm tests pass on every PR.
   - N9 cross-provider invariant addition (this slice): 7 new tests
     appended to `provider_consistency.rs` that fire ALL providers in
     ONE test and assert the parsed `ProviderResponse` shape is
@@ -891,7 +891,7 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
 - DONE P3.7 LLM provider matrix documentation:
   - `docs/LLM_PROVIDERS_MATRIX.md` gains four authoritative sections:
     - `ProviderRequest contract` documents every field of
-      `agentflow_llm::providers::ProviderRequest` (`model`,
+      `yanshi_llm::providers::ProviderRequest` (`model`,
       `messages`, `stream`, `parameters`, `tools`, `tool_choice`).
     - `ToolChoice modes` covers all four `ToolChoice` variants
       (`auto`, `none`, `required`, `tool` with `{ name }`).
@@ -909,7 +909,7 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       `RetryPolicy` opt-in.
   - Cross-referenced from `README.md` (intro) and
     `docs/CURRENT_STATUS.md` (new LLM providers subsection).
-  - Doc-test (`agentflow-llm/tests/provider_matrix_doc.rs`) catches
+  - Doc-test (`yanshi-llm/tests/provider_matrix_doc.rs`) catches
     drift in four ways: (a) destructuring `ProviderRequest` at
     compile time so a new field forces an update; (b) asserting each
     field name appears in the matrix wrapped in backticks; (c) the
@@ -919,7 +919,7 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
 
 - DONE P3.8 Cross-hop OpenTelemetry context propagation (LLM +
   plugin hops shipped; MCP + worker gRPC remain follow-ups):
-  - New `agentflow-tracing::context` module is the canonical home for
+  - New `yanshi-tracing::context` module is the canonical home for
     cross-hop W3C trace propagation. Public surface:
     - `pub async fn scope(traceparent: String, fut: F) -> T` —
       install for the duration of `fut` via tokio task-local.
@@ -929,28 +929,28 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       context).
     - `pub const TRACEPARENT_ENV: &str = "TRACEPARENT"` — the
       canonical env var name OTel-aware subprocesses look for.
-  - Plugin subprocess injection: `agentflow-cli` plugin preparers
+  - Plugin subprocess injection: `yanshi-cli` plugin preparers
     (`OsSandboxPluginPreparer` and the new `NoopWithTraceparent`
     shim) call `inject_traceparent_into_command(&mut Command)`
     before spawn, which sets `TRACEPARENT=<value>` from the
     task-local. The bare `NoopCommandPreparer` from
-    `agentflow-core` stays untouched so embedders that don't want
+    `yanshi-core` stays untouched so embedders that don't want
     this behavior aren't affected.
-  - 4 unit tests in `agentflow-tracing::context::tests` lock down
+  - 4 unit tests in `yanshi-tracing::context::tests` lock down
     the scope/current/nested-scope semantics and the env-constant
     spelling. 3 CLI integration tests in
-    `agentflow-cli/tests/plugin_traceparent_tests.rs` spawn
+    `yanshi-cli/tests/plugin_traceparent_tests.rs` spawn
     `sh -c 'echo tp=${TRACEPARENT-}'` to prove the env var arrives
     at the child, doesn't leak when no scope is active, and respects
     nested scopes.
   - `docs/TRACE_PERSISTENCE_SCHEMA.md` gains a "Hop continuity (P3.8)"
     section with the per-hop carrier table. LLM (shipped via
-    `agentflow_llm::trace_context`) and plugin (shipped here) are
+    `yanshi_llm::trace_context`) and plugin (shipped here) are
     marked done; MCP transport (`meta.traceparent`) and worker
     gRPC metadata are marked as follow-ups.
   - Follow-ups status (all four hops now stitched):
     - DONE (commit `7b03e02`) MCP transport — `params._meta.
-      traceparent` injected by `agentflow_mcp::client::session` on
+      traceparent` injected by `yanshi_mcp::client::session` on
       every outbound `send_request` / `send_notification`. New
       `protocol::traceparent` module ships `inject_traceparent_into_
       request` + `extract_traceparent_from_request` helpers with 14
@@ -970,11 +970,11 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       `docs/TRACE_PERSISTENCE_SCHEMA.md` "Hop continuity (P3.8)"
       table now lists all four carriers as ✓.
     - DONE (this commit) E2E cross-hop acceptance —
-      `agentflow-cli/tests/p3_8_cross_hop_e2e.rs` is the single
+      `yanshi-cli/tests/p3_8_cross_hop_e2e.rs` is the single
       always-on test proving the 4 carriers (LLM HTTP header,
       plugin TRACEPARENT env, MCP `params._meta.traceparent`,
       worker gRPC `traceparent` metadata) agree on the wire value
-      when fired inside one shared `agentflow_tracing::context::
+      when fired inside one shared `yanshi_tracing::context::
       scope`. 3 tests cover the happy path (single scope ⇒ all 4
       carriers carry the same value byte-for-byte), the inverse
       contract (no scope ⇒ no carrier emits a value), and nested-
@@ -986,10 +986,10 @@ Goal: make code-first and CLI-first usage clear, stable, and automation-ready.
       cross-crate import.
 
 - DONE P3.9 CLI feature flag CI matrix (closed — final cells were
-  the agentflow-rag feature surface):
+  the yanshi-rag feature surface):
   - Quality CI `features` job now covers 18 combinations across 6
     crates. The 14 P3.9-partial rows from the previous slice were
-    extended with 4 agentflow-rag rows: `rag-no-default`, `rag-pdf`,
+    extended with 4 yanshi-rag rows: `rag-no-default`, `rag-pdf`,
     `rag-html`, `rag-pdf-html`. The `local-embeddings` feature is
     intentionally not wired in because it pulls `ort`, which
     downloads ONNX Runtime binaries at build time — fragile on CI
@@ -1019,11 +1019,11 @@ Goal: make retrieval, memory, and agent quality measurable and
 regression-safe.
 
 - DONE P4.1 RAG eval CI fixture:
-  - `agentflow-rag/eval_datasets/ci_offline/` ships dataset.toml +
+  - `yanshi-rag/eval_datasets/ci_offline/` ships dataset.toml +
     20-doc synthetic corpus.jsonl + 10 queries.jsonl + 10 qrels.jsonl
     (graded 0–3). Text written fresh for the fixture so it's CC0-1.0
     with no external source to drift.
-  - `agentflow-cli/tests/rag_eval_cli_tests.rs` (gated on `rag`
+  - `yanshi-cli/tests/rag_eval_cli_tests.rs` (gated on `rag`
     feature) drives the CLI end-to-end and asserts every JSON
     envelope field downstream consumers need: `dataset.{path,
     manifest, corpus_size, queries, judgments}`, `baseline.{retriever,
@@ -1040,10 +1040,10 @@ regression-safe.
     one-tailed binomial p-value testing "candidate is worse than
     baseline" — `P(X ≤ wins | X ~ Binomial(wins+losses, 0.5))`,
     computed in log-space for numerical stability.
-  - `agentflow-rag/eval_baselines/ci_offline/bm25.json` is the
+  - `yanshi-rag/eval_baselines/ci_offline/bm25.json` is the
     checked-in baseline; today's fresh run matches it (gate PASS,
     p-value n/a because all queries tie at perfect RR).
-  - `agentflow rag eval --compare-baseline <path>` loads an
+  - `yanshi rag eval --compare-baseline <path>` loads an
     `EvalReport` from disk, runs the fresh eval as candidate, and
     applies the regression gate. `--regression-recall-threshold`
     (default 0.03) and `--regression-p-value` (default 0.05) make
@@ -1062,13 +1062,13 @@ regression-safe.
 
 - DONE P4.3 Agent eval format design:
   - `docs/AGENT_EVAL_FORMAT.md` defines the v1 on-disk format for
-    `agentflow eval run` and the JSON report envelope. Dataset layout
-    mirrors `agentflow-rag/eval_datasets/`: one directory holding
+    `yanshi eval run` and the JSON report envelope. Dataset layout
+    mirrors `yanshi-rag/eval_datasets/`: one directory holding
     `dataset.toml` (name / version / `[defaults]` block) + `cases.jsonl`
     (one EvalCase per line) + optional `fixtures/`.
   - `EvalCase` fields grounded in real workspace types:
     `max_steps` / `max_tool_calls` / `latency_limit_ms` map 1:1 to
-    `agentflow_agents::RuntimeLimits`; `tools_allowed` / `tools_denied`
+    `yanshi_agents::RuntimeLimits`; `tools_allowed` / `tools_denied`
     mirror the P3.5 `--allow-tool` / `--deny-tool` admission
     precedence; `cost_limit_usd` ships a new
     `AgentStopReason::CostLimitExceeded` variant (additive under the
@@ -1080,12 +1080,12 @@ regression-safe.
     because the failure report reads more naturally.
   - JSON envelope: dataset / dataset_version / started_at /
     finished_at / summary (totals + cost + p50/p95 latency) +
-    per-case rows carrying `trace_id` for `agentflow trace replay`.
-  - Architecture: the runner is one `agentflow_core::Flow` with one
+    per-case rows carrying `trace_id` for `yanshi trace replay`.
+  - Architecture: the runner is one `yanshi_core::Flow` with one
     `EvalCaseNode` per case — reuses concurrent scheduling,
     checkpoints, OTel propagation, and `workflow validate` without
     duplicating that machinery.
-  - CLI sketch (lands under P4.4): `agentflow eval run <dataset>`
+  - CLI sketch (lands under P4.4): `yanshi eval run <dataset>`
     with `--format text|json`, `--filter`, `--parallelism`,
     `--fail-on-status`, `--compare-baseline`. Exit codes 0/1/2 mirror
     the rag eval convention.
@@ -1094,14 +1094,14 @@ regression-safe.
     a `schema_version` bump.
 
 - DONE P4.4 Minimal agent eval implementation:
-  - DONE Slice 1 — `agentflow-agents/src/eval/{dataset,assertion}.rs`
+  - DONE Slice 1 — `yanshi-agents/src/eval/{dataset,assertion}.rs`
     implement the on-disk format and closed 6-variant assertion DSL
     from P4.3. `Dataset::load_from_dir` walks `dataset.toml` +
     `cases.jsonl`, applies `[defaults]` inheritance, validates
     uniqueness + non-empty assertion lists. `Assertion::evaluate`
     returns a structured `AssertionOutcome` and never panics. 23 unit
     tests cover every variant pass + fail path.
-  - DONE Slice 2 — `agentflow-agents/src/eval/runner.rs` adds
+  - DONE Slice 2 — `yanshi-agents/src/eval/runner.rs` adds
     `EvalRunner` that walks the dataset, drives an `AgentRuntime` per
     case via an `AgentRuntimeFactory` trait, evaluates assertions
     against the captured `AgentRunResult`, and emits a structured
@@ -1110,15 +1110,15 @@ regression-safe.
     variant; `Eq` dropped from the enum derive because `f64` doesn't
     impl `Eq` (no consumer required it — grep-confirmed). Exhaustive
     `AgentStopReason` matches updated across react/agent.rs,
-    agentflow-harness/runtime.rs, agentflow-server/harness_live.rs,
-    and agentflow-cli/harness/run.rs. 10 new runner tests.
-  - DONE Slice 3 — `agentflow eval run <dataset>` subcommand wires
+    yanshi-harness/runtime.rs, yanshi-server/harness_live.rs,
+    and yanshi-cli/harness/run.rs. 10 new runner tests.
+  - DONE Slice 3 — `yanshi eval run <dataset>` subcommand wires
     the runner with `--format text|json`, `--filter <glob>`,
     `--fail-on-status failed|never`. Default factory builds a fresh
     `ReActAgent` per case using the case-declared model + an empty
     `ToolRegistry` (skill loading + tool admission via P3.5 flags
     deferred to a follow-up). Tiny hermetic fixture under
-    `agentflow-agents/eval_datasets/ci_offline/` (two cases against
+    `yanshi-agents/eval_datasets/ci_offline/` (two cases against
     the mock provider). 6 new CLI integration tests + 4 unit tests
     for the glob/fail-threshold/format parser.
   - DONE Follow-up step 1 — skill-aware factory + per-case tool
@@ -1131,8 +1131,8 @@ regression-safe.
   - DONE Follow-up step 2 — cost tracking via pricing table +
     `AgentEvent::LlmCallCompleted`. ReActAgent emits the new event
     after every LLM call carrying `TokenUsage`. `PricingTable`
-    loads from `AGENTFLOW_PRICING_TABLE` env or
-    `~/.agentflow/pricing.yml`; missing file is not an error
+    loads from `YANSHI_PRICING_TABLE` env or
+    `~/.yanshi/pricing.yml`; missing file is not an error
     (everything costs $0). Runner aggregates per-case cost from
     events, enforces `case.cost_limit_usd` (over-budget flips
     status to Failed with `stop_reason = "cost_limit_exceeded"`).
@@ -1145,7 +1145,7 @@ regression-safe.
     reserved for "unrunnable", inherits skill security profile +
     OS sandbox.
   - DONE Follow-up step 3 implementation (2 commits, ~700 LoC):
-    `agentflow-skills::validator` ships `SkillValidator` trait +
+    `yanshi-skills::validator` ships `SkillValidator` trait +
     `RegexValidator` + `CommandValidator` + `build_validator` factory;
     `SkillLoader::validate` pre-compiles validators so bad regex /
     empty command vector errors surface at manifest-load time, not
@@ -1156,7 +1156,7 @@ regression-safe.
     mapping each verdict to a distinct `AssertionOutcome.reason`. CLI
     `ReActAgentFactory` resolves + caches the per-skill validator and
     wires it into the runner via `skill_validator(case)`. Tests: 16
-    new unit tests in `agentflow-skills/src/validator.rs` (regex pass
+    new unit tests in `yanshi-skills/src/validator.rs` (regex pass
     / fail / multiline / bad pattern at build time; command pass /
     fail with stderr capture / exit-125 unrunnable / timeout / stdin
     delivery / timeout clamping / TOML round trip) + 3 new in
@@ -1165,10 +1165,10 @@ regression-safe.
     (passes-when-regex-matches / fails-with-reason-in-report /
     no-validator-falls-through).
   - Trace replay path: every case carries a `trace_id` formatted as
-    `eval-<case_id>-<epoch_ms hex>` so `agentflow trace replay
+    `eval-<case_id>-<epoch_ms hex>` so `yanshi trace replay
     <trace_id>` Just Works for failure debugging.
   - Release-gate quality claims can now point at
-    `cargo test -p agentflow-cli --test eval_cli_tests` as the
+    `cargo test -p yanshi-cli --test eval_cli_tests` as the
     reproducible signal.
 
 - DONE P4.5 Memory layering design:
@@ -1191,7 +1191,7 @@ regression-safe.
     high-trust data first; semantic is the noisiest layer. A
     `MemorySummaryBackend` runs *before* this list (compacts
     overflowed session messages).
-  - Retention per layer plus a future `agentflow memory prune`
+  - Retention per layer plus a future `yanshi memory prune`
     CLI sketch (lands with P4.7).
   - Migration path: current `SessionMemory` / `SqliteMemory` /
     `SemanticMemory` keep working without changes; new layers are
@@ -1201,14 +1201,14 @@ regression-safe.
     and promote to Beta after one skill ships a real integration.
 
 - DONE P4.6 Memory and prompt golden tests:
-  - `agentflow-agents/tests/prompt_assembly_golden.rs` adds 5 tests
+  - `yanshi-agents/tests/prompt_assembly_golden.rs` adds 5 tests
     that lock down the prompt-assembly contract callers (eval, Harness,
     skills) rely on:
     - `prompt_assembly_short_context_matches_golden` — fixed input
       (persona + 3 history messages + 2 tools) ⇒ byte-stable
       `MultimodalMessage` list captured in
       `tests/fixtures/prompt_assembly/short_context.json`.
-      `AGENTFLOW_PROMPT_GOLDEN_UPDATE=1` regenerates the fixture
+      `YANSHI_PROMPT_GOLDEN_UPDATE=1` regenerates the fixture
       after intentional changes.
     - `prompt_assembly_long_context_triggers_summary_message` —
       30-message history × budget=16 ⇒ summary system message
@@ -1234,7 +1234,7 @@ regression-safe.
     been stale on main since that commit.
 
 - DONE P4.7 Memory backend implementations:
-  - `agentflow-memory/src/layer.rs` introduces the shared trait
+  - `yanshi-memory/src/layer.rs` introduces the shared trait
     surface: `MemoryLayer` (4-variant enum + stable `as_str()`),
     `RetentionPolicy::default_for(layer)`, `PreferenceScope` (with
     a `local(user_id)` shorthand for single-tenant dev),
@@ -1242,14 +1242,14 @@ regression-safe.
     `EntityFact` (entity_id, fact_id, attribute, value, provenance,
     confidence, extraction + invalidation timestamps),
     `PreferenceStore`, `EntityFactStore`, and `SemanticMemoryStore`.
-  - `agentflow-memory/src/preference.rs` implements
+  - `yanshi-memory/src/preference.rs` implements
     `SqlitePreferenceStore` with `(tenant_id, user_id, key)` primary
     key, monotonic `version` on UPSERT, scope-isolated reads, sorted
     `list_preferences`, and `prune_older_than` driven by
     `updated_at`. 7 unit tests in the same file cover roundtrip,
     version bump, idempotent delete, scope isolation, sorted list,
     prune, and complex-JSON preservation.
-  - `agentflow-memory/src/entity_facts.rs` implements
+  - `yanshi-memory/src/entity_facts.rs` implements
     `SqliteEntityFactStore` with `(entity_id, fact_id)` primary key,
     `attribute` + JSON `value` + `confidence` + `extracted_at` +
     `invalidated_at` columns, `get_facts(include_invalidated)`
@@ -1259,14 +1259,14 @@ regression-safe.
     roundtrip, no-merge for conflicting facts, invalidate
     visibility, double-invalidate error, replace-on-same-id,
     prune cutoff, prune-skips-active, entity isolation.
-  - `agentflow-memory/src/semantic.rs` adds the
+  - `yanshi-memory/src/semantic.rs` adds the
     `SemanticMemoryStore` impl on top of the existing
     `SemanticMemory`. The new `search_semantic(session, query, k)`
     returns `Vec<(Message, f32)>` with cosine scores; degrades to
     a keyword-search fallback (scored `0.0`) when the embedding
     fails. The existing `MemoryStore::search` path is preserved
     for one stability tier (Beta) per the design doc.
-  - `agentflow-memory/tests/cross_layer_precedence.rs` integration
+  - `yanshi-memory/tests/cross_layer_precedence.rs` integration
     test exercises all four layers in one scenario (session ⇒
     semantic search ⇒ preference scope ⇒ entity fact lifecycle)
     and asserts the independence guarantee: writes to one layer
@@ -1275,11 +1275,11 @@ regression-safe.
     `EncryptedPreferenceStore` to slot in. Local profile ships
     plaintext per the design doc; P5 key-management plumbing is
     a separate scope.
-  - `agentflow memory prune` CLI is the next deliverable on top of
+  - `yanshi memory prune` CLI is the next deliverable on top of
     this trait surface — schema-design + trait-impl shipped here,
     CLI command tracked as a follow-up.
   - Test count: 36 lib + 1 integration test = 37 hermetic
-    `agentflow-memory` tests pass.
+    `yanshi-memory` tests pass.
 
 ---
 
@@ -1293,15 +1293,15 @@ expansion) to be useful for non-trivial workloads.
 
 - DONE P5.1 Remote marketplace install handoff:
   - Verified artifact cache → install dir flow was already in place
-    for both Skills (`~/.agentflow/skills`) and Plugins
-    (`~/.agentflow/plugins`) via `RemoteMarketplaceCache::cache_artifact_bytes`
-    + `install_skill_package` / `install_plugin_package` (`agentflow
+    for both Skills (`~/.yanshi/skills`) and Plugins
+    (`~/.yanshi/plugins`) via `RemoteMarketplaceCache::cache_artifact_bytes`
+    + `install_skill_package` / `install_plugin_package` (`yanshi
     marketplace install`). Checksum + signature gates fire before
     unpack as part of the cache step; signature/checksum mismatch
     reject paths are exercised by `remote_marketplace.rs` unit tests
     and the marketplace strict-verify CLI test.
   - This slice closes the remaining atomicity gap: `install_directory`
-    in `agentflow-cli/src/commands/marketplace.rs` was previously a
+    in `yanshi-cli/src/commands/marketplace.rs` was previously a
     two-step `remove + copy_dir_recursive` that could leave a
     half-installed destination on failure. The refactor:
     1. Early-exit on collision (destination exists + no `--force`)
@@ -1339,10 +1339,10 @@ expansion) to be useful for non-trivial workloads.
 
 - DONE P5.2 Signed fixture artifacts:
   - Fixture archive sources are checked in under:
-    - `agentflow-skills/tests/fixtures/signed/skill-rust-expert/SKILL.md`
-    - `agentflow-core/tests/fixtures/signed/plugin-echo/plugin.toml`
+    - `yanshi-skills/tests/fixtures/signed/skill-rust-expert/SKILL.md`
+    - `yanshi-core/tests/fixtures/signed/plugin-echo/plugin.toml`
       (+ `bin/echo-plugin` entrypoint stub).
-  - `agentflow-skills/tests/marketplace_signed.rs` builds a
+  - `yanshi-skills/tests/marketplace_signed.rs` builds a
     deterministic `.tar.gz` from each fixture, computes the SHA-256,
     and exercises the cache through 7 cases:
     - strict signed Skill / Plugin paths succeed and report
@@ -1356,7 +1356,7 @@ expansion) to be useful for non-trivial workloads.
       fires before the signature verifier);
     - determinism guard verifies two builds of the same fixture
       yield byte-identical archives.
-  - `agentflow-core/tests/plugin_signed_fixture.rs` (gated on the
+  - `yanshi-core/tests/plugin_signed_fixture.rs` (gated on the
     `plugin` feature) confirms the plugin manifest fixture still
     parses + validates and its entrypoint stub resolves to a real
     file.
@@ -1371,7 +1371,7 @@ expansion) to be useful for non-trivial workloads.
     bomb). `safe_archive_path` also rejects non-UTF-8 path bytes
     outright — portability footgun on Windows and round-trips ugly
     through Path on Unix.
-  - `agentflow-cli/tests/marketplace_unpack_hardening_tests.rs`
+  - `yanshi-cli/tests/marketplace_unpack_hardening_tests.rs`
     covers the missing edge cases the existing CLI suite didn't:
     nested archives (zip-shaped blob stored as opaque file, no
     auto-recursion); duplicate top-level `SKILL.md`; executable bit
@@ -1387,23 +1387,23 @@ expansion) to be useful for non-trivial workloads.
 
 - DONE P5.4 Plugin sandbox default policy (tied to P1.8):
   - New `select_preparer(profile, force_sandbox, allow_unsandboxed)`
-    in `agentflow-cli/src/executor/plugin.rs` extends the P1.8
+    in `yanshi-cli/src/executor/plugin.rs` extends the P1.8
     install-time policy gate to plugin **spawn** time. The same
     `PluginPolicy::for_profile` defaults drive both decisions, so
     a plugin denied at install under `production` is also denied
     at spawn (defense in depth, not divergence).
   - Per-profile spawn defaults:
-    - `dev` → `NoopCommandPreparer`; `AGENTFLOW_PLUGIN_SANDBOX=1`
+    - `dev` → `NoopCommandPreparer`; `YANSHI_PLUGIN_SANDBOX=1`
       force-engages the OS bridge for stress-testing manifest
       capabilities.
     - `local` → `OsSandboxPluginPreparer`;
-      `AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN=1` mirrors the install-
+      `YANSHI_ALLOW_UNSANDBOXED_PLUGIN=1` mirrors the install-
       time `--allow-unsandboxed-plugin` opt-out.
     - `production` → `OsSandboxPluginPreparer`; the opt-out env
       var is rejected with `PreparerSelectionError::OptOutRejected`
       and the spawn fails before any child process starts.
   - `PluginWorkflowNode::ensure_loaded` now propagates the policy
-    error through `AgentFlowError::AsyncExecutionError`, so a
+    error through `YanshiError::AsyncExecutionError`, so a
     production workflow asking for an unsandboxed spawn fails fast.
   - 7 new unit tests in `executor::plugin::tests` cover the full
     matrix (dev default / dev force-on / local default / local
@@ -1436,10 +1436,10 @@ expansion) to be useful for non-trivial workloads.
     admitted-fleet count and the per-worker in-flight task counter.
     Re-admitting an existing worker is idempotent so a returning
     heartbeat never trips the fleet cap.
-  - DONE: tests. `agentflow-server/src/scheduler/admission.rs#tests`
+  - DONE: tests. `yanshi-server/src/scheduler/admission.rs#tests`
     covers the policy units (allowlist, PSK match, rotation overlap,
     fleet cap, per-worker concurrency cap — 6 tests). The 3
-    integration tests live in `agentflow-server/tests/worker_admission.rs`:
+    integration tests live in `yanshi-server/tests/worker_admission.rs`:
     - `unknown_worker_cannot_claim_or_heartbeat`
     - `admitted_worker_can_poll_heartbeat_and_report`
     - `token_rotation_does_not_drop_in_flight_tasks`
@@ -1480,7 +1480,7 @@ expansion) to be useful for non-trivial workloads.
   - DONE: synthetic runaway fixture. The `mock` payload's
     `sleep_ms` and `output_size_bytes` knobs make every guarantee
     deterministic. Tests live in
-    `agentflow-worker/tests/resource_limits.rs` (4 tests).
+    `yanshi-worker/tests/resource_limits.rs` (4 tests).
   - DEFERRED (documented gap): in-process **memory** caps. Linux
     cgroups + macOS `setrlimit` belong to the supervising
     process / container runtime, not the worker binary. The
@@ -1490,7 +1490,7 @@ expansion) to be useful for non-trivial workloads.
 
 - DONE P5.7 Distributed failure-domain tests (PREREQ: P5.5, P5.6):
   - DONE: all 6 scenarios pinned down by
-    `agentflow-worker/tests/failure_domains.rs`:
+    `yanshi-worker/tests/failure_domains.rs`:
     - `stale_heartbeat_redistributes_to_another_worker` — stale
       heartbeat → reaped + redispatched.
     - `worker_crash_midtask_is_reattempted_elsewhere` — crash
@@ -1517,7 +1517,7 @@ expansion) to be useful for non-trivial workloads.
     `specs_for_node_type` schema map (requires `manifest` +
     `node_type` string params) by P-N10; this slice closes the
     remaining surface.
-  - Validation enhancement (`agentflow workflow validate`): when a
+  - Validation enhancement (`yanshi workflow validate`): when a
     node has `type: plugin` and the referenced `manifest` path is
     readable, the validator now parses the plugin manifest and
     checks that the requested `node_type` parameter matches one of
@@ -1526,7 +1526,7 @@ expansion) to be useful for non-trivial workloads.
     surfaces typos / stale references at validate time instead of
     at the first workflow run. Lives in
     `validate_plugin_node_type` (feature-gated on `plugin`).
-  - New CLI command `agentflow plugin generate-workflow-stub
+  - New CLI command `yanshi plugin generate-workflow-stub
     <plugin> [--node <name>] [--output <file>]` emits a YAML stub
     per declared plugin node:
     - Accepts either a plugin directory (auto-resolves
@@ -1544,7 +1544,7 @@ expansion) to be useful for non-trivial workloads.
     cover the strict validation accept + reject paths and the
     `generate-workflow-stub` happy / filter / unknown-node paths.
   - `cli_workflow_run_supports_plugin_node` (existing) was updated
-    to set `AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN=1` so the echo
+    to set `YANSHI_ALLOW_UNSANDBOXED_PLUGIN=1` so the echo
     plugin (no `[plugin.capabilities]`) keeps spawning after P5.4
     flipped the `local`-profile default to sandboxed. Sandbox
     coverage stays exercised by the `select_preparer` matrix.
@@ -1589,12 +1589,12 @@ contracts the CLI uses. Never bypass server APIs for UI-only features.
     - Submit calls `POST /v1/runs` and `window.location.assign`
       to `/ui?run=<id>` so the existing run console picks the
       new id from the query param.
-  - `localStorage` keys (`agentflow.ui.newForm.*`) persist
+  - `localStorage` keys (`yanshi.ui.newForm.*`) persist
     tenant / profile / workflow / inputs. The API token uses the
-    existing `agentflow.ui.apiToken` slot only — `RunCreateForm`
+    existing `yanshi.ui.apiToken` slot only — `RunCreateForm`
     never writes a new-form-specific token slot, and the
     third Playwright spec asserts this.
-  - Playwright suite at `agentflow-ui/e2e/runs-new.spec.ts`
+  - Playwright suite at `yanshi-ui/e2e/runs-new.spec.ts`
     covers: submit → redirect to `/ui?run=…`, persistence across
     reloads, and the no-token-in-newform-slot guarantee.
     Running it requires explicit installation
@@ -1605,31 +1605,31 @@ contracts the CLI uses. Never bypass server APIs for UI-only features.
     (+5 KiB). `dist/assets/styles.css` 5.7 KiB → 7.9 KiB. No new
     npm dependencies.
   - Deferred under P6.1:
-    - Full Monaco editor + `agentflow workflow validate` schema
+    - Full Monaco editor + `yanshi workflow validate` schema
       integration (would need a server `POST /v1/workflows/validate`
       route and a bundled JSON schema; tracked as a follow-up to
       keep the dist bundle reasonable).
     - CI wiring for the Playwright suite (requires Chromium binary
-      + reachable `agentflow serve` + Postgres).
+      + reachable `yanshi serve` + Postgres).
 
 - DONE P6.2 Provider config diagnostics panel:
-  - Promoted `agentflow_cli::commands` (and the doctor module's
+  - Promoted `yanshi_cli::commands` (and the doctor module's
     `DoctorReport` / `DoctorProfile` / `build_report`) to `pub` so
     the server can read the same schema in-process instead of
     shelling out.
-  - `GET /v1/diagnostics` (`agentflow-server/src/diagnostics.rs`)
+  - `GET /v1/diagnostics` (`yanshi-server/src/diagnostics.rs`)
     delegates to `build_report(DoctorProfile::Local, None, false)`
     and returns the canonical doctor JSON. Inherits the same
     bearer-token gate as the rest of `/v1/*`. Tests cover the happy
     shape and a defense-in-depth check that the API token value
     never appears in the response body.
-  - `agentflow-server/tests/diagnostics_route.rs` adds the
+  - `yanshi-server/tests/diagnostics_route.rs` adds the
     route-level integration tests (no live Postgres required —
     diagnostics handler does not touch `AppState.db`).
   - UI: new `/ui/diagnostics` deep-link route + `DiagnosticsPanel`
     component. Renders a per-component pass / warn / fail table
     covering Models config, Security profile, OS sandbox, the
-    three disk dirs, and the `AGENTFLOW_API_TOKEN` env flag.
+    three disk dirs, and the `YANSHI_API_TOKEN` env flag.
     Refresh button only — no auto-poll. The panel never displays
     raw token values; any token passed through the input is
     rendered via a `maskToken(...)` helper that shows only the
@@ -1639,7 +1639,7 @@ contracts the CLI uses. Never bypass server APIs for UI-only features.
     or copied URL works.
 
 - DONE P6.3 Trace comparison view (MVP):
-  - New `RunCompare` component in `agentflow-ui/src/main.tsx`,
+  - New `RunCompare` component in `yanshi-ui/src/main.tsx`,
     mounted at `/ui/runs/:id/compare?against=<other_id>`. App router
     matches the path and renders the component with the primary run
     id; the `against` query param seeds an editable second-run input.
@@ -1672,13 +1672,13 @@ contracts the CLI uses. Never bypass server APIs for UI-only features.
     `(tenant_id, key, value JSONB, updated_at)` table keyed by
     `(tenant_id, key)`. Index on `(tenant_id, updated_at DESC)` so
     "what changed recently" reads are cheap.
-  - `agentflow-db` ships `UserPreferenceRepo` trait +
+  - `yanshi-db` ships `UserPreferenceRepo` trait +
     `PgUserPreferenceRepo` (upsert / upsert_many / list_for_tenant /
     delete) plus `UserPreference` + `NewUserPreference` models.
     `Repositories::from_pool` wires it into `AppState.repos`.
-  - `agentflow-server::preferences` adds:
+  - `yanshi-server::preferences` adds:
     - `GET /v1/preferences` → `{ preferences: { <key>: <value>, ... } }`
-      for the tenant bound by `X-Agentflow-Tenant` (P2.6).
+      for the tenant bound by `X-Yanshi-Tenant` (P2.6).
     - `PUT /v1/preferences` upserts a batch in one transaction.
   - Validation rules:
     - Key must match `^[a-zA-Z0-9_.\-:]{1,128}$`.
@@ -1693,14 +1693,14 @@ contracts the CLI uses. Never bypass server APIs for UI-only features.
     round-trip, tenant isolation, and the rejection paths. Token
     screen is unit-tested against representative real-world prefixes
     and against safe values that must NOT trigger.
-  - Follow-up: wire the UI (`agentflow-ui/src/main.tsx`) to read /
+  - Follow-up: wire the UI (`yanshi-ui/src/main.tsx`) to read /
     write through the new endpoints, replacing the localStorage-only
     path. Tracked alongside P6.5 since that's the next UI surface
     that needs to persist state.
 
 - DONE P6.5 Operator-focused event filter (client-side; server-side
   fallback deferred):
-  - New `agentflow-ui/src/eventFilter.ts` parses a tiny expression
+  - New `yanshi-ui/src/eventFilter.ts` parses a tiny expression
     language:
     - `kind=<value>` / `kind!=<value>` (case-insensitive exact)
     - `kind~<substring>` (case-insensitive substring)
@@ -1710,9 +1710,9 @@ contracts the CLI uses. Never bypass server APIs for UI-only features.
     - Empty string ⇒ match every event.
   - Parse errors surface as a structured `error` field so the UI
     renders them inline instead of crashing.
-  - `agentflow-ui/src/main.tsx` adds a filter input above the run-
+  - `yanshi-ui/src/main.tsx` adds a filter input above the run-
     detail timeline; the input persists per `run_id` in
-    `agentflow.ui.run.eventFilter.<id>` so the same filter survives
+    `yanshi.ui.run.eventFilter.<id>` so the same filter survives
     a page reload. Compile error renders under the input in red.
     The timeline header surfaces `(matched/total)` when a filter
     is active.
@@ -1738,13 +1738,13 @@ known characteristics, not surprises.
 
 - DONE P7.1 `cargo bench` baselines:
   - Criterion benches landed for all four crates:
-    - `agentflow-core/benches/scheduler.rs` — linear + fan-out shapes
+    - `yanshi-core/benches/scheduler.rs` — linear + fan-out shapes
       at 10/100/1000 nodes, serial vs `concurrent_8`.
-    - `agentflow-llm/benches/provider_hop.rs` — mock provider single
+    - `yanshi-llm/benches/provider_hop.rs` — mock provider single
       hop (1/8/32 turns) + streaming full-drain.
-    - `agentflow-rag/benches/retrieval.rs` — BM25 search at 1k/10k
+    - `yanshi-rag/benches/retrieval.rs` — BM25 search at 1k/10k
       corpus, top_10 / top_100; plus build-corpus index throughput.
-    - `agentflow-tracing/benches/event_write.rs` — serialize-only,
+    - `yanshi-tracing/benches/event_write.rs` — serialize-only,
       `FileTraceStorage::save_trace`, and synthetic JSONL append
       (sibling group reserved for a real JSONL / SQLite backend
       once those land).
@@ -1752,7 +1752,7 @@ known characteristics, not surprises.
     README documenting the schema and capture flow. Host differences
     are expected; the P7.2 gate compares against the runner's own
     baseline.
-  - PERFORMANCE.md (in `agentflow-core/`) now links to the criterion
+  - PERFORMANCE.md (in `yanshi-core/`) now links to the criterion
     suites alongside the legacy `cargo test` perf harness.
 
 - DONE P7.2 CI perf regression gate (MVP):
@@ -1803,16 +1803,16 @@ known characteristics, not surprises.
     `docs/RELEASE_NOTES_DRESS_REHEARSAL.md` (5 sections — F1 fixed,
     F2/F3 pre-existing drift, F4 advisory, F5 verified scope).
   - DONE: docker image build via
-    `docker buildx build --build-arg PACKAGE=agentflow-server`
+    `docker buildx build --build-arg PACKAGE=yanshi-server`
     completes (post-fix). Compose stack boots Postgres +
-    agentflow-server end-to-end; `/health/live`, `/health/ready`,
+    yanshi-server end-to-end; `/health/live`, `/health/ready`,
     `/ui` all return `200`; DB migrations apply automatically.
-  - DONE: `agentflow doctor --profile production --format json`
+  - DONE: `yanshi doctor --profile production --format json`
     runs and surfaces the expected developer-host warnings
     (trace_dir / marketplace_cache auto-create-on-first-write,
-    AGENTFLOW_API_TOKEN unset). These are runbook gaps, not code
+    YANSHI_API_TOKEN unset). These are runbook gaps, not code
     defects.
-  - F1 FIX (in-rehearsal): `agentflow-tools/src/sandbox/linux.rs`
+  - F1 FIX (in-rehearsal): `yanshi-tools/src/sandbox/linux.rs`
     had two release-blocking Linux compile errors that only the
     docker image surfaces (the macOS dev build cfg-gates the
     backend out). Both fixed: the for-loop binding `&i64` is now
@@ -1826,7 +1826,7 @@ known characteristics, not surprises.
     - `cargo publish --dry-run` for publishable crates.
     - GitHub Release artifact publish / image push.
     - Fresh-VM `doctor` smoke (this rehearsal ran on a developer
-      host with existing `~/.agentflow/`).
+      host with existing `~/.yanshi/`).
   - Refiled follow-ups (each a separate targeted task below):
     P7.4-FU1 (Linux sandbox CI), P7.4-FU2 (workspace rustfmt
     sweep), P7.4-FU3 (clippy::result_large_err boxing pass),
@@ -1835,9 +1835,9 @@ known characteristics, not surprises.
 - DONE P7.4-FU1 Linux sandbox check in CI:
   - New `linux-sandbox-check` job in `.github/workflows/quality.yml`
     runs `cargo check --target x86_64-unknown-linux-gnu -p
-    agentflow-tools --all-targets` on every PR / push so a
+    yanshi-tools --all-targets` on every PR / push so a
     re-introduction of the F1-style compile error in
-    `agentflow-tools/src/sandbox/linux.rs` fails in ~2 min instead of
+    `yanshi-tools/src/sandbox/linux.rs` fails in ~2 min instead of
     at release time. Job listed under `release-gate.needs` so a
     Linux-only break also blocks the release gate.
   - Decision: run on every event (matches every other quality job —
@@ -1849,12 +1849,12 @@ known characteristics, not surprises.
 - DONE P7.4-FU2 Workspace rustfmt sweep before tag:
   - Single `chore(fmt)` commit picked up the residual drift in 6
     files identified by the P7.4 dress rehearsal: benches
-    (`agentflow-core/benches/scheduler.rs`,
-    `agentflow-llm/benches/provider_hop.rs`), tests
-    (`agentflow-core/tests/plugin_signed_fixture.rs`,
-    `agentflow-skills/tests/marketplace_signed.rs`,
-    `agentflow-worker/tests/failure_domains.rs`), and the
-    `agentflow-tools/examples/tool_policy_sandbox_demo.rs`
+    (`yanshi-core/benches/scheduler.rs`,
+    `yanshi-llm/benches/provider_hop.rs`), tests
+    (`yanshi-core/tests/plugin_signed_fixture.rs`,
+    `yanshi-skills/tests/marketplace_signed.rs`,
+    `yanshi-worker/tests/failure_domains.rs`), and the
+    `yanshi-tools/examples/tool_policy_sandbox_demo.rs`
     example. No functional changes; `cargo check --all-targets` on
     every touched crate stays green.
   - **Acceptance**: `cargo fmt --all -- --check` exits 0 on the
@@ -1862,7 +1862,7 @@ known characteristics, not surprises.
 
 - DONE P7.4-FU3 Box `tonic::Status` + workspace clippy sweep:
   - Private `BoxedStatusResult<T> = Result<T, Box<Status>>` alias in
-    `agentflow-server/src/scheduler/grpc.rs`. Six proto<->domain
+    `yanshi-server/src/scheduler/grpc.rs`. Six proto<->domain
     conversion helpers (`worker_task_from_proto`,
     `worker_trace_event_from_proto`, `worker_task_result_from_proto`,
     `worker_heartbeat_from_proto`, `parse_uuid`, `parse_json`) now
@@ -1886,8 +1886,8 @@ known characteristics, not surprises.
     - `backend.rs` `serde_json::to_value(&level)` → `(level)`
       (needless_borrow).
   - **Acceptance**: `cargo clippy --workspace --all-targets -- -D
-    warnings` exits 0. agentflow-server lib tests (75) +
-    agentflow-nodes mcp lib tests (30) + agentflow-tools sandbox
+    warnings` exits 0. yanshi-server lib tests (75) +
+    yanshi-nodes mcp lib tests (30) + yanshi-tools sandbox
     tests stay green.
 
 - DONE P7.4-FU4 Production deployment runbook in release notes:
@@ -1895,19 +1895,19 @@ known characteristics, not surprises.
     `## Production Deployment Checklist` section that closes the
     rehearsal F4 finding. Six numbered steps walk a fresh operator
     through:
-    1. Pick + wire `AGENTFLOW_SECURITY_PROFILE=production` and what
+    1. Pick + wire `YANSHI_SECURITY_PROFILE=production` and what
        it turns on (auth fail-closed, CORS deny-by-default, plugin
        sandbox required, marketplace signed-only, SSRF protections,
        tool admission fail-closed).
-    2. Provision `AGENTFLOW_API_TOKEN` via secret manager with
+    2. Provision `YANSHI_API_TOKEN` via secret manager with
        worked Kubernetes / systemd / docker-compose snippets.
-    3. Pre-provision the five storage roots (`AGENTFLOW_RUN_DIR`,
+    3. Pre-provision the five storage roots (`YANSHI_RUN_DIR`,
        `_TRACE_DIR`, `_MARKETPLACE_CACHE`, `_SKILLS_DIR`,
-       `_PLUGINS_DIR`) with a `/var/lib/agentflow` ownership / mode
+       `_PLUGINS_DIR`) with a `/var/lib/yanshi` ownership / mode
        example.
     4. Wire `DATABASE_URL`; embedded `sqlx::migrate!()` runs on
        first boot.
-    5. Verify with `agentflow doctor --profile production
+    5. Verify with `yanshi doctor --profile production
        --backup-check --format json`, refuse to swing traffic
        until exit code is 0.
     6. Optional `docker-compose` smoke before promoting.
@@ -1924,7 +1924,7 @@ known characteristics, not surprises.
 ## P-H — Harness Agent Mode (Parallel Track, NEW)
 
 Designed in `HARNESS_MODE_EVOLUTION.md`. Six phases H0-H6 (overall
-difficulty ~5.5/10 for a practical AgentFlow-native version).
+difficulty ~5.5/10 for a practical Yanshi-native version).
 
 This is a **parallel track** to P1-P5, not a successor. Schedule by
 prereqs below. Stable contracts (`HarnessEvent` envelope, `ApprovalRequest`
@@ -1950,7 +1950,7 @@ Architectural rules (enforced via review):
 - DONE P-H.0 Harness contract inventory (Phase H0):
   - `docs/HARNESS_MODE.md` is the implementation spec, promoted from
     `HARNESS_MODE_EVOLUTION.md` (the rationale doc).
-  - JSON envelopes frozen in new `agentflow-harness` crate:
+  - JSON envelopes frozen in new `yanshi-harness` crate:
     - `HarnessEvent` (closed kind set: `session_started`, `step_started`,
       `tool_call_requested`, `approval_requested`, `approval_decided`,
       `tool_call_completed`, `background_task_updated`,
@@ -1961,10 +1961,10 @@ Architectural rules (enforced via review):
       decided_at, reason).
   - Hook trait boundaries defined: `PreToolHook`, `PostToolHook`,
     `ApprovalProvider`, `ContextProvider`.
-  - `agentflow-harness` shipped as a new crate (additive boundary;
+  - `yanshi-harness` shipped as a new crate (additive boundary;
     Phase H1 wires runtime execution on top).
   - Round-trip contract tests + frozen JSON fixtures under
-    `agentflow-harness/tests/fixtures/`.
+    `yanshi-harness/tests/fixtures/`.
   - `docs/STABILITY.md` lists the new envelopes at `Experimental` tier
     with `HARNESS_ENVELOPE_SCHEMA_VERSION = harness/1`.
 
@@ -1982,12 +1982,12 @@ Architectural rules (enforced via review):
   - Tool / Skill composition only: callers supply a pre-built
     `ReActAgent` (typically from `SkillBuilder::build()`); the runtime
     never touches `ToolRegistry` directly.
-  - Tracing bridge (`agentflow_harness::tracing_bridge`): honors the
-    `AGENTFLOW_TRACE_DIR` convention so trace replay / TUI tooling
+  - Tracing bridge (`yanshi_harness::tracing_bridge`): honors the
+    `YANSHI_TRACE_DIR` convention so trace replay / TUI tooling
     can find Harness session logs without bespoke wiring. Deeper
-    integration with `agentflow-tracing::TraceStorage` (one storage
+    integration with `yanshi-tracing::TraceStorage` (one storage
     layer for both agent and Harness events) tracked under P-H.5.
-  - CLI surface (`agentflow harness …`):
+  - CLI surface (`yanshi harness …`):
     - `run "<input>"` with `--skill`, `--model`, `--session`,
       `--workspace`, `--profile`, `--runtime`, `--output
       text|json|stream-json`, `--run-dir`, `--max-steps`,
@@ -2006,7 +2006,7 @@ Architectural rules (enforced via review):
 ### After P1.7 — Hooks And Approval
 
 - DONE P-H.2 Hooks and approval (Phase H2):
-  - New `agentflow-harness::hooks_runtime` module decorates every
+  - New `yanshi-harness::hooks_runtime` module decorates every
     registered [`Tool`] with a `HookedTool` wrapper via
     `wrap_registry(registry, HookConfig)`. Callers build the
     `ToolRegistry` first, wrap it with hooks + approval, then pass
@@ -2086,12 +2086,12 @@ Architectural rules (enforced via review):
     failure (1 errors, 2 succeed); pre-cancelled token returns
     `Cancelled`; `max_tool_calls=2` with a 3-call batch returns
     `MaxToolCalls` without executing any tool.
-  - `futures = "0.3"` added to `agentflow-agents` dependencies.
+  - `futures = "0.3"` added to `yanshi-agents` dependencies.
 
 ### After P-H.0 Spec + In-Process Task Runtime Design
 
 - DONE P-H.4 Background task tools (Phase H4):
-  - New `agentflow-harness::tasks` module implements an in-process
+  - New `yanshi-harness::tasks` module implements an in-process
     task runtime. Each task is a `tokio::spawn`-backed future running
     an inner `Box<dyn AgentRuntime>` produced by a caller-supplied
     `TaskAgentFactory`. The factory keeps the runtime agnostic of
@@ -2103,7 +2103,7 @@ Architectural rules (enforced via review):
     `is_terminal()` short-circuit on stops + cancels.
   - Five built-in tools (`task_create`, `task_get`, `task_list`,
     `task_stop`, `task_output`) wrap the runtime as standard
-    `agentflow_tools::Tool` impls. `task_tools(runtime)` helper
+    `yanshi_tools::Tool` impls. `task_tools(runtime)` helper
     returns them in a registration-ready vec.
   - Every lifecycle transition emits one
     `HarnessEvent::BackgroundTaskUpdated` through the parent
@@ -2138,9 +2138,9 @@ Architectural rules (enforced via review):
       `harness_sessions` + `harness_session_events` tables (kept separate
       from `runs` so the lifecycle columns stay strongly typed instead of
       overloading the workflow schema with sentinel columns).
-    - DONE: `agentflow-db` `HarnessSessionRepo` / `HarnessEventRepo`
+    - DONE: `yanshi-db` `HarnessSessionRepo` / `HarnessEventRepo`
       traits + Pg impls bundled into `Repositories`.
-    - DONE: `agentflow-server::harness` module with
+    - DONE: `yanshi-server::harness` module with
       `HarnessEventBroker`, `HarnessSessionExecutor` trait,
       `StubHarnessExecutor` (records `session_started` + `stopped`
       events and marks the row `failed: executor_not_yet_wired` until
@@ -2153,21 +2153,21 @@ Architectural rules (enforced via review):
       - `GET /v1/harness/sessions/{id}/events` (SSE with backfill)
       - `GET /v1/harness/sessions/{id}/events/history` (JSON history)
     - DONE: integration tests `tests/harness_routes.rs` self-skip
-      without `AGENTFLOW_DATABASE_TEST_URL` (mirrors
+      without `YANSHI_DATABASE_TEST_URL` (mirrors
       `sse_robustness.rs` pattern). Verified seven scenarios pass on
       a Postgres deployment.
   - Slice 2 (DONE): approval routes + LLM-backed executor
-    - DONE: `agentflow-server::harness_approval` adds
+    - DONE: `yanshi-server::harness_approval` adds
       `PendingApprovalRegistry`, `ServerApprovalProvider` (parks
       `ApprovalRequest`s on per-`(session, request_id)` `oneshot`
       channels, honors `expires_at` with a 5-min default deadline,
       cleans up timed-out / dropped entries).
     - DONE: routes `GET /v1/harness/sessions/{id}/approvals` and
       `POST /v1/harness/sessions/{id}/approvals/{request_id}`.
-    - DONE: `agentflow-server::harness_live` adds
+    - DONE: `yanshi-server::harness_live` adds
       `LiveHarnessExecutor` that wires `HarnessRuntime` ↔ `ReActAgent`
       ↔ tool registry (hook-wrapped via `wrap_registry`) with the
-      shared `ServerApprovalProvider`. `agentflow serve` swaps the
+      shared `ServerApprovalProvider`. `yanshi serve` swaps the
       default `StubHarnessExecutor` for the live one; tests keep the
       stub via plain `AppState::new(db)` so workspace `cargo test`
       stays hermetic.
@@ -2185,9 +2185,9 @@ Architectural rules (enforced via review):
       removed once `HarnessRuntime` is updated to thread `&mut self`
       (or `AgentRuntime: Sync` is added).
     - DONE: integration tests
-      `agentflow-server/tests/harness_approval_routes.rs` (four
+      `yanshi-server/tests/harness_approval_routes.rs` (four
       cases) and `tests/harness_live_executor.rs` (single Moonshot
-      E2E, gated on both `AGENTFLOW_DATABASE_TEST_URL` and
+      E2E, gated on both `YANSHI_DATABASE_TEST_URL` and
       `MOONSHOT_API_KEY` so the workspace stays hermetic without
       either).
   - Slice 3 (DONE): Web UI
@@ -2206,10 +2206,10 @@ Architectural rules (enforced via review):
     - DONE: server-side deep-link routes
       (`ui_router_registers_harness_deep_link_routes` test confirms
       all four `/ui/harness/sessions*` paths serve the SPA shell).
-    - DONE: Vite build refreshed (`agentflow-ui/dist/app.js` 209→225
+    - DONE: Vite build refreshed (`yanshi-ui/dist/app.js` 209→225
       KiB; `styles.css` 7.9→13.88 KiB; no new npm deps).
     - DONE: Playwright spec
-      `agentflow-ui/e2e/harness-sessions.spec.ts` (three cases:
+      `yanshi-ui/e2e/harness-sessions.spec.ts` (three cases:
       submit→redirect; list→detail; localStorage persistence without
       token).
     - Session resume action remains TODO (depends on the
@@ -2228,7 +2228,7 @@ Architectural rules (enforced via review):
       unknown-id failure cases.
     - DONE: append-mode resume (preserving prior events + continuing
       the seq series). All three layers landed: the upstream
-      `HarnessRuntime::with_initial_seq` builder in `agentflow-harness`,
+      `HarnessRuntime::with_initial_seq` builder in `yanshi-harness`,
       the server-side wiring on `:resume`, and the Web UI mode toggle.
       The route accepts `mode: "rerun" | "append"` (default `rerun`
       for backwards compat); `append` queries `MAX(seq)` from
@@ -2283,8 +2283,8 @@ All items here are documentation, error-message, or peripheral
 fix scope. **No urgent core refactor surfaced** by the dogfooding,
 so this segment is small and time-bound.
 
-- DONE P9.1 `agentflow skill validate` surfaces underlying error message:
-  - One-line fix in `agentflow-cli/src/main.rs`: changed
+- DONE P9.1 `yanshi skill validate` surfaces underlying error message:
+  - One-line fix in `yanshi-cli/src/main.rs`: changed
     `eprintln!("Error: {}", e)` → `eprintln!("Error: {:#}", e)`.
     anyhow's chain display now prints outermost context plus every
     `source()` joined by `: `. Benefits every CLI command, not just
@@ -2311,19 +2311,19 @@ so this segment is small and time-bound.
     - 3 common pitfalls: forgetting interpreter defaults, full-path
       instead of basename, case / extension mismatch
 
-- DONE P9.3 Auto-load `~/.agentflow/.env` from agentflow CLI:
-  - `dotenvy = "0.15"` added as `agentflow-cli` dep.
-  - New `load_agentflow_dotenv()` helper in
-    `agentflow-cli/src/main.rs` called at the very top of `main()`
+- DONE P9.3 Auto-load `~/.yanshi/.env` from yanshi CLI:
+  - `dotenvy = "0.15"` added as `yanshi-cli` dep.
+  - New `load_yanshi_dotenv()` helper in
+    `yanshi-cli/src/main.rs` called at the very top of `main()`
     (before `Cli::parse()`); silent no-op when the file is missing.
     Process env vars take precedence over file values (dotenvy
     default), so inline overrides like `MOONSHOT_API_KEY=other
-    agentflow ...` continue to work.
-  - Verified with `env -i HOME=$HOME PATH=$PATH agentflow doctor`:
-    shell shows `MOONSHOT_API_KEY: NOT SET`, but `agentflow doctor`
+    yanshi ...` continue to work.
+  - Verified with `env -i HOME=$HOME PATH=$PATH yanshi doctor`:
+    shell shows `MOONSHOT_API_KEY: NOT SET`, but `yanshi doctor`
     reports only `ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENAI_API_KEY`
     missing — confirms MOONSHOT/MINIMAX/STEPFUN got loaded from
-    `~/.agentflow/.env`.
+    `~/.yanshi/.env`.
   - Skill validate still works clean; no regressions.
 
 - DONE P9.4 SKILL.md `model:` frontmatter handling:
@@ -2332,7 +2332,7 @@ so this segment is small and time-bound.
     `SkillManifest.model.name`. Whitespace-only values get
     normalised to `None` so callers can't accidentally configure
     the empty string. Implementation in
-    `agentflow-skills/src/skill_md.rs` (frontmatter field at line
+    `yanshi-skills/src/skill_md.rs` (frontmatter field at line
     66, manifest conversion at lines 198-201).
   - Tests (3 new in `skill_md::tests`):
     - `parses_model_field_into_manifest` — `model: kimi-k2.6` in
@@ -2365,9 +2365,9 @@ so this segment is small and time-bound.
     (`PodcastPipeline::generate` per-segment durations), and
     F-PH-3 (`phonon-mcp audio_info` surfaces `resampled_from`)
     are entirely in `/Users/hal/rustspace/phonon/Todos.md`. This
-    line stays as the agentflow-side cross-reference but the
-    agentflow checkbox is closed — none of the three block any
-    agentflow work, and their implementation is outside this
+    line stays as the yanshi-side cross-reference but the
+    yanshi checkbox is closed — none of the three block any
+    yanshi work, and their implementation is outside this
     repo's scope.
 
 - DONE P9.7 A1.5 persona: add "re-measure LUFS before save" step:
@@ -2389,7 +2389,7 @@ so this segment is small and time-bound.
   - Cross-project half (`phonon-podcast::ScriptRequest::
     target_segments` docstring) lives in
     `/Users/hal/rustspace/phonon/Todos.md` and is outside this repo;
-    closed on the agentflow side.
+    closed on the yanshi side.
 
 ---
 
@@ -2402,10 +2402,10 @@ traits so the 5 multimodal nodes
 stop hardcoding StepFun.
 
 Context: today
-`agentflow-nodes/src/nodes/{asr,tts,text_to_image,image_to_image,image_edit}.rs`
-directly import `agentflow_llm::providers::stepfun::*` — they bypass
+`yanshi-nodes/src/nodes/{asr,tts,text_to_image,image_to_image,image_edit}.rs`
+directly import `yanshi_llm::providers::stepfun::*` — they bypass
 the registry, so swapping vendors requires rewriting the node. The
-chat path (`agentflow-nodes/src/nodes/llm.rs`) already routes through
+chat path (`yanshi-nodes/src/nodes/llm.rs`) already routes through
 the 6-provider `LLMProvider` trait; this segment brings the non-chat
 modalities up to the same abstraction level.
 
@@ -2450,7 +2450,7 @@ general chat models that happened to accept image input).
     `validate_request()` consult `accepts` (not the variant).
     `ModelConfig::get_capabilities()` injects the explicit
     `accepts` from YAML so downstream code sees the right set.
-    Internal `agentflow-llm/src/providers/stepfun.rs:22` file-local
+    Internal `yanshi-llm/src/providers/stepfun.rs:22` file-local
     `ModelType` enum stays untouched (StepFun's own endpoint-
     selection heuristics; not part of the public surface).
   - Tests: 110 lib tests pass; 9 new tests in `model_types::tests`
@@ -2461,7 +2461,7 @@ general chat models that happened to accept image input).
     --all-targets -- -D warnings` clean.
 
 - DONE P-LLM.1 Per-modality Provider trait surface:
-  - New `agentflow-llm/src/providers/modality/` module with 5 trait
+  - New `yanshi-llm/src/providers/modality/` module with 5 trait
     files (`asr.rs` / `tts.rs` / `text_to_image.rs` /
     `image_to_image.rs` / `image_edit.rs`) + shared types in
     `mod.rs` (`ImageGenerationResponse` + `GeneratedImage`, used by
@@ -2489,17 +2489,17 @@ general chat models that happened to accept image input).
       modern `b64_json` field all surface through.
     - `tts_mime_type_falls_back_to_wav_for_unknown_or_missing`:
       MIME mapping table.
-  - agentflow-llm lib: 113 / 113 passing (was 110). Workspace
+  - yanshi-llm lib: 113 / 113 passing (was 110). Workspace
     clippy `--all-targets -- -D warnings` clean.
   - No video this slice. `Text2VideoProvider` /
     `VideoUnderstandProvider` deferred to P-LLM.6.
 
 - DONE P-LLM.2 Registry dispatcher for modality providers:
-  - New `agentflow-llm/src/modality_dispatch.rs` module exposes 5
+  - New `yanshi-llm/src/modality_dispatch.rs` module exposes 5
     free functions (`asr_provider` / `tts_provider` /
     `text2image_provider` / `image2image_provider` /
     `image_edit_provider`), each returning a boxed trait object
-    from `providers::modality`. Plus thin `AgentFlow::asr(...)` /
+    from `providers::modality`. Plus thin `Yanshi::asr(...)` /
     `::tts(...)` / `::text2image_for(...)` / `::image2image(...)` /
     `::image_edit(...)` method aliases on the main entry point.
   - Each function resolves the model from `ModelRegistry::global()`,
@@ -2512,18 +2512,18 @@ general chat models that happened to accept image input).
     other vendors return `UnsupportedProvider` with the modality name
     embedded ("openai (no ASR implementation yet)"). P-LLM.5 adds
     Whisper as the second ASR vendor.
-  - Chat path (`AgentFlow::model(...)`) untouched.
+  - Chat path (`Yanshi::model(...)`) untouched.
   - 2 new unit tests cover the error-message shapes (type mismatch
     + unsupported vendor) — both checking the messages name the
     actual/expected/modality so callers get an actionable signal.
-  - agentflow-llm lib: 115 / 115 passing (was 113). Workspace
+  - yanshi-llm lib: 115 / 115 passing (was 113). Workspace
     clippy clean.
 
 - DONE P-LLM.3 Refactor 5 multimodal nodes to dispatcher:
-  - `agentflow-nodes/src/nodes/{asr,tts,text_to_image,
+  - `yanshi-nodes/src/nodes/{asr,tts,text_to_image,
     image_to_image,image_edit}.rs` all dropped their direct
     StepFun coupling. Each now resolves the provider through
-    `AgentFlow::<modality>(&self.model).await?` (registry-driven
+    `Yanshi::<modality>(&self.model).await?` (registry-driven
     vendor selection) and submits a modality-level request.
   - Node YAML surface unchanged — `model:` / input keys / output
     keys all preserve identical shape. User-visible behavior
@@ -2532,7 +2532,7 @@ general chat models that happened to accept image input).
     `Image2ImageRequest`, `ImageEditRequest`) name-collide with
     the StepFun-internal types at the crate root, so node code
     imports them via the full module path
-    (`agentflow_llm::providers::modality::Text2ImageRequest as
+    (`yanshi_llm::providers::modality::Text2ImageRequest as
     ModalityText2ImageRequest`). P-LLM.4 will demote the StepFun
     types and let the modality ones win at the crate root.
   - Known limitation surfaced: `TextToImageNode::style_reference`
@@ -2545,9 +2545,9 @@ general chat models that happened to accept image input).
   - Removed `STEPFUN_API_KEY` direct env lookups from all 5 node
     files — the dispatcher resolves API keys via
     `LLMConfig::get_api_key(vendor)` with the same precedence the
-    chat path uses, so YAML configs and `~/.agentflow/.env`
+    chat path uses, so YAML configs and `~/.yanshi/.env`
     handling stays consistent.
-  - agentflow-nodes lib: 25 / 25 passing (4 ignored are pre-existing
+  - yanshi-nodes lib: 25 / 25 passing (4 ignored are pre-existing
     STEPFUN_API_KEY-gated integration tests). Workspace clippy
     clean.
 
@@ -2557,44 +2557,44 @@ general chat models that happened to accept image input).
     Text2ImageRequest, Image2ImageRequest, ImageEditRequest,
     ImageGenerationResponse, VoiceCloningRequest /Response,
     VoiceListResponse, StepFunSpecializedClient).
-  - Removed `AgentFlow::stepfun_client` / `stepfun_client_with_base_url`
+  - Removed `Yanshi::stepfun_client` / `stepfun_client_with_base_url`
     / `text2image(...)` / `text_to_speech(...)` — these handed
     callers a StepFun-internal builder, bypassing the dispatcher.
-  - Modality types now win at the crate root: `agentflow_llm::
+  - Modality types now win at the crate root: `yanshi_llm::
     Text2ImageRequest` / `Image2ImageRequest` / `ImageEditRequest`
     / `ImageGenerationResponse` all resolve to the
     `providers::modality::*` variants. P-LLM.3 node imports that
     used the full path can be shortened in a follow-up, but the
     short path now points at the right type.
   - StepFun specialized types stay reachable via the long path
-    `agentflow_llm::providers::stepfun::*` for the live integration
+    `yanshi_llm::providers::stepfun::*` for the live integration
     tests that intentionally exercise StepFun-specific wire shapes
     (`tests/provider_consistency_live.rs` — gated on
-    `AGENTFLOW_LIVE_LLM_TESTS=1`). Not promoted at the crate root,
+    `YANSHI_LIVE_LLM_TESTS=1`). Not promoted at the crate root,
     so new external code that wants to bypass the modality surface
     has to make the long-path access explicit and discoverable in
     review.
   - Pure cleanup of the CLI's remaining dead StepFun direct calls:
-    `agentflow-cli/src/commands/audio/{asr,clone,tts}.rs` and
+    `yanshi-cli/src/commands/audio/{asr,clone,tts}.rs` and
     `commands/image/generate.rs` were the last consumers — all now
     go through the dispatcher. The `clone.rs` voice-cloning CLI
     stays a documented stub (no `VoiceCloningProvider` trait yet;
     flagged for a future P-LLM follow-up).
-  - agentflow-llm lib: 115 / 115 passing. agentflow-nodes lib:
+  - yanshi-llm lib: 115 / 115 passing. yanshi-nodes lib:
     25 / 25 passing. Workspace `cargo clippy --workspace
     --all-targets -- -D warnings` clean. Live integration tests
     (`provider_consistency_live`) still compile.
 
 - DONE P-LLM.5 Second vendor for trait shape validation:
-  - New `agentflow-llm/src/providers/openai_asr.rs` ships
+  - New `yanshi-llm/src/providers/openai_asr.rs` ships
     `OpenAIAsrProvider`. Hits `POST {base_url}/audio/transcriptions`
     with `multipart/form-data` per the OpenAI API spec. Supports
     `whisper-1`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`.
   - Trait-shape calibration: `AsrRequest` gained a `prompt:
     Option<String>` field (Whisper's bias-prompt for domain
     vocabulary — capped at 224 tokens by Whisper, silently ignored
-    by StepFun). Updated the 2 call sites (`agentflow-nodes/src/
-    nodes/asr.rs` + `agentflow-cli/src/commands/audio/asr.rs`).
+    by StepFun). Updated the 2 call sites (`yanshi-nodes/src/
+    nodes/asr.rs` + `yanshi-cli/src/commands/audio/asr.rs`).
     `language` and `temperature` already on the trait now actually
     flow through to Whisper as documented.
   - `default_models.yml` gained three OpenAI ASR entries:
@@ -2632,18 +2632,18 @@ general chat models that happened to accept image input).
       smoke without HTTP.
   - Live end-to-end test:
     `provider_consistency_live::whisper_via_modality_dispatcher_transcribes_audio`
-    gated on `AGENTFLOW_LIVE_AUDIO_TESTS=1` + `OPENAI_API_KEY`.
+    gated on `YANSHI_LIVE_AUDIO_TESTS=1` + `OPENAI_API_KEY`.
     Walks the full dispatcher → registry → OpenAIAsrProvider →
     HTTP → response-parsing path. Uses StepFun TTS to produce
     the audio fixture when StepFun is configured; otherwise
     falls back to a 1-second silent WAV so the multipart path
     still exercises against Whisper.
-  - agentflow-llm lib: 124 / 124 passing (was 115; +8 from
+  - yanshi-llm lib: 124 / 124 passing (was 115; +8 from
     openai_asr + 1 live test slot). Workspace clippy clean.
 
 - DEFERRED P-LLM.6 Video modality:
   - Trigger: Veo / Sora / Runway becomes Rust-callable + stable
-    AND a concrete agentflow workflow needs video.
+    AND a concrete yanshi workflow needs video.
   - Add `Text2VideoProvider` / `VideoUnderstandProvider` traits +
     `text_to_video` / `video_understand` nodes at that time.
 
@@ -2660,7 +2660,7 @@ fit a P-segment.
   - New `cargo xtask check-agent-sdk-doc` subcommand walks every
     backtick-quoted CamelCase identifier in `docs/AGENT_SDK.md` and
     asserts a matching `pub (trait|struct|enum|type|fn) Ident`
-    declaration exists under any `agentflow-*/src/**/*.rs`. Catches
+    declaration exists under any `yanshi-*/src/**/*.rs`. Catches
     doc rot when a trait or type referenced in the SDK guide is
     renamed or removed without updating the doc. An explicit
     allowlist (`Err`, `None`, enum variants `Step` / `Plan` /
@@ -2684,7 +2684,7 @@ fit a P-segment.
 
 - DONE M.3 Test coverage gaps (db + memory parts; worker part deferred
   to P5.5–P5.7):
-  - `agentflow-db/tests/repositories.rs` grew from 2 to 12 tests.
+  - `yanshi-db/tests/repositories.rs` grew from 2 to 12 tests.
     New coverage:
     - `run_repo_list_isolates_tenants` — tenant-scoped reads don't
       bleed across tenants.
@@ -2713,7 +2713,7 @@ fit a P-segment.
     re-runs against the same DB don't accumulate noise into the
     `assert_eq!(len, 1)` invariants. Migration roundtrip stays in
     `tests/migrations.rs`.
-  - `agentflow-memory` part already closed by P4.7 (37 hermetic
+  - `yanshi-memory` part already closed by P4.7 (37 hermetic
     tests covering Session / Semantic / Preference / Entity facts
     backends + cross-layer integration test).
   - Worker (P5) coverage tracked under P5.5–P5.7.
@@ -2723,24 +2723,24 @@ fit a P-segment.
 - DONE M.5 CI workflow audit (see `docs/CI_WORKFLOWS.md`).
 
 - DONE M.7 Fix broken minimal feature combinations:
-  - DONE `agentflow-llm --no-default-features --features openai`:
+  - DONE `yanshi-llm --no-default-features --features openai`:
     `tracing` was declared optional under `logging`/`observability`
     but source used `tracing::*` unconditionally. Aligned with the
     rest of the workspace by making `tracing` a hard dep;
     `tracing-subscriber` stays optional under `logging` (it's the
     heavy part); `observability` is kept as an empty alias for
     backwards compat.
-  - DONE `agentflow-nodes` `factories` feature: the gated module
+  - DONE `yanshi-nodes` `factories` feature: the gated module
     referenced constructors (`LlmNode::new(&str, &str)`, etc.) that
     haven't existed since the unit-struct rewrite. The module was
     unused anywhere else in the workspace. Deleted the module and
     the feature flag; `NodeRegistry::default()` now just returns
     `Self::new()`.
-  - DONE `agentflow-nodes` `conditional`: stale `FlowValue::String`
+  - DONE `yanshi-nodes` `conditional`: stale `FlowValue::String`
     pattern + `value.as_f64()` call. Dropped the dead arm
     (`FlowValue::Json(Value::String)` covers it) and added a small
     `flow_value_as_f64` helper.
-  - DONE `agentflow-nodes` `batch`: `#[derive(Debug)]` on `BatchNode`
+  - DONE `yanshi-nodes` `batch`: `#[derive(Debug)]` on `BatchNode`
     pulled in `dyn AsyncNode: Debug` which isn't on the trait.
     Hand-rolled `Debug` impl that prints `<AsyncNode>` for the
     `child_node` field. Also fixed the batch result serialization
@@ -2749,8 +2749,8 @@ fit a P-segment.
   - DONE CI matrix: dropped the broken-combo comment block from
     Quality `features` job and added `llm-openai-only` +
     `nodes-batch-conditional` rows. Both now run on every PR.
-  - Tests: `cargo test -p agentflow-nodes --features
-    batch,conditional` → 30 / 0 pass; `cargo test -p agentflow-llm
+  - Tests: `cargo test -p yanshi-nodes --features
+    batch,conditional` → 30 / 0 pass; `cargo test -p yanshi-llm
     --no-default-features --features openai --lib` → 98 / 0 pass.
 
 - DONE M.6 Workspace edition pin:

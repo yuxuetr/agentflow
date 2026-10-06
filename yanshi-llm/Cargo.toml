@@ -1,0 +1,108 @@
+[package]
+name = "yanshi-llm"
+version = "0.2.0"
+description = "LLM integration crate for Yanshi - unified interface for multiple LLM providers"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[lib]
+doctest = false
+
+[features]
+default = ["openai", "anthropic", "google", "logging"]
+openai = []
+anthropic = []
+google = []
+# `logging` adds the `tracing-subscriber` setup helpers on top of the always-on
+# `tracing` macros. (W0.7: the `observability` empty-alias feature that used
+# to sit here was removed — nothing in the workspace enabled it, and
+# `yanshi-core`'s real `observability` feature it aliased is gone too.)
+logging = ["dep:tracing-subscriber"]
+
+[dependencies]
+# R1.1: LlmTraceContext's data type now lives in yanshi-value (an L0
+# contract crate with no runtime/transport deps); this crate re-exports it
+# under its original `yanshi_llm::LlmTraceContext` path and keeps the
+# task-local scope + HTTP header injection helpers, which are genuinely
+# LLM-transport concerns.
+yanshi-value = { path = "../yanshi-value", version = "0.1" }
+
+# Core async and serialization
+tokio = { workspace = true, features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# HTTP client and networking
+reqwest = { workspace = true, features = ["stream", "multipart"] }
+tokio-stream = "0.1"
+
+# Error handling and utilities
+anyhow = "1.0"
+thiserror = "1.0"
+uuid = { workspace = true, features = ["serde"] }
+
+# Decoding inline base64 media (Google `generateContent` returns
+# inlineData.data as base64 for both TTS and image-in-chat-response
+# output — no other provider needs to decode base64 in production code
+# today, since StepFun/OpenAI return raw bytes or a URL directly).
+base64 = "0.21"
+
+# Environment and configuration
+dotenvy = "0.15"
+dirs = "5.0"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Observability and logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
+log = "0.4"
+
+# Provider-specific tokenizers (P10.3.3). `tiktoken-rs` ships the
+# OpenAI BPE encodings (cl100k_base, o200k_base, p50k_base, r50k_base)
+# used by every OpenAI-family model — GPT-3.5 / 4 / 4o, plus the
+# OpenAI-compat vendors that adopted the same tokenizer (Moonshot Kimi,
+# DeepSeek-V*, GLM-4, DashScope Qwen, MiniMax). Anthropic / Google use
+# SentencePiece variants and fall back to the heuristic counter (their
+# APIs report precise counts in the response so post-call accounting
+# stays exact; pre-call budgeting is the gap this dep closes for the
+# BPE family).
+tiktoken-rs = "0.6"
+
+# Q3.6.1: removed the dead `yanshi-core` dependency. It was declared
+# in [dependencies] but never imported anywhere in this crate's source,
+# bloating compile times and creating a false impression of a coupling
+# direction (llm → core) that doesn't actually exist.
+
+# P-LLM2.7: per-vendor RPM enforcement for the registry's `RateLimitConfig`
+# (previously parsed, validated, then discarded — a token bucket per
+# `ModelRegistry`-managed provider). Already a workspace dependency of
+# `yanshi-rag` (same `OpenAIEmbedding::rate_limiter` pattern this
+# mirrors), so this adds no new external dependency to the project's
+# trust surface.
+governor = "0.6"
+# P-LLM2.7: jitter for `retry_transient`'s exponential backoff, so
+# concurrent callers retrying the same transient failure don't all wake
+# up and re-hit the provider at the exact same instant.
+rand = "0.8"
+
+[dev-dependencies]
+# P-LLM2.7: `test-util` (paused/advanceable clock) for
+# `retry_after_ms_is_honored_exactly_instead_of_computed_backoff` — not
+# part of `full`, must be requested separately.
+tokio = { workspace = true, features = ["full", "test-util"] }
+mockito = "1.0"
+tracing-test = "0.2"
+env_logger = "0.10"
+tempfile = "3.8"
+futures-util = "0.3"
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+[[bench]]
+name = "provider_hop"
+harness = false

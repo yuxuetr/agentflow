@@ -1,0 +1,58 @@
+[package]
+name = "yanshi-agents"
+version = "0.2.0"
+description = "Reusable AI agent applications and utilities for Yanshi"
+keywords = ["ai", "agents", "workflow", "llm"]
+categories = ["development-tools"]
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+# P-A: agents builds on the graph IR + the FlowRunner contract + the async-util
+# combinators, NOT the core executor runtime (the `agents -> core` edge is
+# burned). The concrete `CoreFlowRunner` is injected by the surface; core stays
+# a dev-dependency for the in-crate execution tests.
+yanshi-graph = { path = "../yanshi-graph", version = "0.1" }
+yanshi-value = { path = "../yanshi-value", version = "0.1" }
+yanshi-async-util = { path = "../yanshi-async-util", version = "0.1" }
+yanshi-llm = { path = "../yanshi-llm", version = "0.2" }
+yanshi-mcp = { path = "../yanshi-mcp", version = "0.2" }
+# T3.3: contract-only usage (Tool/ToolError/ToolOutput/ToolMetadata/
+# ToolIdempotency/ToolRegistry) — depends on the contract crate directly,
+# not the builtin-impl one. Concrete tools (`ShellTool`/`SandboxPolicy`)
+# are examples-only and pull in `yanshi-tools` as a dev-dependency below.
+yanshi-tool = { path = "../yanshi-tool", version = "0.1" }
+yanshi-agent-spi = { path = "../yanshi-agent-spi", version = "0.1" }
+yanshi-memory = { path = "../yanshi-memory", version = "0.1" }
+
+# Common dependencies for agents
+async-trait = "0.1"
+futures = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+tokio = { workspace = true, features = ["full"] }
+reqwest = { workspace = true, features = ["multipart"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1.0"
+uuid = { workspace = true }
+tracing = "0.1"
+regex = "1"
+toml = "0.8"
+
+[dev-dependencies]
+# Execution-side tests build real Flows + run them via `CoreFlowRunner`.
+yanshi-core = { path = "../yanshi-core", version = "0.2" }
+# T3.3: examples only (`react_agent.rs`'s `SandboxPolicy`, `agent_tool.rs`'s
+# doc comment) — production code never needs a concrete tool.
+yanshi-tools = { path = "../yanshi-tools", version = "0.1" }
+tokio-test = "0.4"
+anyhow = "1.0"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tempfile = "3"
+
+[features]
+default = []

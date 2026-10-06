@@ -13,7 +13,7 @@
     "The CI gate (P7.2) re-runs benches on a fixed runner and compares against that runner's baseline."
   ],
   "benchmarks": {
-    "agentflow-core/scheduler": {
+    "yanshi-core/scheduler": {
       "flow_linear/serial/10":              { "median_ns": 738740, "throughput_elem_per_s": 13534 },
       "flow_linear/concurrent_8/10":        { "median_ns": 746740, "throughput_elem_per_s": 13391 },
       "flow_linear/serial/100":             { "median_ns": 6174800, "throughput_elem_per_s": 16194 },
@@ -27,13 +27,13 @@
       "flow_fanout/serial/1000":            { "median_ns": 62632000, "throughput_elem_per_s": 15966 },
       "flow_fanout/concurrent_8/1000":      { "median_ns": 71544000, "throughput_elem_per_s": 13979 }
     },
-    "agentflow-llm/provider_hop": {
+    "yanshi-llm/provider_hop": {
       "provider_hop/execute/1":             { "median_ns": 199, "throughput_elem_per_s": 5019800 },
       "provider_hop/execute/8":             { "median_ns": 198, "throughput_elem_per_s": 5053400 },
       "provider_hop/execute/32":            { "median_ns": 200, "throughput_elem_per_s": 5004900 },
       "provider_hop_streaming/execute_streaming_full_drain": { "median_ns": 135, "throughput_elem_per_s": 7418200 }
     },
-    "agentflow-rag/retrieval": {
+    "yanshi-rag/retrieval": {
       "bm25_search/top_10/1000":            { "median_ns": 109400, "throughput_elem_per_s": 9141 },
       "bm25_search/top_100/1000":           { "median_ns": 119160, "throughput_elem_per_s": 8392 },
       "bm25_search/top_10/10000":           { "median_ns": 1371600, "throughput_elem_per_s": 729 },
@@ -41,7 +41,7 @@
       "bm25_index/build_corpus/1000":       { "median_ns": 307430000, "throughput_elem_per_s": 3253 },
       "bm25_index/build_corpus/10000":      { "median_ns": 31475000000, "throughput_elem_per_s": 318 }
     },
-    "agentflow-tracing/event_write": {
+    "yanshi-tracing/event_write": {
       "trace_serialize/nodes/10":           { "median_ns": 4589, "throughput_elem_per_s": 2179100 },
       "trace_serialize/nodes/100":          { "median_ns": 41645, "throughput_elem_per_s": 2401200 },
       "trace_serialize/nodes/1000":         { "median_ns": 395270, "throughput_elem_per_s": 2529900 },
@@ -52,7 +52,7 @@
       "jsonl_append/nodes/100":             { "median_ns": 5201500, "throughput_elem_per_s": 19225 },
       "jsonl_append/nodes/1000":            { "median_ns": 8373700, "throughput_elem_per_s": 119420 }
     },
-    "agentflow-nodes/node_latency": {
+    "yanshi-nodes/node_latency": {
       "template/render/small":              { "median_ns": 39655 },
       "template/render/medium":             { "median_ns": 81704 },
       "template/render/large":              { "median_ns": 415010 },
@@ -64,7 +64,7 @@
       "file/write/64k":                     { "median_ns": 65044 },
       "file/read/64k":                      { "median_ns": 28924 }
     },
-    "agentflow-core/hot_paths": {
+    "yanshi-core/hot_paths": {
       "flowvalue_decode/json/tiny":              { "median_ns": 650 },
       "flowvalue_decode/json/medium":            { "median_ns": 21564 },
       "flowvalue_decode/json/large":             { "median_ns": 415870 },

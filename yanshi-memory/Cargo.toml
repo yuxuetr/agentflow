@@ -1,0 +1,40 @@
+[package]
+name = "yanshi-memory"
+version = "0.1.0"
+description = "Session and long-term memory management for Yanshi agents"
+keywords = ["ai", "agents", "memory", "llm"]
+categories = ["development-tools"]
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+# Storage contracts (P-A1.2): MemoryError / Message / MemoryStore, re-exported
+# under their original yanshi_memory::* paths for backward compatibility.
+yanshi-store-spi = { path = "../yanshi-store-spi", version = "0.1" }
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tokio = { workspace = true, features = ["full"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { workspace = true, features = ["serde"] }
+sqlx = { workspace = true, features = ["sqlite", "chrono", "uuid"] }
+tracing = "0.1"
+yanshi-rag = { path = "../yanshi-rag", version = "0.3.0-alpha", default-features = false }
+# P10.7.2: encryption-at-rest for the preference layer. Single-user
+# X25519 identity, no cloud KMS dependency. Pinned at 0.11 (current
+# stable as of 2026-05).
+age = "0.11"
+base64 = "0.21"
+sha2 = "0.10"
+# U2.2: `remember_preference` registry-installable Tool, mirroring how
+# `yanshi-rag` wraps `KnowledgeBackend` as `RagSearchTool` (same
+# capability-tier -> tool-tier dependency shape, already established).
+yanshi-tools = { path = "../yanshi-tools", version = "0.1" }
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3"

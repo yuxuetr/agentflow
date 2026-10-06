@@ -5,12 +5,12 @@ the regression gate watches:
 
 | Crate              | Bench               | Run                                              |
 | ------------------ | ------------------- | ------------------------------------------------ |
-| `agentflow-core`   | `scheduler`         | `cargo bench -p agentflow-core --bench scheduler`        |
-| `agentflow-core`   | `hot_paths`         | `cargo bench -p agentflow-core --bench hot_paths` (P10.1.1) |
-| `agentflow-llm`    | `provider_hop`      | `cargo bench -p agentflow-llm --bench provider_hop`      |
-| `agentflow-rag`    | `retrieval`         | `cargo bench -p agentflow-rag --bench retrieval`         |
-| `agentflow-tracing`| `event_write`       | `cargo bench -p agentflow-tracing --bench event_write`   |
-| `agentflow-nodes`  | `node_latency`      | `cargo bench -p agentflow-nodes --bench node_latency --features conditional` (P10.2.1) |
+| `yanshi-core`   | `scheduler`         | `cargo bench -p yanshi-core --bench scheduler`        |
+| `yanshi-core`   | `hot_paths`         | `cargo bench -p yanshi-core --bench hot_paths` (P10.1.1) |
+| `yanshi-llm`    | `provider_hop`      | `cargo bench -p yanshi-llm --bench provider_hop`      |
+| `yanshi-rag`    | `retrieval`         | `cargo bench -p yanshi-rag --bench retrieval`         |
+| `yanshi-tracing`| `event_write`       | `cargo bench -p yanshi-tracing --bench event_write`   |
+| `yanshi-nodes`  | `node_latency`      | `cargo bench -p yanshi-nodes --bench node_latency --features conditional` (P10.2.1) |
 
 ## Naming
 
@@ -57,7 +57,7 @@ the defaults — but expect each crate to take 1–2 minutes per shape.
   `recompute_statistics` pass that `BM25Retriever::add_document` does
   on every insert. The bench surfaces this so any indexing speed-up
   shows up immediately; the search-side numbers are not affected.
-- `agentflow-core::flow` currently prints a `▶️  Executing node 'xxx'`
+- `yanshi-core::flow` currently prints a `▶️  Executing node 'xxx'`
   line per node from `flow.rs`. The bench numbers include the cost of
   those prints — a future PR that silences debug prints behind a flag
   should be expected to improve every `flow_*` baseline.

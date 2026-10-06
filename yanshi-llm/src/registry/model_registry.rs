@@ -1,0 +1,751 @@
+use crate::{
+  LLMError, Result,
+  config::{GlobalDefaults, LLMConfig, LLMConfigSource, ModelConfig},
+  providers::{LLMProvider, create_provider},
+};
+use governor::{Quota, RateLimiter, clock::DefaultClock, state::InMemoryState, state::NotKeyed};
+use std::collections::{HashMap, HashSet};
+use std::num::NonZeroU32;
+use std::sync::{Arc, OnceLock, RwLock};
+
+/// Per-vendor request-rate limiter, keyed the same way [`ModelRegistry::providers`]
+/// is (by vendor name — see [`ModelRegistry::initialize_providers`]).
+///
+/// `pub(crate)`, not `pub` — an internal implementation detail consumed
+/// only by [`crate::client::llm_client`]; deliberately not part of this
+/// crate's public API surface so `governor`'s types don't leak into it.
+pub(crate) type VendorRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
+
+/// Fallback RPM used only if a vendor's configured `requests_per_minute`
+/// is somehow `0` despite [`crate::config::validation`] rejecting that at
+/// config-load time — defends `NonZeroU32::new` against a `None` it
+/// should never actually see, without a production `unwrap`/`expect`.
+const FALLBACK_REQUESTS_PER_MINUTE: u32 = 60;
+
+/// Global model registry that manages model configurations and provider instances
+pub struct ModelRegistry {
+  config: Arc<RwLock<Option<LLMConfig>>>,
+  providers: Arc<RwLock<HashMap<String, Arc<dyn LLMProvider>>>>,
+  /// Vendors referenced by `config.models` whose API key env var
+  /// was unset at `load_config*` time. Populated by
+  /// [`Self::initialize_providers`] and consulted by
+  /// [`Self::get_provider`] so that a lookup of a model whose vendor
+  /// was skipped returns [`LLMError::MissingApiKey`] (actionable)
+  /// rather than [`LLMError::UnsupportedProvider`] (misleading —
+  /// the provider IS supported, just unauthenticated).
+  ///
+  /// See P10.3.1: lenient init.
+  missing_key_providers: Arc<RwLock<HashSet<String>>>,
+  /// P-LLM2.7: one token bucket per vendor, sized from that vendor's
+  /// `ProviderConfig.rate_limit.requests_per_minute`. Populated by
+  /// [`Self::initialize_providers`] alongside `providers`; absent for a
+  /// vendor with no `rate_limit` configured (no enforcement, matching
+  /// pre-fix behavior for that vendor). `tokens_per_minute` is parsed
+  /// but **not** enforced — TPM throttling needs a pre-call token
+  /// estimate, which is only solid for the OpenAI-BPE-family vendors
+  /// today (see `tokenizer.rs`); left as documented future work rather
+  /// than a half-correct implementation for the other vendors.
+  rate_limiters: Arc<RwLock<HashMap<String, Arc<VendorRateLimiter>>>>,
+}
+
+impl ModelRegistry {
+  /// Create a new empty model registry
+  pub fn new() -> Self {
+    Self {
+      config: Arc::new(RwLock::new(None)),
+      providers: Arc::new(RwLock::new(HashMap::new())),
+      missing_key_providers: Arc::new(RwLock::new(HashSet::new())),
+      rate_limiters: Arc::new(RwLock::new(HashMap::new())),
+    }
+  }
+
+  /// Get the global singleton instance
+  pub fn global() -> &'static ModelRegistry {
+    static INSTANCE: OnceLock<ModelRegistry> = OnceLock::new();
+    INSTANCE.get_or_init(ModelRegistry::new)
+  }
+
+  /// Load configuration from a YAML file and initialize providers
+  pub async fn load_config(&self, config_path: &str) -> Result<()> {
+    let config = LLMConfig::from_file(config_path).await?;
+    self.load_config_struct(config).await
+  }
+
+  /// Load built-in default configuration (compile-time bundled vendor
+  /// files + slimmed `default_models.yml`'s `providers:`/`defaults:` —
+  /// see `crate::config::builtin_default_config`).
+  pub async fn load_builtin_config(&self) -> Result<()> {
+    let config = crate::config::builtin_default_config()?;
+    self.load_config_struct(config).await
+  }
+
+  /// Load configuration from YAML string
+  pub async fn load_config_from_yaml(&self, yaml_content: &str) -> Result<()> {
+    let config = LLMConfig::from_yaml(yaml_content)?;
+    self.load_config_struct(config).await
+  }
+
+  /// Load an already-resolved [`LLMConfigSource`] (file, directory-based
+  /// [`crate::config::VendorConfigManager`] layout, or the built-in
+  /// default) and store it as the active configuration.
+  pub async fn load_from_source(&self, source: &LLMConfigSource) -> Result<()> {
+    let config = LLMConfig::from_source(source).await?;
+    self.load_config_struct(config).await
+  }
+
+  /// Validate, initialize providers for, and store an already-parsed
+  /// config. Shared tail of [`Self::load_config`],
+  /// [`Self::load_builtin_config`], [`Self::load_config_from_yaml`], and
+  /// [`Self::load_from_source`].
+  async fn load_config_struct(&self, config: LLMConfig) -> Result<()> {
+    // Validate configuration
+    config.validate()?;
+
+    // Initialize providers
+    self.initialize_providers(&config).await?;
+
+    // Store the config
+    {
+      let mut config_guard = self.config.write().map_err(|e| LLMError::InternalError {
+        message: format!("Configuration lock poisoned: {}", e),
+      })?;
+      *config_guard = Some(config);
+    }
+
+    Ok(())
+  }
+
+  /// Get a model configuration by name
+  pub fn get_model(&self, model_name: &str) -> Result<ModelConfig> {
+    let config_guard = self.config.read().map_err(|e| LLMError::InternalError {
+      message: format!("Configuration lock poisoned: {}", e),
+    })?;
+    let config = config_guard
+      .as_ref()
+      .ok_or_else(|| LLMError::ConfigurationError {
+        message: "No configuration loaded. Call load_config() first.".to_string(),
+      })?;
+
+    config
+      .get_model(model_name)
+      .cloned()
+      .map_err(|_| LLMError::ModelNotFound {
+        model_name: model_name.to_string(),
+      })
+  }
+
+  /// V1.5: the resolved config's global retry/timeout defaults
+  /// (`defaults.max_retries` / `defaults.retry_delay_ms`), consumed by
+  /// [`crate::client::LLMClient`] to retry transient provider failures
+  /// with backoff. Returns [`GlobalDefaults::default()`] (no retry) when
+  /// no configuration has been loaded yet, rather than erroring — retry
+  /// behavior is an opt-in refinement, not a precondition for calling.
+  pub fn get_defaults(&self) -> Result<GlobalDefaults> {
+    let config_guard = self.config.read().map_err(|e| LLMError::InternalError {
+      message: format!("Configuration lock poisoned: {}", e),
+    })?;
+    Ok(
+      config_guard
+        .as_ref()
+        .map(|config| config.defaults.clone())
+        .unwrap_or_default(),
+    )
+  }
+
+  /// P-LLM2.7: the token bucket for `provider_name`, when its
+  /// `ProviderConfig.rate_limit` was set at load time. `None` means "no
+  /// enforcement" — either the vendor has no `rate_limit` configured, or
+  /// no configuration has been loaded yet — matching how
+  /// [`Self::get_defaults`] treats an unloaded config as "no retry"
+  /// rather than an error.
+  pub(crate) fn get_rate_limiter(&self, provider_name: &str) -> Option<Arc<VendorRateLimiter>> {
+    self
+      .rate_limiters
+      .read()
+      .ok()
+      .and_then(|guard| guard.get(provider_name).cloned())
+  }
+
+  /// Get a provider instance by name
+  pub fn get_provider(&self, provider_name: &str) -> Result<Arc<dyn LLMProvider>> {
+    let providers_guard = self.providers.read().map_err(|e| LLMError::InternalError {
+      message: format!("Providers lock poisoned: {}", e),
+    })?;
+    if let Some(provider) = providers_guard.get(provider_name).cloned() {
+      return Ok(provider);
+    }
+
+    // P10.3.1: when a provider was skipped at init time due to a
+    // missing API key, surface that fact instead of the generic
+    // "unsupported provider" error — the provider IS supported,
+    // it just wasn't authenticated.
+    let missing_guard = self
+      .missing_key_providers
+      .read()
+      .map_err(|e| LLMError::InternalError {
+        message: format!("missing_key_providers lock poisoned: {}", e),
+      })?;
+    if missing_guard.contains(provider_name) {
+      return Err(LLMError::MissingApiKey {
+        provider: provider_name.to_string(),
+      });
+    }
+
+    Err(LLMError::UnsupportedProvider {
+      provider: provider_name.to_string(),
+    })
+  }
+
+  /// List all available model names
+  pub fn list_models(&self) -> Vec<String> {
+    // Note: Returns empty vec if lock is poisoned to maintain backward compatibility
+    let config_guard = match self.config.read() {
+      Ok(guard) => guard,
+      Err(_) => return Vec::new(),
+    };
+    if let Some(config) = config_guard.as_ref() {
+      config.models.keys().cloned().collect()
+    } else {
+      Vec::new()
+    }
+  }
+
+  /// List all available provider names
+  pub fn list_providers(&self) -> Vec<String> {
+    // Note: Returns empty vec if lock is poisoned to maintain backward compatibility
+    let providers_guard = match self.providers.read() {
+      Ok(guard) => guard,
+      Err(_) => return Vec::new(),
+    };
+    providers_guard.keys().cloned().collect()
+  }
+
+  /// Check if a model is available
+  pub fn has_model(&self, model_name: &str) -> bool {
+    // Note: Returns false if lock is poisoned to maintain backward compatibility
+    let config_guard = match self.config.read() {
+      Ok(guard) => guard,
+      Err(_) => return false,
+    };
+    if let Some(config) = config_guard.as_ref() {
+      config.models.contains_key(model_name)
+    } else {
+      false
+    }
+  }
+
+  /// Get the current configuration
+  pub async fn get_config(&self) -> Result<LLMConfig> {
+    let config_guard = self.config.read().map_err(|e| LLMError::InternalError {
+      message: format!("Configuration lock poisoned: {}", e),
+    })?;
+    config_guard
+      .as_ref()
+      .cloned()
+      .ok_or_else(|| LLMError::ConfigurationError {
+        message: "No configuration loaded".to_string(),
+      })
+  }
+
+  /// Get model information for debugging/inspection.
+  ///
+  /// Read-only by design: must not require a live provider, because
+  /// inventory paths like `yanshi llm models` need to enumerate every
+  /// declared model even when its provider's API key is unset. Falls back
+  /// to the static config's `providers[vendor].base_url` when the model
+  /// doesn't override it, and finally to an empty string when neither
+  /// is available (rare; the registry is the source of truth for what
+  /// base URL a request would use).
+  pub fn get_model_info(&self, model_name: &str) -> Result<ModelInfo> {
+    let model_config = self.get_model(model_name)?;
+    let provider_base_url = {
+      let config_guard = self.config.read().map_err(|e| LLMError::InternalError {
+        message: format!("Configuration lock poisoned: {}", e),
+      })?;
+      config_guard
+        .as_ref()
+        .and_then(|c| c.providers.get(&model_config.vendor))
+        .and_then(|p| p.base_url.clone())
+    };
+
+    let model_type = model_config.granular_type().to_legacy_string().to_string();
+    let mut accepts: Vec<String> = model_config
+      .accepts()
+      .iter()
+      .map(|input_type| input_type.as_str().to_string())
+      .collect();
+    accepts.sort();
+
+    Ok(ModelInfo {
+      name: model_name.to_string(),
+      vendor: model_config.vendor.clone(),
+      model_id: model_config
+        .model_id
+        .unwrap_or_else(|| model_name.to_string()),
+      base_url: model_config
+        .base_url
+        .or(provider_base_url)
+        .unwrap_or_default(),
+      temperature: model_config.temperature,
+      max_tokens: model_config.max_tokens,
+      supports_streaming: model_config.supports_streaming.unwrap_or(true),
+      model_type,
+      accepts,
+    })
+  }
+
+  /// Validate all providers are working
+  pub async fn validate_all_providers(&self) -> Result<ValidationReport> {
+    let mut report = ValidationReport {
+      valid_providers: Vec::new(),
+      invalid_providers: Vec::new(),
+    };
+
+    let providers = {
+      let providers_guard = self.providers.read().map_err(|e| LLMError::InternalError {
+        message: format!("Providers lock poisoned: {}", e),
+      })?;
+      providers_guard
+        .iter()
+        .map(|(name, provider)| (name.clone(), Arc::clone(provider)))
+        .collect::<Vec<_>>()
+    };
+
+    for (provider_name, provider) in providers {
+      match provider.validate_config().await {
+        Ok(()) => report.valid_providers.push(provider_name),
+        Err(e) => report
+          .invalid_providers
+          .push((provider_name, e.to_string())),
+      }
+    }
+
+    // Q5.4: sort both lists by provider name so the `summary()`
+    // output (and any downstream consumer that prints / diffs the
+    // report) is deterministic across runs. Pre-fix the lists
+    // inherited HashMap iteration order, so the same valid+invalid
+    // set surfaced in arbitrary order between processes.
+    report.valid_providers.sort();
+    report.invalid_providers.sort_by(|a, b| a.0.cmp(&b.0));
+
+    Ok(report)
+  }
+
+  async fn initialize_providers(&self, config: &LLMConfig) -> Result<()> {
+    let mut providers = HashMap::new();
+    let mut rate_limiters: HashMap<String, Arc<VendorRateLimiter>> = HashMap::new();
+    let mut unique_providers = HashSet::new();
+    let mut missing_keys: HashSet<String> = HashSet::new();
+
+    // Collect all unique providers from model configurations
+    for model_config in config.models.values() {
+      unique_providers.insert(model_config.vendor.clone());
+    }
+
+    // P10.3.1: skip providers whose API key env var is unset rather
+    // than fail-closing the whole init. The skipped vendor goes into
+    // `missing_key_providers` so a later `get_provider()` lookup
+    // can return [`LLMError::MissingApiKey`] instead of the generic
+    // [`LLMError::UnsupportedProvider`]. `LLMConfig::validate()`
+    // already printed a warning naming the affected models, so we
+    // stay silent here to avoid double-warning the operator.
+    for provider_name in unique_providers {
+      let api_key = match config.get_api_key(&provider_name) {
+        Ok(key) => key,
+        Err(LLMError::MissingApiKey { .. }) => {
+          missing_keys.insert(provider_name);
+          continue;
+        }
+        Err(other) => return Err(other),
+      };
+
+      let provider_config = config.get_provider(&provider_name);
+      let base_url = provider_config.and_then(|p| p.base_url.clone());
+
+      let provider = create_provider(&provider_name, &api_key, base_url)?;
+      providers.insert(provider_name.clone(), Arc::from(provider));
+
+      // P-LLM2.7: build a token bucket from this vendor's configured RPM
+      // — previously parsed into `ProviderConfig.rate_limit` and then
+      // discarded; nothing ever consumed it. `requests_per_minute == 0`
+      // is rejected by `config::validation` at load time, so the
+      // `unwrap_or` fallback here is a defensive backstop, not the
+      // expected path.
+      if let Some(rate_limit) = provider_config.and_then(|p| p.rate_limit.as_ref()) {
+        let rpm = NonZeroU32::new(rate_limit.requests_per_minute)
+          .unwrap_or(NonZeroU32::new(FALLBACK_REQUESTS_PER_MINUTE).unwrap_or(NonZeroU32::MIN));
+        let limiter = RateLimiter::direct(Quota::per_minute(rpm));
+        rate_limiters.insert(provider_name, Arc::new(limiter));
+      }
+    }
+
+    // Store providers
+    {
+      let mut providers_guard = self
+        .providers
+        .write()
+        .map_err(|e| LLMError::InternalError {
+          message: format!("Providers lock poisoned: {}", e),
+        })?;
+      *providers_guard = providers;
+    }
+
+    // Store rate limiters (P-LLM2.7).
+    {
+      let mut rate_limiters_guard =
+        self
+          .rate_limiters
+          .write()
+          .map_err(|e| LLMError::InternalError {
+            message: format!("Rate limiters lock poisoned: {}", e),
+          })?;
+      *rate_limiters_guard = rate_limiters;
+    }
+
+    // Track providers we skipped so lookup-path errors are accurate.
+    {
+      let mut missing_guard =
+        self
+          .missing_key_providers
+          .write()
+          .map_err(|e| LLMError::InternalError {
+            message: format!("missing_key_providers lock poisoned: {}", e),
+          })?;
+      *missing_guard = missing_keys;
+    }
+
+    Ok(())
+  }
+}
+
+impl Default for ModelRegistry {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+/// Information about a model for debugging/inspection
+#[derive(Debug, Clone)]
+pub struct ModelInfo {
+  pub name: String,
+  pub vendor: String,
+  pub model_id: String,
+  pub base_url: String,
+  pub temperature: Option<f32>,
+  pub max_tokens: Option<u32>,
+  pub supports_streaming: bool,
+  /// Canonical `ModelType` wire string (e.g. `"chat"`) — see
+  /// `ModelConfig::granular_type().to_legacy_string()`.
+  pub model_type: String,
+  /// Input modalities this model accepts, as canonical lowercase strings
+  /// (e.g. `["text", "image"]`) — see `ModelConfig::accepts()`.
+  pub accepts: Vec<String>,
+}
+
+/// Report from provider validation
+#[derive(Debug)]
+pub struct ValidationReport {
+  pub valid_providers: Vec<String>,
+  pub invalid_providers: Vec<(String, String)>,
+}
+
+impl ValidationReport {
+  pub fn is_all_valid(&self) -> bool {
+    self.invalid_providers.is_empty()
+  }
+
+  pub fn summary(&self) -> String {
+    let mut summary = String::new();
+
+    if !self.valid_providers.is_empty() {
+      summary.push_str("Valid providers:\n");
+      for provider in &self.valid_providers {
+        summary.push_str(&format!("  ✅ {}\n", provider));
+      }
+      summary.push('\n');
+    }
+
+    if !self.invalid_providers.is_empty() {
+      summary.push_str("Invalid providers:\n");
+      for (provider, error) in &self.invalid_providers {
+        summary.push_str(&format!("  ❌ {}: {}\n", provider, error));
+      }
+    }
+
+    summary
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::env;
+
+  #[tokio::test]
+  async fn test_registry_initialization() {
+    let registry = ModelRegistry::new();
+    assert_eq!(registry.list_models().len(), 0);
+    assert_eq!(registry.list_providers().len(), 0);
+  }
+
+  #[tokio::test]
+  async fn test_load_config_from_yaml() {
+    // SAFETY: this unit test mutates a dedicated test env var before reading it.
+    unsafe {
+      env::set_var("TEST_OPENAI_API_KEY", "test-key");
+    }
+
+    let yaml = r#"
+models:
+  gpt-4o:
+    vendor: openai
+    temperature: 0.7
+    max_tokens: 4096
+
+providers:
+  openai:
+    api_key_env: "TEST_OPENAI_API_KEY"
+    timeout_seconds: 30
+"#;
+
+    let registry = ModelRegistry::new();
+    let result = registry.load_config_from_yaml(yaml).await;
+    assert!(result.is_ok());
+
+    assert!(registry.has_model("gpt-4o"));
+    assert_eq!(registry.list_models(), vec!["gpt-4o"]);
+    assert_eq!(registry.list_providers(), vec!["openai"]);
+
+    let model_info = registry.get_model_info("gpt-4o").unwrap();
+    assert_eq!(model_info.vendor, "openai");
+    assert_eq!(model_info.temperature, Some(0.7));
+
+    // SAFETY: cleanup of the dedicated test env var after the test read.
+    unsafe {
+      env::remove_var("TEST_OPENAI_API_KEY");
+    }
+  }
+
+  /// P-LLM2.7: a vendor whose `ProviderConfig.rate_limit` is set gets a
+  /// real token bucket; a vendor with no `rate_limit` configured gets
+  /// none — `get_rate_limiter` returning `None` means "no enforcement",
+  /// not "error".
+  #[tokio::test]
+  async fn initialize_providers_builds_rate_limiter_only_for_configured_vendors() {
+    // Real vendor names are required — `create_provider` rejects
+    // anything it doesn't recognize. Dedicated per-test env var *names*
+    // (not vendor names) keep this isolated from other tests running in
+    // parallel in the same process.
+    unsafe {
+      env::set_var("TEST_RATELIMIT_OPENAI_KEY", "test-key");
+      env::set_var("TEST_RATELIMIT_ANTHROPIC_KEY", "test-key");
+    }
+
+    let yaml = r#"
+models:
+  gpt-4o:
+    vendor: openai
+  claude:
+    vendor: anthropic
+
+providers:
+  openai:
+    api_key_env: "TEST_RATELIMIT_OPENAI_KEY"
+    rate_limit:
+      requests_per_minute: 42
+  anthropic:
+    api_key_env: "TEST_RATELIMIT_ANTHROPIC_KEY"
+"#;
+
+    let registry = ModelRegistry::new();
+    registry
+      .load_config_from_yaml(yaml)
+      .await
+      .expect("hermetic mock config must load");
+
+    assert!(
+      registry.get_rate_limiter("openai").is_some(),
+      "a vendor with rate_limit configured must get a token bucket"
+    );
+    assert!(
+      registry.get_rate_limiter("anthropic").is_none(),
+      "a vendor with no rate_limit configured must get no enforcement"
+    );
+    assert!(
+      registry
+        .get_rate_limiter("never-heard-of-this-vendor")
+        .is_none(),
+      "an unknown vendor must not panic, just report no enforcement"
+    );
+
+    // SAFETY: cleanup.
+    unsafe {
+      env::remove_var("TEST_RATELIMIT_OPENAI_KEY");
+      env::remove_var("TEST_RATELIMIT_ANTHROPIC_KEY");
+    }
+  }
+
+  #[tokio::test]
+  async fn test_global_registry() {
+    let registry1 = ModelRegistry::global();
+    let registry2 = ModelRegistry::global();
+
+    // Should be the same instance
+    assert!(std::ptr::eq(registry1, registry2));
+  }
+
+  #[test]
+  fn test_model_not_found() {
+    let registry = ModelRegistry::new();
+    let result = registry.get_model("nonexistent");
+    assert!(matches!(result, Err(LLMError::ConfigurationError { .. })));
+
+    assert!(!registry.has_model("nonexistent"));
+  }
+
+  /// Q5.4: `ValidationReport.summary()` is rendered to the operator
+  /// (CLI `llm models` style output). Pre-fix the report inherited
+  /// HashMap iteration order so two consecutive `validate_all_providers`
+  /// calls could print the same set of providers in different orders.
+  /// We sort by provider name in `validate_all_providers` so the
+  /// rendered text is deterministic; pin the contract here.
+  #[test]
+  fn validation_report_summary_is_deterministic_in_provider_order() {
+    let mut report = ValidationReport {
+      valid_providers: vec!["openai".into(), "anthropic".into(), "google".into()],
+      invalid_providers: vec![
+        ("zhipu".into(), "missing key".into()),
+        ("moonshot".into(), "401".into()),
+      ],
+    };
+    // The post-fix `validate_all_providers` does this sort
+    // implicitly; running it on already-sorted input is a no-op,
+    // so calling sort() here pins the contract regardless of the
+    // input order the test seeds.
+    report.valid_providers.sort();
+    report.invalid_providers.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let summary = report.summary();
+    let valid_section_idx = summary.find("Valid providers:").expect("valid header");
+    let valid_block = &summary[valid_section_idx..];
+    // After sorting: anthropic < google < openai (lex order).
+    let anthropic_idx = valid_block.find("anthropic").expect("anthropic in summary");
+    let google_idx = valid_block.find("google").expect("google in summary");
+    let openai_idx = valid_block.find("openai").expect("openai in summary");
+    assert!(
+      anthropic_idx < google_idx && google_idx < openai_idx,
+      "Q5.4: valid providers must appear in lexicographic order"
+    );
+
+    let invalid_section_idx = summary.find("Invalid providers:").expect("invalid header");
+    let invalid_block = &summary[invalid_section_idx..];
+    let moonshot_idx = invalid_block.find("moonshot").expect("moonshot in summary");
+    let zhipu_idx = invalid_block.find("zhipu").expect("zhipu in summary");
+    assert!(
+      moonshot_idx < zhipu_idx,
+      "Q5.4: invalid providers must appear in lexicographic order"
+    );
+  }
+
+  /// P10.3.1: loading a config that references two providers must
+  /// succeed when only one provider's API key is set. The provider
+  /// with the missing key is skipped (not initialised), and a
+  /// later `get_provider()` lookup of the skipped provider returns
+  /// [`LLMError::MissingApiKey`] instead of
+  /// [`LLMError::UnsupportedProvider`]. The provider whose key IS
+  /// set initialises normally and lookup succeeds.
+  ///
+  /// This is the core bug the P10.3.1 lenient-init landed to fix:
+  /// pre-P10.3.1, fresh users with only one provider key set
+  /// couldn't call `Yanshi::init()` against the bundled
+  /// `default_models.yml` (9 providers) without fail-closing on
+  /// the 8 unset keys.
+  ///
+  /// **Test isolation**: `get_api_key` falls back to provider-
+  /// specific common env vars (`DEEPSEEK_API_KEY`), so the test
+  /// must temporarily clear them to be deterministic. `deepseek`
+  /// is chosen for the "missing" side because it has a single
+  /// fallback, minimising snapshot+restore noise.
+  #[tokio::test]
+  async fn load_config_skips_provider_with_missing_key_and_keeps_others() {
+    let snapshot_configured_missing = env::var("P10_3_1_REG_DEEPSEEK_KEY").ok();
+    let snapshot_fallback_missing = env::var("DEEPSEEK_API_KEY").ok();
+
+    // SAFETY: this unit test mutates dedicated test env vars.
+    // It explicitly *unsets* the deepseek key + its single
+    // fallback so the assertion is deterministic regardless of
+    // what's in the developer's environment.
+    unsafe {
+      env::set_var("P10_3_1_REG_OPENAI_KEY", "test-key-set");
+      env::remove_var("P10_3_1_REG_DEEPSEEK_KEY");
+      env::remove_var("DEEPSEEK_API_KEY");
+    }
+
+    let yaml = r#"
+models:
+  gpt-4o:
+    vendor: openai
+  deepseek-chat:
+    vendor: deepseek
+
+providers:
+  openai:
+    api_key_env: "P10_3_1_REG_OPENAI_KEY"
+  deepseek:
+    api_key_env: "P10_3_1_REG_DEEPSEEK_KEY"
+"#;
+
+    let registry = ModelRegistry::new();
+    let load_result = registry.load_config_from_yaml(yaml).await;
+
+    // Verify load succeeded BEFORE we restore env (otherwise a
+    // restore-then-panic obscures the actual failure).
+    if let Err(err) = &load_result {
+      // SAFETY: restore env even on panic path.
+      unsafe {
+        env::remove_var("P10_3_1_REG_OPENAI_KEY");
+        if let Some(value) = snapshot_configured_missing {
+          env::set_var("P10_3_1_REG_DEEPSEEK_KEY", value);
+        }
+        if let Some(value) = snapshot_fallback_missing {
+          env::set_var("DEEPSEEK_API_KEY", value);
+        }
+      }
+      panic!("load must succeed even with one provider key missing (P10.3.1); got {err:?}");
+    }
+
+    // Both models stay registered (model lookup doesn't care about
+    // auth state).
+    assert!(registry.has_model("gpt-4o"));
+    assert!(registry.has_model("deepseek-chat"));
+
+    // The provider whose key IS set initialised normally.
+    let openai_ok = registry.get_provider("openai").is_ok();
+
+    // The provider whose key was UNSET must now surface a
+    // [`LLMError::MissingApiKey`] (actionable) — NOT
+    // [`LLMError::UnsupportedProvider`] (misleading).
+    let deepseek_result = registry.get_provider("deepseek");
+
+    // SAFETY: restore env state before asserting (so any panic
+    // doesn't leave the dev's env polluted).
+    unsafe {
+      env::remove_var("P10_3_1_REG_OPENAI_KEY");
+      if let Some(value) = snapshot_configured_missing {
+        env::set_var("P10_3_1_REG_DEEPSEEK_KEY", value);
+      }
+      if let Some(value) = snapshot_fallback_missing {
+        env::set_var("DEEPSEEK_API_KEY", value);
+      }
+    }
+
+    assert!(openai_ok, "openai must initialise when its key is set");
+    match deepseek_result {
+      Err(LLMError::MissingApiKey { provider }) => {
+        assert_eq!(provider, "deepseek");
+      }
+      Err(other) => panic!("expected MissingApiKey, got {other:?}"),
+      Ok(_) => panic!("deepseek provider must not initialise — its key was unset"),
+    }
+  }
+}

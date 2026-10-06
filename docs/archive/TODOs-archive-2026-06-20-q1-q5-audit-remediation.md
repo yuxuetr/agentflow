@@ -12,15 +12,15 @@ reports + README). The live queue retains only the H and P-A backlogs.
 
 ### Drift between RoadMap promises and code reality
 
-- **RoadMap P1 (Security)** 标 CLOSED；但深审在 `agentflow-tools` 找到 6 个
+- **RoadMap P1 (Security)** 标 CLOSED；但深审在 `yanshi-tools` 找到 6 个
   CRITICAL 沙箱问题（shell 元字符旁路、seccomp 不实际拦 `openat(O_CREAT)`、
-  macOS SBPL 过宽、`SandboxPolicy.allowed_paths` 空集变放行），在 `agentflow-nodes`
-  找到 `FileNode` / `HttpNode` 完全旁路了 `agentflow-tools` 的 SandboxPolicy。
+  macOS SBPL 过宽、`SandboxPolicy.allowed_paths` 空集变放行），在 `yanshi-nodes`
+  找到 `FileNode` / `HttpNode` 完全旁路了 `yanshi-tools` 的 SandboxPolicy。
   → P1 的"硬化 HTTP/file/shell 执行"声明实际未达成。详见 Q1.1–Q1.3。
-- **RoadMap P2 (Server)** 标 CLOSED；但深审在 `agentflow-server` 找到 3 个
+- **RoadMap P2 (Server)** 标 CLOSED；但深审在 `yanshi-server` 找到 3 个
   CRITICAL 多租户边界漏洞（`list_runs ?tenant_id=` 覆盖 header、
   `list_harness_sessions` 忽略租户上下文、所有 submit 端点从 body 拿
-  tenant_id），叠加 `agentflow-db` 找到 `SkillInstallRepo::list()` 无租户
+  tenant_id），叠加 `yanshi-db` 找到 `SkillInstallRepo::list()` 无租户
   过滤、`mcp_sessions` 无 `tenant_id` 列。"多租户"目前是软提示而非安全边界。
   → P2 的"tenant/session policy"声明实际未达成。详见 Q1.4–Q1.5。
 - **RoadMap P5 (Worker)** 标 CLOSED；但深审找到 worker↔server gRPC 通道无 TLS、
@@ -29,7 +29,7 @@ reports + README). The live queue retains only the H and P-A backlogs.
 - **P-H.5 Harness 集成** 标 CLOSED；但深审找到 `HarnessRuntime` 内部 `seq` 与
   `HookConfig.seq` 是两个独立计数器——破坏 Beta 冻结契约里"monotonic, never
   gap"承诺；`ApprovalRequest.params_summary` / `ToolCallRequestedPayload.params_summary`
-  原样 `params.clone()` 进入 JSONL/SSE，未调用 `agentflow-tracing::redaction`。
+  原样 `params.clone()` 进入 JSONL/SSE，未调用 `yanshi-tracing::redaction`。
   详见 Q1.7。
 - **README.md "Production-Ready Stability"** 章节宣称 retry / timeout / health /
   checkpoint 已交付；但深审找到 retry 把所有错误抹平成 `RetryExhausted`、
@@ -37,28 +37,28 @@ reports + README). The live queue retains only the H and P-A backlogs.
   shutdown。详见 Q2.7, Q3.1。
 - **CLAUDE.md docs 漂移**：db "8 张表" 实际 9 张；server "FlowRunExecutor 计划
   v0.4.0 上线" 已上线；nodes "per-modality feature gate" 不存在；mcp adapter
-  实际位置在 `agentflow-skills`；rag "StepFun embedding" 未实现。详见 Q4。
+  实际位置在 `yanshi-skills`；rag "StepFun embedding" 未实现。详见 Q4。
 
 ### Per-crate finding counts (from `docs/audit/`)
 
 | Crate | C | M | m | Hot spot |
 |---|---|---|---|---|
-| agentflow-tools | **6** | 9 | 12 | Sandbox 关键 bug |
-| agentflow-server | 3 | 7 | 13 | 多租户边界 + 无 graceful shutdown |
-| agentflow-nodes | 3 | 9 | 14 | SSRF / 路径遍历 / 静默假数据 |
-| agentflow-llm | 2 | 7 | 12 | Google key 泄漏 / 无 HTTP timeout |
-| agentflow-mcp | 2 | 6 | 11 | JSON-RPC id 不关联 / stderr 不排空 |
-| agentflow-memory | 2 | 9 | 10 | 无 WAL/busy_timeout / sqlite URL bug |
-| agentflow-harness | 2 | 7 | 12 | seq 命名空间分裂 / 无 redaction |
-| agentflow-ui | 2 | 6 | 10 | Token 存 localStorage / EventSource 降级 |
-| agentflow-rag | 1 | 6 | 12 | OpenAI 150× 欠批 |
-| agentflow-tracing | 1 | 11 | 12 | Drain panic / OTLP exporter 未实现 |
-| agentflow-db | 1 | 5 | 12 | `SkillInstallRepo::list` 无租户过滤 |
-| agentflow-worker | 1 | 6 | 10 | gRPC 无 TLS / 无 auth / 无重连 |
-| agentflow-core | 0 | 7 | 10 | 非确定性拓扑排序 / orphan robustness.rs |
-| agentflow-agents | 0 | 5 | 12 | expect() 在 batch dispatch / plan-execute 忽略 token_budget |
-| agentflow-skills | 0 | 4 | 10 | Marketplace 假签名 / 路径遍历 |
-| agentflow-cli | 0 | 6 | 12 | `audio asr --prompt` 静默写文件 / 无 Ctrl-C |
+| yanshi-tools | **6** | 9 | 12 | Sandbox 关键 bug |
+| yanshi-server | 3 | 7 | 13 | 多租户边界 + 无 graceful shutdown |
+| yanshi-nodes | 3 | 9 | 14 | SSRF / 路径遍历 / 静默假数据 |
+| yanshi-llm | 2 | 7 | 12 | Google key 泄漏 / 无 HTTP timeout |
+| yanshi-mcp | 2 | 6 | 11 | JSON-RPC id 不关联 / stderr 不排空 |
+| yanshi-memory | 2 | 9 | 10 | 无 WAL/busy_timeout / sqlite URL bug |
+| yanshi-harness | 2 | 7 | 12 | seq 命名空间分裂 / 无 redaction |
+| yanshi-ui | 2 | 6 | 10 | Token 存 localStorage / EventSource 降级 |
+| yanshi-rag | 1 | 6 | 12 | OpenAI 150× 欠批 |
+| yanshi-tracing | 1 | 11 | 12 | Drain panic / OTLP exporter 未实现 |
+| yanshi-db | 1 | 5 | 12 | `SkillInstallRepo::list` 无租户过滤 |
+| yanshi-worker | 1 | 6 | 10 | gRPC 无 TLS / 无 auth / 无重连 |
+| yanshi-core | 0 | 7 | 10 | 非确定性拓扑排序 / orphan robustness.rs |
+| yanshi-agents | 0 | 5 | 12 | expect() 在 batch dispatch / plan-execute 忽略 token_budget |
+| yanshi-skills | 0 | 4 | 10 | Marketplace 假签名 / 路径遍历 |
+| yanshi-cli | 0 | 6 | 12 | `audio asr --prompt` 静默写文件 / 无 Ctrl-C |
 | **TOTAL** | **26** | **110** | **184** | |
 
 ---
@@ -69,10 +69,10 @@ reports + README). The live queue retains only the H and P-A backlogs.
 所有 Q1 item 都涉及租户边界、身份验证、沙箱、或凭据/PII 泄漏。在 Q1 全部 DONE
 之前 **不应该 cut v1.0.0 tag**。
 
-### Q1.1 — agentflow-tools: ShellTool / seccomp / SBPL 沙箱旁路（CRITICAL × 4：C1/C3/C4/C5）
+### Q1.1 — yanshi-tools: ShellTool / seccomp / SBPL 沙箱旁路（CRITICAL × 4：C1/C3/C4/C5）
 
 - DONE Q1.1.1 ShellTool `sh -c` 元字符旁路
-  - 审计来源：`docs/audit/agentflow-tools.md` C1
+  - 审计来源：`docs/audit/yanshi-tools.md` C1
   - 修复：引入 `ShellInterpretation::{Argv, Shell}` 枚举，默认 `Argv`：
     inline parser 解析 argv 同时拒绝任何引号外的 `|`/`;`/`&`/`$`/`` ` ``/
     `>`/`<`/`(`/`)`/`\n`；`with_shell_interpretation()` opt-in 才走 `sh -c`，
@@ -82,7 +82,7 @@ reports + README). The live queue retains only the H and P-A backlogs.
     必拒；Shell 模式 + Noop backend 必拒；`awk` 单引号参数仍 round-trip 正常。
     sandbox_macos `>` 重定向用例切到 `with_shell_interpretation()`。
 - DONE Q1.1.2 Linux seccomp 不实际拦 `openat(O_CREAT|O_WRONLY)`
-  - 审计来源：`docs/audit/agentflow-tools.md` C4
+  - 审计来源：`docs/audit/yanshi-tools.md` C4
   - 修复：新增 `install_write_open_rules`：当 `FsWrite` 能力缺失时，
     `openat`/`open` 按 `O_WRONLY`/`O_RDWR`/`O_CREAT`/`O_TRUNC` 每位单独
     `MaskedEq` 规则拦截；`openat2` 因 `struct open_how` 无法 deref 而无条件拦；
@@ -93,7 +93,7 @@ reports + README). The live queue retains only the H and P-A backlogs.
     `os.open(..., O_WRONLY|O_CREAT)` 验证 EPERM + 文件未创建（依赖
     Linux CI 跑）。
 - DONE Q1.1.3 macOS SBPL profile 授权过宽
-  - 审计来源：`docs/audit/agentflow-tools.md` C3（`sandbox/macos.rs:120-133`）
+  - 审计来源：`docs/audit/yanshi-tools.md` C3（`sandbox/macos.rs:120-133`）
   - 修复：移除 `(subpath "/Library")` 和 `(subpath "/private/etc")` 的 blanket
     授权，替换为 `/Library/Frameworks` subpath + 三个 literal 文件（
     `/Library/Preferences/.GlobalPreferences.plist`、`/private/etc/localtime`）。
@@ -106,7 +106,7 @@ reports + README). The live queue retains only the H and P-A backlogs.
     真实 sandbox-exec 确认 `/Library/Preferences/SystemConfiguration/preferences.plist`
     读取被内核拒绝。
 - DONE Q1.1.4 Linux seccomp 不拦 `clone` / `fork` / `execve`（子进程逃逸）
-  - 审计来源：`docs/audit/agentflow-tools.md` C5（`sandbox/linux.rs:22-24`）
+  - 审计来源：`docs/audit/yanshi-tools.md` C5（`sandbox/linux.rs:22-24`）
   - 修复：`compile_filter` 在 `!Exec` 时插入
     `clone` / `clone3` / `execve` / `execveat` 的无条件拦截，x86_64 上额外
     拦 `fork` / `vfork`（aarch64 上这两个 syscall 不存在，glibc 路由到 `clone`）。
@@ -117,10 +117,10 @@ reports + README). The live queue retains only the H and P-A backlogs.
     `linux_seccomp_no_exec_filter_blocks_child_spawn` 让 no-Exec backend
     包裹 `/bin/true`，spawn 必须失败（execve 被拦）。Linux CI 跑。
 
-### Q1.2 — agentflow-tools: SandboxPolicy 默认值反转 + HttpTool panic（CRITICAL × 2：C2/C6）
+### Q1.2 — yanshi-tools: SandboxPolicy 默认值反转 + HttpTool panic（CRITICAL × 2：C2/C6）
 
 - DONE Q1.2.1 `SandboxPolicy.allowed_paths` 空集语义反转
-  - 审计来源：`docs/audit/agentflow-tools.md` C6（`sandbox/policy.rs:104-112`）
+  - 审计来源：`docs/audit/yanshi-tools.md` C6（`sandbox/policy.rs:104-112`）
   - 修复：新增 `allow_all_commands` / `allow_all_paths` 两个 explicit bool
     bypass 位。空 `allowed_paths` 现为"全拒"（denial reason 说明显式提示），
     与 `allowed_commands` 对称；`SandboxPolicy::permissive()` 把两个 bypass
@@ -135,17 +135,17 @@ reports + README). The live queue retains only the H and P-A backlogs.
     canonicalization 路径仍正确。
   - 文档：`docs/STABILITY.md` 新增"Migration Notes / Q1.2.1"小节。
 - DONE Q1.2.2 HttpTool 在 `Client::build()` 失败时 panic
-  - 审计来源：`docs/audit/agentflow-tools.md` C2（`builtin/http.rs:39-42`）
+  - 审计来源：`docs/audit/yanshi-tools.md` C2（`builtin/http.rs:39-42`）
   - 修复：`HttpTool::new` 签名改为 `Result<Self, ToolError>`，
     `Client::build()` 错误映射为 `ToolError::ExecutionFailed`；
     `HttpTool::default_policy` 同步改返回 `Result`。
   - 测试：`new_returns_result_so_callers_can_handle_build_failures` 单测
     锁定签名（无法在单测中真实触发 build 失败，但类型即合约）。
-  - 调用方 (`agentflow-skills::build_tool_registry`、
-    `agentflow-tools::tool_policy_sandbox_demo`、`agentflow-agents::react_agent`、
+  - 调用方 (`yanshi-skills::build_tool_registry`、
+    `yanshi-tools::tool_policy_sandbox_demo`、`yanshi-agents::react_agent`、
     lib 顶层 doctest) 全部更新；`SkillError::ToolBuildError` 新增承接。
 - DONE Q1.2.3 HttpTool 缺 `.no_proxy()` 风险 CI 抖动
-  - 审计来源：`docs/audit/agentflow-tools.md` M1
+  - 审计来源：`docs/audit/yanshi-tools.md` M1
   - 修复：新增 `HttpTool::with_client(client, policy)` 注入 API；in-source
     tests 改用 `test_client()` helper 调用
     `Client::builder().no_proxy().build()`，避免开发机/CI 上 system HTTP
@@ -154,11 +154,11 @@ reports + README). The live queue retains only the H and P-A backlogs.
   - 测试：6 个现有 HTTP 测试切换到 no-proxy client（loopback / SSRF /
     redirect / private-IP / cloud-metadata 拦截），全部通过。
 
-### Q1.3 — agentflow-nodes: FileNode / HttpNode / TextToImageNode 安全旁路（CRITICAL × 3）
+### Q1.3 — yanshi-nodes: FileNode / HttpNode / TextToImageNode 安全旁路（CRITICAL × 3）
 
-- DONE Q1.3.1 `FileNode` 旁路 `agentflow-tools::SandboxPolicy`
-  - 审计来源：`docs/audit/agentflow-nodes.md` C3
-  - 修复：`agentflow-nodes` 现在直接依赖 `agentflow-tools`；`FileNode` 改为
+- DONE Q1.3.1 `FileNode` 旁路 `yanshi-tools::SandboxPolicy`
+  - 审计来源：`docs/audit/yanshi-nodes.md` C3
+  - 修复：`yanshi-nodes` 现在直接依赖 `yanshi-tools`；`FileNode` 改为
     带 `Arc<SandboxPolicy>` 字段，默认策略 `permissive()` 保持向后兼容，
     但 `..`/parent-dir 遍历无条件拒、symlink 读取无条件拒、hardlink 计数
     + max_file_read_bytes 由 policy 控。`with_policy(...)` builder 接收
@@ -166,7 +166,7 @@ reports + README). The live queue retains only the H and P-A backlogs.
     更新：cli factory、worker, bench。
   - 测试：4 个新单测覆盖 round-trip / `..` 拒 / 策略外路径写拒 / symlink 拒。
 - DONE Q1.3.2 `HttpNode` 无 timeout / 无 redirect cap / 无 SSRF 防护
-  - 审计来源：`docs/audit/agentflow-nodes.md` C2
+  - 审计来源：`docs/audit/yanshi-nodes.md` C2
   - 修复：`HttpNode` 改为 `Arc<SandboxPolicy>` + 内嵌 `HttpTool` 委托。
     `HttpTool` 同步扩展支持 `PUT`/`DELETE`/`PATCH`/`HEAD`（RFC 7231 幂等性
     一并更新）+ `with_max_response_chars` builder（node 用 `usize::MAX`
@@ -175,18 +175,18 @@ reports + README). The live queue retains only the H and P-A backlogs.
   - 测试：单测覆盖 cloud metadata SSRF 拒 / private IP 拒 / explicit
     policy allow loopback。
 - DONE Q1.3.3 `TextToImageNode` 在 API 失败时静默返回 1×1 PNG
-  - 审计来源：`docs/audit/agentflow-nodes.md` C1（`text_to_image.rs:397-441`）
+  - 审计来源：`docs/audit/yanshi-nodes.md` C1（`text_to_image.rs:397-441`）
   - 修复：删除 `execute_mock_image_generation` fallback；上游失败现在
-    surface 为 `AgentFlowError::AsyncExecutionError` 携带 provider 错误
+    surface 为 `YanshiError::AsyncExecutionError` 携带 provider 错误
     信息。Mock 用法迁移到显式 `MockNode` / DAG 条件分支。
   - 测试：旧 `test_text_to_image_node_execution` 改为
     `execute_propagates_upstream_failure_instead_of_returning_mock`，用
     无效 model 验证上游失败 → Err 而非 Ok(placeholder)。
 
-### Q1.4 — agentflow-server: 多租户边界（CRITICAL × 3）
+### Q1.4 — yanshi-server: 多租户边界（CRITICAL × 3）
 
 - DONE Q1.4.1 `list_runs` 接受 `?tenant_id=` 覆盖 header 绑定
-  - 审计来源：`docs/audit/agentflow-server.md` C1
+  - 审计来源：`docs/audit/yanshi-server.md` C1
   - 修复：`ListRunsQuery::tenant_id` 字段删除；`list_runs` 唯一从
     `Extension<TenantId>` 取值。文档同步更新（handler doc + Q1.4.1 注释）。
   - 测试：`list_runs_query_param_overrides_header` 改为
@@ -194,13 +194,13 @@ reports + README). The live queue retains only the H and P-A backlogs.
     读 header；migrate offset/status/empty-page 测试用 header 而非
     query。
 - DONE Q1.4.2 `list_harness_sessions` 完全忽略租户扩展
-  - 审计来源：`docs/audit/agentflow-server.md` C2
+  - 审计来源：`docs/audit/yanshi-server.md` C2
   - 修复：handler 注入 `Extension<TenantId>`；`ListHarnessSessionsQuery::tenant_id`
     字段删除；repo 查询使用 header-bound tenant。
   - 测试：`list_sessions_returns_newest_first` migration 到 header
     binding；`submit_for_tenant` helper 同步带 header。
 - DONE Q1.4.3 Submit 端点从 body 拿 tenant_id
-  - 审计来源：`docs/audit/agentflow-server.md` C1 后段
+  - 审计来源：`docs/audit/yanshi-server.md` C1 后段
   - 修复：`submit_run` / `submit_harness_session` / `run_skill` 都注入
     `Extension<TenantId>` 并以 header 为真值；body 中的 `tenant_id` 字段
     保留（向后兼容字段形状）但必须 match header 否则返回新
@@ -211,20 +211,20 @@ reports + README). The live queue retains only the H and P-A backlogs.
   - error 模型：`ApiError::TenantMismatch(String)` 新增 variant，映射
     HTTP 403 + `tenant_mismatch` code（区别于通用 `forbidden`）。
 
-### Q1.5 — agentflow-db: 租户过滤 + schema 缺列（CRITICAL × 1, MAJOR × 2）
+### Q1.5 — yanshi-db: 租户过滤 + schema 缺列（CRITICAL × 1, MAJOR × 2）
 
 - DONE Q1.5.1 `SkillInstallRepo::list()` 缺租户过滤
-  - 审计来源：`docs/audit/agentflow-db.md` C1（`repo.rs:434-442`）
+  - 审计来源：`docs/audit/yanshi-db.md` C1（`repo.rs:434-442`）
   - 修复：`list(&self, tenant_id: &str)` 签名 + SQL `WHERE tenant_id = $1`。
   - 测试：新增 `skill_install_repo_list_filters_by_tenant` —— 两个不同
     tenant 各插一行，列出 alpha 不含 beta，反之亦然。
 - DONE Q1.5.2 `mcp_sessions` 表无 `tenant_id` 列
-  - 审计来源：`docs/audit/agentflow-db.md` M1
+  - 审计来源：`docs/audit/yanshi-db.md` M1
   - 修复：migration `0006_mcp_sessions_tenant_id.sql` 加 `tenant_id TEXT
     NOT NULL DEFAULT 'default'` 列 + 复合 index `(tenant_id, started_at DESC)`；
     `McpSession` 模型新增 `tenant_id` 字段；`open(...)` 写入。
 - DONE Q1.5.3 `events.list_after` / `harness_events.list_after` 忽略 tenant_id
-  - 审计来源：`docs/audit/agentflow-db.md` M2
+  - 审计来源：`docs/audit/yanshi-db.md` M2
   - 修复：两个 trait 方法签名加 `tenant_id: &str`；`events.list_after` SQL
     加 `WHERE tenant_id = $1`（复合 index 命中）；`harness_events.list_after`
     用 JOIN harness_sessions 实现 tenant 过滤（harness_session_events 表无
@@ -233,18 +233,18 @@ reports + README). The live queue retains only the H and P-A backlogs.
     tenant 参数；`publish_cancellation_event` / `publish_cancel_event` 传递
     tenant_id。
 
-### Q1.6 — agentflow-worker: gRPC 通道无认证（CRITICAL × 1）
+### Q1.6 — yanshi-worker: gRPC 通道无认证（CRITICAL × 1）
 
 - DONE Q1.6.1 Worker↔server gRPC 通道无 TLS、无 auth
-  - 审计来源：`docs/audit/agentflow-worker.md` C1
+  - 审计来源：`docs/audit/yanshi-worker.md` C1
   - 修复：(1) 新增 `AuthenticatedGrpcWorkerService<P>` —— 包装
     `AuthenticatedControlPlane<P>`，每个 `claim_task` / `report_result` /
     `heartbeat` 从 `authorization` gRPC metadata 提取 PSK 构造
     `WorkerCredential`，走 `AuthenticatedControlPlane` 已有的 PSK/JWT 校验。
     Admission 失败映射到 `Status::permission_denied`；(2) `GrpcWorkerProtocol`
     新增 `.with_admission_token(token)` builder，每次 RPC 注入
-    `authorization: Bearer <token>` 元数据；(3) `agentflow-worker` CLI 加
-    `--admission-token` (fallback `AGENTFLOW_ADMISSION_TOKEN`)；缺失时启动
+    `authorization: Bearer <token>` 元数据；(3) `yanshi-worker` CLI 加
+    `--admission-token` (fallback `YANSHI_ADMISSION_TOKEN`)；缺失时启动
     打印警告。TLS flags (`--server-ca` / `--client-cert` / `--client-key`)
     CLI 接受但 channel 尚未接入，留 Q3 follow-up。
   - 测试：`grpc_claim_without_admission_token_is_rejected` 端到端：spawn
@@ -254,23 +254,23 @@ reports + README). The live queue retains only the H and P-A backlogs.
   - 用户决策：PSK + gRPC interceptor（非 JWT）；TLS 只加 CLI flag，不提供
     生成脚本，由 ops 自己准备证书。
 
-### Q1.7 — agentflow-harness: 冻结契约破坏 + 凭据/PII 泄漏（CRITICAL × 2）
+### Q1.7 — yanshi-harness: 冻结契约破坏 + 凭据/PII 泄漏（CRITICAL × 2）
 
 - DONE Q1.7.1 `seq` 命名空间分裂破坏 monotonic 契约
-  - 审计来源：`docs/audit/agentflow-harness.md` C1
+  - 审计来源：`docs/audit/yanshi-harness.md` C1
   - 修复：`HarnessRuntime` 用 `Arc<AtomicU64>` 替换本地 `mut seq`，新增
     `with_seq_counter(Arc<AtomicU64>)` builder + `seq_counter()` accessor。
     `with_initial_seq(n)` 改为 `seq_counter.store(n)`。`translate_inner_events`
     签名从 `&mut u64` 改为 `&AtomicU64`，所有 seq 通过 `fetch_add` 拿。
-    `agentflow-server::harness_live` 现在创建一个共享
+    `yanshi-server::harness_live` 现在创建一个共享
     `Arc<AtomicU64>::new(inputs.initial_seq)`，同时塞给 `HookConfig::with_seq_counter`
     和 `HarnessRuntime::with_seq_counter`——两条 emission 路径共享同一 atomic。
   - 测试：`shared_seq_counter_keeps_runtime_and_hook_emissions_monotonic`
     模拟 hook 在 runtime 首次 emit 前 fetch_add(0)，断言所有 seq 严格递增、
     无重复、`final_event_seq == max(all seqs)`。
 - DONE Q1.7.2 ApprovalRequest / ToolCallRequested payload 无脱敏
-  - 审计来源：`docs/audit/agentflow-harness.md` C2
-  - 修复：`agentflow-harness` 新增 `agentflow-tracing` 依赖；
+  - 审计来源：`docs/audit/yanshi-harness.md` C2
+  - 修复：`yanshi-harness` 新增 `yanshi-tracing` 依赖；
     `HookedTool::execute_with_event` 在构造 `ApprovalRequest` 前对
     `params_summary` 跑 `redaction::redact_value` (默认 RedactionConfig)；
     `runtime::tool_call_requested_from_step` 同样脱敏。
@@ -280,10 +280,10 @@ reports + README). The live queue retains only the H and P-A backlogs.
     path 验证 ApprovalRequested 事件中同样的 token 被替换为 `[REDACTED]`,
     非敏感字段（URL）仍保留。
 
-### Q1.8 — agentflow-llm: Google API key 泄漏 + 无 HTTP timeout（CRITICAL × 2）
+### Q1.8 — yanshi-llm: Google API key 泄漏 + 无 HTTP timeout（CRITICAL × 2）
 
 - DONE Q1.8.1 Google `?key=<API_KEY>` 通过 reqwest Error 泄漏
-  - 审计来源：`docs/audit/agentflow-llm.md` C1
+  - 审计来源：`docs/audit/yanshi-llm.md` C1
   - 修复：Google provider 把 API key 从 URL 移到 `x-goog-api-key` header；
     `build_headers` 返回 `Result<HeaderMap>`（非 ASCII key 报
     `ConfigurationError`，避免 panic）；`get_model_endpoint` /
@@ -293,7 +293,7 @@ reports + README). The live queue retains only the H and P-A backlogs.
     扩展为同时验证 `x-goog-api-key` header 存在；旧
     `test_model_endpoint` flip 成断言 URL **不含** test-key。
 - DONE Q1.8.2 6 个 provider 的 default_http_client 无 timeout
-  - 审计来源：`docs/audit/agentflow-llm.md` C2
+  - 审计来源：`docs/audit/yanshi-llm.md` C2
   - 修复：`providers::default_http_client` 现在显式
     `.connect_timeout(DEFAULT_HTTP_CONNECT_TIMEOUT_SECS=10s)` +
     `.timeout(DEFAULT_HTTP_REQUEST_TIMEOUT_SECS=600s)`。
@@ -301,28 +301,28 @@ reports + README). The live queue retains only the H and P-A backlogs.
     不再硬编码 30000（与实际不符）。所有 provider 共用 `default_http_client`
     所以一处 fix 覆盖 6 个 provider。
 
-### Q1.9 — agentflow-ui: Token 与 EventSource 安全面（CRITICAL × 2）
+### Q1.9 — yanshi-ui: Token 与 EventSource 安全面（CRITICAL × 2）
 
 - DONE Q1.9.1 Bearer token 持久化到 `localStorage`
-  - 审计来源：`docs/audit/agentflow-ui.md` C1（`main.tsx:2581-2583`）
+  - 审计来源：`docs/audit/yanshi-ui.md` C1（`main.tsx:2581-2583`）
   - 修复：新增 `readSessionStorage` / `writeSessionStorage` helper；
     `App` 组件的 `apiToken` state 从 sessionStorage 读、写。token 不再
     跨 tab restart 持久化；XSS payload 也只能拿到 tab-scoped 值。
 - DONE Q1.9.2 Harness Mode SSE `EventSource` 无法发 Authorization
-  - 审计来源：`docs/audit/agentflow-ui.md` C2（`main.tsx:1899`）
+  - 审计来源：`docs/audit/yanshi-ui.md` C2（`main.tsx:1899`）
   - 修复：harness session detail page 的 EventSource 用 `apiFetch` +
     `ReadableStream` 自实现 SSE：手动按行 / 双换行 parse，
     `Authorization: Bearer <token>` 头跟着请求一起发。AbortController
     管理生命周期；non-OK 响应或流断开后等 5s 重连，重连期间继续 5s 轮询
     history endpoint 作为 fallback。
 
-### Q1.10 — agentflow-skills: marketplace 完整性（MAJOR × 2，但安全相关，提到 Q1）
+### Q1.10 — yanshi-skills: marketplace 完整性（MAJOR × 2，但安全相关，提到 Q1）
 
 - DONE Q1.10.1 `ChecksumSha256SignatureVerifier` 是自校验不是签名
-  - 审计来源：`docs/audit/agentflow-skills.md` M2
+  - 审计来源：`docs/audit/yanshi-skills.md` M2
   - 修复：新增 `Ed25519SignatureVerifier`，使用 `ed25519-dalek` 2.x
-    pure-Rust crate（已加入 `agentflow-skills` 依赖）。Publisher key 静态
-    加载——目录默认 `~/.agentflow/marketplace-keys/`，每个文件名为
+    pure-Rust crate（已加入 `yanshi-skills` 依赖）。Publisher key 静态
+    加载——目录默认 `~/.yanshi/marketplace-keys/`，每个文件名为
     `<key_id>.pub`，内容是 base64-encoded 32 字节 raw Ed25519 公钥。
     Marketplace catalog 里 `[signature]` block 用 `algorithm = "ed25519"`
     + `key_id = "..."` + base64 detached signature。`require_signature`
@@ -334,7 +334,7 @@ reports + README). The live queue retains only the H and P-A backlogs.
     `[signature]` 拒/路径遍历 `key_id` 拒。
   - 用户决策：静态配置文件方式（vs JWT / TOFU / remote registry）。
 - DONE Q1.10.2 marketplace install 缺路径遍历守卫 + 缺大小上限
-  - 审计来源：`docs/audit/agentflow-skills.md` M1, M3
+  - 审计来源：`docs/audit/yanshi-skills.md` M1, M3
   - 修复：(1) `RemoteMarketplaceClient` 新增 `max_manifest_bytes`
     (默认 1 MiB) + `max_artifact_bytes` (默认 256 MiB) 配置，
     每个 fetch 都校验 Content-Length 与实际 streamed bytes；
@@ -355,11 +355,11 @@ reports + README). The live queue retains only the H and P-A backlogs.
 
 **Rationale**: 不直接是安全 bug，但会造成数据丢失、不可复现、生产环境随机崩溃。
 
-### Q2.1 — agentflow-memory: SQLite 生产硬化（CRITICAL × 2）
+### Q2.1 — yanshi-memory: SQLite 生产硬化（CRITICAL × 2）
 
 - DONE Q2.1.1 4 个 SQLite 后端缺 WAL / busy_timeout / foreign_keys
-  - 审计来源：`docs/audit/agentflow-memory.md` C1
-  - 修复：新增 `agentflow-memory::sqlite_pool` 模块——`build_pool` /
+  - 审计来源：`docs/audit/yanshi-memory.md` C1
+  - 修复：新增 `yanshi-memory::sqlite_pool` 模块——`build_pool` /
     `build_in_memory_pool` 在每个 backend 之间共享 PRAGMA：`journal_mode=WAL`,
     `busy_timeout=5s`, `foreign_keys=ON`, `synchronous=NORMAL`。`SqliteMemory`,
     `SqliteEntityFactStore`, `SqlitePreferenceStore`, `SemanticMemory` 都
@@ -368,7 +368,7 @@ reports + README). The live queue retains only the H and P-A backlogs.
     PRAGMA 值；`pool_handles_concurrent_writers_without_busy_errors` 跑
     5 个并发 task × 20 行 insert 验证不 SQLITE_BUSY。
 - DONE Q2.1.2 `format!("sqlite://{}", path)` 构造非法 URL
-  - 审计来源：`docs/audit/agentflow-memory.md` C2
+  - 审计来源：`docs/audit/yanshi-memory.md` C2
   - 修复：所有 backend 改为 `SqliteConnectOptions::new().filename(path)`，
     raw `&Path` 直接给 sqlx，跳过 URI parser。含 `?`/`#`/空格/反斜杠
     的路径不再触发"URI parse 失败 → fallback 到相对路径"那条静默路径。
@@ -376,10 +376,10 @@ reports + README). The live queue retains only the H and P-A backlogs.
     `db with spaces? and # signs.sqlite` 命名 TempDir 子文件，确认
     pool 构造 + 简单 SELECT 都跑得通。
 
-### Q2.2 — agentflow-tracing: Drain task 生还 + W3C 合规（CRITICAL × 1, MAJOR × 2）
+### Q2.2 — yanshi-tracing: Drain task 生还 + W3C 合规（CRITICAL × 1, MAJOR × 2）
 
 - DONE Q2.2.1 Drain task 在 `StorageErrorPolicy::FailWorkflow` 下 panic
-  - 审计来源：`docs/audit/agentflow-tracing.md` C1（`collector.rs:419-431, 481`）
+  - 审计来源：`docs/audit/yanshi-tracing.md` C1（`collector.rs:419-431, 481`）
   - 修复：drain task 每次事件处理都用 `AssertUnwindSafe(...).catch_unwind()`
     包住；catch 到 panic 时 `tracing::error!` 输出 panic message，连续
     16 次失败后置 `drain_poisoned: AtomicBool`，`on_event` 检测 poison
@@ -389,7 +389,7 @@ reports + README). The live queue retains only the H and P-A backlogs.
     exporter；先发一个会触发它的 workflow，紧跟一个 survivor workflow，
     断言后者依然能流到 storage + exporter。
 - DONE Q2.2.2 OTel `trace_id` / `span_id` 用 FNV 哈希违反 W3C
-  - 审计来源：`docs/audit/agentflow-tracing.md` M4
+  - 审计来源：`docs/audit/yanshi-tracing.md` M4
   - 修复：`trace_id` / `span_id` 函数体改为 `random_hex_id::<N>()`，用
     `rand::rngs::OsRng.fill_bytes` 生成密码学随机字节，循环跳过全零结果
     以满足 W3C "MUST NOT be all zeros"。callers 签名不变（trace_id 内仍
@@ -398,7 +398,7 @@ reports + README). The live queue retains only the H and P-A backlogs.
   - 测试：4 个新单元测试 —— 长度/小写 hex/非全零、唯一性 (`same workflow_id` 两次
     调用必须产出不同 id) 各 1 个，覆盖 trace_id + span_id 两侧。
 - DONE Q2.2.3 入站 traceparent 从未被 collector 消费
-  - 审计来源：`docs/audit/agentflow-tracing.md` M5
+  - 审计来源：`docs/audit/yanshi-tracing.md` M5
   - 修复：`TraceMetadata` 新增 `external_trace_id` + `external_parent_span_id`
     两个 Option<String>。`on_event` 在 producer 同步上下文里调
     `current_traceparent()` 把 W3C header 提前捕获，连同 event 一起进
@@ -414,10 +414,10 @@ reports + README). The live queue retains only the H and P-A backlogs.
     断言 stored trace 的 metadata + `trace_to_spans` 输出的 root span 都带
     上游 trace_id / parent_span_id。
 
-### Q2.3 — agentflow-tracing: 其余 MAJOR
+### Q2.3 — yanshi-tracing: 其余 MAJOR
 
 - DONE Q2.3.1 Event channel unbounded + 无 drop 计数
-  - 审计来源：`docs/audit/agentflow-tracing.md` M1
+  - 审计来源：`docs/audit/yanshi-tracing.md` M1
   - 修复：`TraceConfig` 新增 `event_channel_capacity`（默认 8192）。drain
     channel 从 `unbounded_channel` 改为 `channel(cap)`；`on_event` 用
     `try_send`，full 时 drop event 并 `events_dropped: AtomicU64` 自增，
@@ -425,25 +425,25 @@ reports + README). The live queue retains only the H and P-A backlogs.
     `events_dropped()` 访问器；regression test `on_event_drops_when_channel_full`
     用 1-slot channel + 慢 exporter 模拟 backpressure。
 - DONE Q2.3.2 Blocking exporter 调用与 drain task 共享 task
-  - 审计来源：`docs/audit/agentflow-tracing.md` M2
+  - 审计来源：`docs/audit/yanshi-tracing.md` M2
   - 修复：`TraceConfig` 新增 `exporter_timeout`（默认 10s）；
     `export_trace_to_sinks` 每个 exporter call 用 `tokio::time::timeout`
     包住，timeout 走 `StorageErrorPolicy`。regression test
     `exporter_timeout_isolates_drain_task` 注入一个 sleep 5s 的 exporter
     + 100ms 超时，断言第二个 workflow 仍在 500ms 内 land 到 storage。
 - DONE Q2.3.3 OTLP exporter 无 transport / TLS / auth（advertised 未实现）
-  - 审计来源：`docs/audit/agentflow-tracing.md` M3
+  - 审计来源：`docs/audit/yanshi-tracing.md` M3
   - 修复：**deferred path**。`CLAUDE.md` 两处 advertised claim 改写为
     "OTel span model + `OtelSpanSink` trait；OTLP HTTP/gRPC transport
     deferred per Q2.3.3"，明确说明 operator 自带 `opentelemetry-otlp`
     实现。第一方 OTLP exporter 留给后续单独 RFC。
 - DONE Q2.3.4 `FileTraceStorage` 无 fsync / 无 cleanup wiring / default umask
-  - 审计来源：`docs/audit/agentflow-tracing.md` M6
+  - 审计来源：`docs/audit/yanshi-tracing.md` M6
   - 修复 (a) `FileTraceStorage::save_trace` 改为 write-temp + `sync_data` +
     rename 原子写入，unix 下 `OpenOptions::mode(0o600)` 让文件 owner-only。
     Tests `save_trace_uses_owner_only_permissions` +
     `save_trace_is_atomic_and_leaves_no_tmp_file`。
-  - 修复 (b) `agentflow-server::cleanup::cleanup_expired` 新增
+  - 修复 (b) `yanshi-server::cleanup::cleanup_expired` 新增
     `trace_dir_root: Option<&Path>` 参数；新增 `sweep_trace_dir` 函数走 root
     一层删除 `<workflow_id>.json` 中 mtime 超过 `runs_retention_days` 的文件；
     `CleanupReport.trace_files_deleted` 新字段。`spawn_cleanup_loop` 接入
@@ -451,7 +451,7 @@ reports + README). The live queue retains only the H and P-A backlogs.
     Tests `sweep_trace_dir_deletes_old_json_only` +
     `sweep_trace_dir_returns_zero_when_root_missing`。
 - DONE Q2.3.5 Redaction key 匹配为子串匹配，JWT / Cookie / AWS key 漏过
-  - 审计来源：`docs/audit/agentflow-tracing.md` M8
+  - 审计来源：`docs/audit/yanshi-tracing.md` M8
   - 修复：`default_sensitive_key_patterns` 扩展为 25 项，新增 `jwt` /
     `cookie` / `set_cookie` / `refresh_token` / `client_secret` /
     `signature` / `webhook` / `ssh_key` / `pgp_key` /
@@ -459,7 +459,7 @@ reports + README). The live queue retains only the H and P-A backlogs.
     Test `default_patterns_cover_jwt_cookie_aws_refresh_webhook` round-trip
     覆盖所有新键。
 - DONE Q2.3.6 内联文本 redaction 在 URL query string / CRLF header 上失败
-  - 审计来源：`docs/audit/agentflow-tracing.md` M9
+  - 审计来源：`docs/audit/yanshi-tracing.md` M9
   - 修复：`redact_assignment_token` 改写为按 pair-boundary (`&` / `;` / `,`)
     切分 segment，对每个 segment 单独跑 `redact_single_pair`。这样
     `?api_key=secret&q=test` 只 redact `secret`，`q=test` 保留；
@@ -467,7 +467,7 @@ reports + README). The live queue retains only the H and P-A backlogs.
     `session_token=opaque;path=/;httponly` 三个 pair 各自独立判定。三个
     regression tests 覆盖 URL / JSON / cookie。
 - DONE Q2.3.7 retry/loop 节点 lookup 泄漏 phantom "running" 行
-  - 审计来源：`docs/audit/agentflow-tracing.md` M11
+  - 审计来源：`docs/audit/yanshi-tracing.md` M11
   - 修复：所有 `iter_mut().rev().find(|n| n.node_id == node_id)` 加上
     `&& n.status == NodeStatus::Running` 过滤，确保只命中开放中的 attempt。
     `NodeStarted` 在 push 新行前主动把同 id 仍 Running 的旧行标记为
@@ -475,22 +475,22 @@ reports + README). The live queue retains only the H and P-A backlogs.
     `node_started_supersedes_stale_running_row` 模拟"第一次 attempt 终止
     事件丢失 → 第二次 attempt 正常完成"路径，断言两行都不在 Running 状态。
 
-### Q2.4 — agentflow-core: 确定性 + 边角 panic
+### Q2.4 — yanshi-core: 确定性 + 边角 panic
 
 - DONE Q2.4.1 `topological_sort` 用 HashMap 迭代导致执行顺序非确定
-  - 审计来源：`docs/audit/agentflow-core.md` M2
+  - 审计来源：`docs/audit/yanshi-core.md` M2
   - 修复：`in_degree` / `adj` 改为 `BTreeMap`；外层 node iteration 显式
     `sort()`；邻居入队前 sort。trace replay 跨 run 现在可复现。
   - 测试：`topological_sort_is_deterministic_across_runs` 跑 50 次相同 graph
     断言所有 order 一致。
 - DONE Q2.4.2 `ExponentialBackoff` 在 `delay < 4ms` + `jitter = true` 下 panic
-  - 审计来源：`docs/audit/agentflow-core.md` M4
+  - 审计来源：`docs/audit/yanshi-core.md` M4
   - 修复：`jitter_range = (delay / 4).max(1)`；`rand::random % 0` 不再发生。
   - 测试：`exponential_backoff_with_jitter_does_not_panic_on_tiny_delays`
     从 attempt=0 跑到 31 包含 0ms~1ms~2ms~3ms 边界。
 - DONE Q2.4.3 `execute_with_retry` 抹除原始错误根因
-  - 审计来源：`docs/audit/agentflow-core.md` M3
-  - 修复：`AgentFlowError::RetryExhausted` 加 `last_error: Box<AgentFlowError>`
+  - 审计来源：`docs/audit/yanshi-core.md` M3
+  - 修复：`YanshiError::RetryExhausted` 加 `last_error: Box<YanshiError>`
     字段；`thiserror` 错误信息现在 surface 根因；callers (`retry_executor` 两处)
     包装最后的 error。所有 tests/examples 的 pattern 改为
     `RetryExhausted { attempts, .. }` 或显式解构 `last_error`。
@@ -498,34 +498,34 @@ reports + README). The live queue retains only the H and P-A backlogs.
     `retry_policy_returns_error_after_max_attempts` 断言 `NodeExecutionFailed`
     "Always fails" 透传。
 - DONE Q2.4.4 删除 orphan `robustness.rs`（1175 行死代码）
-  - 审计来源：`docs/audit/agentflow-core.md` M1
-  - 修复：`rm agentflow-core/src/robustness.rs`。文件根本不在任何 `mod` 中。
+  - 审计来源：`docs/audit/yanshi-core.md` M1
+  - 修复：`rm yanshi-core/src/robustness.rs`。文件根本不在任何 `mod` 中。
 - DONE Q2.4.5 `with_timeout_context` 的 operation/node_id/workflow_id 被 `_` 吃掉
-  - 审计来源：`docs/audit/agentflow-core.md` M5
+  - 审计来源：`docs/audit/yanshi-core.md` M5
   - 修复：参数去掉 `_` 前缀，timeout 路径下 `tracing::warn!` 把
     operation / node_id / workflow_id / duration_ms 一并打出。
     `#[cfg(not(feature = "observability"))]` 下保留 `let _ = (...)` 防 warn。
 - DONE Q2.4.6 `ScopedPermit::Drop` 调 `tokio::spawn` 在非 runtime 上下文 panic
-  - 审计来源：`docs/audit/agentflow-core.md` M6
+  - 审计来源：`docs/audit/yanshi-core.md` M6
   - 修复：`Drop` 内 `if tokio::runtime::Handle::try_current().is_ok()` 才 spawn；
     无 runtime 上下文（同步 Drop / runtime shutdown 后）跳过 stats 更新。
 - DONE Q2.4.7 两个同名 `pub struct ErrorContext` 共存
-  - 审计来源：`docs/audit/agentflow-core.md` M7
+  - 审计来源：`docs/audit/yanshi-core.md` M7
   - 修复：`error.rs::ErrorContext` → `InlineErrorContext`（保留），
     `error_context::ErrorContext`（被 lib re-export）继续叫 `ErrorContext`。
     `error.rs::ContextualError`、`with_context` 同步更新；
     `phase1_integration_tests.rs` 的 import 改名。
 
-### Q2.5 — agentflow-llm: 流式与 panic site（MAJOR × 4）
+### Q2.5 — yanshi-llm: 流式与 panic site（MAJOR × 4）
 
 - DONE Q2.5.1 Anthropic 流式在 `content_block_stop` 终止（应只在 `message_stop` 终止）
-  - 审计来源：`docs/audit/agentflow-llm.md` M2
+  - 审计来源：`docs/audit/yanshi-llm.md` M2
   - 修复：`parse_sse_event` 中删除 `content_block_stop` 终止分支；只在
     `message_stop` 标记 `is_final=true`。新增 3 个单元测试：
     `streaming_content_block_stop_does_not_finalize`、
     `streaming_message_stop_does_finalize`、`streaming_text_delta_remains_unaffected`。
 - DONE Q2.5.2 流式 tool_call delta 被丢弃
-  - 审计来源：`docs/audit/agentflow-llm.md` M1
+  - 审计来源：`docs/audit/yanshi-llm.md` M1
   - 修复：`StreamChunk` 新增 `tool_call_deltas: Vec<ToolCallDelta>` 字段
     （`{ index, id?, name?, arguments_delta? }`）。OpenAI 解析
     `choices[].delta.tool_calls`，Anthropic 解析 `content_block_start`（捕获
@@ -533,22 +533,22 @@ reports + README). The live queue retains only the H and P-A backlogs.
     arguments_delta 即可还原完整 JSON。新增 5 个单元测试覆盖两个 provider 的
     起始/续传/text 路径。
 - DONE Q2.5.3 6 处 `HeaderValue::from_str(api_key).expect(...)` panic
-  - 审计来源：`docs/audit/agentflow-llm.md` M3
+  - 审计来源：`docs/audit/yanshi-llm.md` M3
   - 修复：Anthropic / OpenAI / Moonshot / StepFun 的 `build_headers` 改为
     返回 `Result<HeaderMap>`，对非法字符返回 `LLMError::ConfigurationError`；
     所有调用点改为 `?` 传递。新增 4 个回归测试（每个 provider 一个含 `\n`
     的非法 key 路径）。
 - DONE Q2.5.4 `unsafe impl Sync` 在 streaming response 上无理由
-  - 审计来源：`docs/audit/agentflow-llm.md` M5
+  - 审计来源：`docs/audit/yanshi-llm.md` M5
   - 修复：`StreamingResponse` trait 的 bound 从 `Send + Sync` 改为 `Send`
     （streams 通过 `&mut self` 顺序消费，Sync 没有意义）。删除 5 个 provider
     上的 `unsafe impl Send/Sync`（OpenAI / Anthropic / Moonshot / StepFun /
     Google），换成解释性注释。
 
-### Q2.6 — agentflow-mcp: 协议正确性（CRITICAL × 2）
+### Q2.6 — yanshi-mcp: 协议正确性（CRITICAL × 2）
 
 - DONE Q2.6.1 JSON-RPC response 无 `id` 关联
-  - 审计来源：`docs/audit/agentflow-mcp.md` C1（`transport/stdio.rs:280-290`）
+  - 审计来源：`docs/audit/yanshi-mcp.md` C1（`transport/stdio.rs:280-290`）
   - 修复：`StdioTransport::send_message` 现在从 request 提取 `id`，循环读行
     直到拿到 `response.id == expected_id`；out-of-band 消息（典型的
     notification）暂存到新的 `pending_inbox: VecDeque<Value>`，下次
@@ -558,19 +558,19 @@ reports + README). The live queue retains only the H and P-A backlogs.
     携带预期 id、(2) buffered notification 通过 `receive_message`
     可读出。
 - DONE Q2.6.2 stderr 被 pipe 但从未排空
-  - 审计来源：`docs/audit/agentflow-mcp.md` C2（`transport/stdio.rs:235`）
+  - 审计来源：`docs/audit/yanshi-mcp.md` C2（`transport/stdio.rs:235`）
   - 修复：`connect` 现在抢走 `child.stderr` 并 spawn 后台 drain task
     （`spawn_stderr_drain`），每行 forward 到
-    `tracing::warn!(target="agentflow_mcp::stdio::stderr")`。`disconnect`
+    `tracing::warn!(target="yanshi_mcp::stdio::stderr")`。`disconnect`
     + `Drop` 都 abort 该 handle。Linux 64KB pipe 满后挂死的死锁场景消除。
   - 测试：`stderr_does_not_deadlock_when_server_floods_it` shell fixture
     在 echo 之前先往 stderr 写 128 KiB（128×1024 字节），仍然能 round-trip
     request/response。
 
-### Q2.7 — agentflow-server / agentflow-cli: 关键正确性（MAJOR × 1 + 子项）
+### Q2.7 — yanshi-server / yanshi-cli: 关键正确性（MAJOR × 1 + 子项）
 
 - DONE Q2.7.1 `audio asr --prompt VALUE` 静默把转录写到路径 VALUE
-  - 审计来源：`docs/audit/agentflow-cli.md` M1
+  - 审计来源：`docs/audit/yanshi-cli.md` M1
     （`main.rs:1651` vs `commands/audio/asr.rs:5-11`）
   - 修复：clap 中 `--output / -o` 现在是独立 named flag（之前根本不存在），
     `--prompt` 保留；call site 显式按 name 解构 + 传递。`asr::execute` 签名
@@ -584,10 +584,10 @@ reports + README). The live queue retains only the H and P-A backlogs.
     (3) `asr_output_flag_is_not_pre_created_on_failure` 确认失败路径下
         `--output` 文件不会被预创建。
 
-### Q2.8 — agentflow-rag: 批处理性能（CRITICAL × 1）
+### Q2.8 — yanshi-rag: 批处理性能（CRITICAL × 1）
 
 - DONE Q2.8.1 OpenAI embedding 批 size 150× 欠批
-  - 审计来源：`docs/audit/agentflow-rag.md` C1（`embeddings/openai.rs:235`）
+  - 审计来源：`docs/audit/yanshi-rag.md` C1（`embeddings/openai.rs:235`）
   - 修复：拆分常量 `MAX_INPUTS_PER_BATCH = 2048`（OpenAI input[] 长度）
     + `MAX_TOKENS_PER_BATCH = 300_000`（OpenAI 单 request token 上限）；
     flush 条件改为 OR 两个独立维度。pre-fix 13 条短文本一批的瓶颈解除，
@@ -597,21 +597,21 @@ reports + README). The live queue retains only the H and P-A backlogs.
     `batch_flush_condition_uses_both_limits_independently` 模拟 short
     texts 的 packing 数学，断言 token budget 不再主导。
 
-### Q2.9 — agentflow-agents: 契约违反（MAJOR × 3）
+### Q2.9 — yanshi-agents: 契约违反（MAJOR × 3）
 
 - DONE Q2.9.1 `react/agent.rs:2073` `expect("every prepared call must have an output...")`
-  - 审计来源：`docs/audit/agentflow-agents.md` M1
+  - 审计来源：`docs/audit/yanshi-agents.md` M1
   - 修复：将 `expect` 改为显式 `match`：缺失 output 时 emit `warn!` 并
     插入 synthetic `ToolOutput::error("internal invariant violation: ...")`。
     batch 的其余 tool calls 继续完成，operator 在 trace 里看到不一致。
 - DONE Q2.9.2 `PlanExecuteAgent` 静默忽略 `RuntimeLimits.token_budget`
-  - 审计来源：`docs/audit/agentflow-agents.md` M3
+  - 审计来源：`docs/audit/yanshi-agents.md` M3
   - 修复：`PlanExecuteAgent::run` 读 `context.limits.token_budget`；planner
     回复持久化到 memory 后立即调 `self.memory.session_token_count`，超
     budget 时 `AgentStopReason::TokenBudgetExceeded { used, budget }`
     停掉。与 ReActAgent 行为对齐。
 - DONE Q2.9.3 LLM 返回的 tool params 在 dispatch 前未做 JSON Schema 校验
-  - 审计来源：`docs/audit/agentflow-agents.md` M5
+  - 审计来源：`docs/audit/yanshi-agents.md` M5
   - 修复：`ToolError` 新增 `SchemaViolation { tool, message }` variant；
     `ToolRegistry::validate_params(name, &params)` 公开方法用 jsonschema
     compile + validate；`ToolRegistry::execute` 在 capability 检查之后、
@@ -621,10 +621,10 @@ reports + README). The live queue retains only the H and P-A backlogs.
   - 测试：`validate_params_rejects_schema_violations` —— missing required /
     wrong type / valid pass / unknown tool 四个分支全覆盖。
 
-### Q2.10 — agentflow-memory: 数据完整性（MAJOR × 2）
+### Q2.10 — yanshi-memory: 数据完整性（MAJOR × 2）
 
 - DONE Q2.10.1 `row_to_message` 在解析失败时静默伪造新 UUID + 时间戳
-  - 审计来源：`docs/audit/agentflow-memory.md` M1
+  - 审计来源：`docs/audit/yanshi-memory.md` M1
   - 修复：`SqliteMemory::row_to_message` 删除两个 `unwrap_or_else` fallback
     （`Uuid::parse_str(...).unwrap_or_else(|_| Uuid::new_v4())` 和
     `parse_from_rfc3339(...).unwrap_or_else(|_| Utc::now())`），改为
@@ -633,7 +633,7 @@ reports + README). The live queue retains only the H and P-A backlogs.
   - 测试：`row_to_message_returns_err_on_corrupt_uuid` 直接 INSERT 一个
     `id = "not-a-uuid"` 的行，断言 `get_all` 返回错误而不是静默成功。
 - DONE Q2.10.2 `add_message` 接收 `&mut self` 阻塞 H3 并发写
-  - 审计来源：`docs/audit/agentflow-memory.md` M6
+  - 审计来源：`docs/audit/yanshi-memory.md` M6
   - 修复：`MemoryStore` trait 中 `add_message` 与 `clear_session` 改为
     `&self`。`SqliteMemory` / `SemanticMemory` 直接 drop `mut`（pool 已
     Send+Sync）；`SessionMemory` 把内部 `HashMap` 包进
@@ -648,19 +648,19 @@ reports + README). The live queue retains only the H and P-A backlogs.
 
 ### Q3.1 — Workspace: graceful shutdown / 信号处理
 
-- DONE Q3.1.1 `agentflow-server`：`axum::serve` 无 SIGTERM handler，spawn 的
+- DONE Q3.1.1 `yanshi-server`：`axum::serve` 无 SIGTERM handler，spawn 的
   run/session task 全部被丢弃。
-  - 审计来源：`docs/audit/agentflow-server.md` M2
+  - 审计来源：`docs/audit/yanshi-server.md` M2
   - 修复：`axum::serve(...).with_graceful_shutdown(shutdown_signal())`。
     `shutdown_signal()` 用 `tokio::select!` 同时监听 `tokio::signal::ctrl_c()`
     和 unix-only `SignalKind::terminate()`，触发后 axum 停止接受新连接但等
     in-flight 请求 drain。k8s rolling deploy 现在能在
     `terminationGracePeriodSeconds` 窗口内干净退出。
-- DONE Q3.1.2 `agentflow-cli`：`workflow run` / `harness run` / `skill chat`
+- DONE Q3.1.2 `yanshi-cli`：`workflow run` / `harness run` / `skill chat`
   无 Ctrl-C handler，退出无 trace flush。
-  - 审计来源：`docs/audit/agentflow-cli.md` M2, m11
+  - 审计来源：`docs/audit/yanshi-cli.md` M2, m11
   - 修复：
-    1. 新增 `agentflow-cli/src/shutdown.rs` shared helper：
+    1. 新增 `yanshi-cli/src/shutdown.rs` shared helper：
        `shutdown_signal()` 同时监听 `tokio::signal::ctrl_c()`（全平台）
        和 SIGTERM（unix），匹配 server 的 Q3.1.1 模式；常量
        `SIGINT_EXIT_CODE = 130` (POSIX `128 + SIGINT`)。
@@ -677,7 +677,7 @@ reports + README). The live queue retains only the H and P-A backlogs.
     4. `skill chat`：`agent.run()` 用 `tokio::select!` race
        against signal；信号触发 → exit(130)（REPL 不返回，因为
        in-flight tool call 没有安全的 unwind 路径）。
-    5. `agentflow-tracing`：新增 `TraceCollector::flush(timeout)`，
+    5. `yanshi-tracing`：新增 `TraceCollector::flush(timeout)`，
        内部用 `submitted_count` / `processed_count` 原子计数器
        等 drain task 处理完所有已入队事件；drain 被
        poison 时立即返回 false。`process_event` 新增
@@ -689,16 +689,16 @@ reports + README). The live queue retains only the H and P-A backlogs.
   - 测试：
     - 单元：`flush_waits_until_drain_catches_up` /
       `flush_returns_false_when_drain_is_poisoned` in
-      `agentflow-tracing/src/collector.rs`。
-    - 集成：`agentflow-cli/tests/workflow_ctrl_c_tests.rs` 两个
+      `yanshi-tracing/src/collector.rs`。
+    - 集成：`yanshi-cli/tests/workflow_ctrl_c_tests.rs` 两个
       用例验证 cancel + flush 后 `WorkflowCancelled` 真的落进
       `FileTraceStorage`（而不是停在 in-memory current_traces）+
       `SIGINT_EXIT_CODE` 常量契约。
-    - Workspace `cargo build` + `agentflow-tracing` / `agentflow-cli` /
-      `agentflow-harness` lib tests 全绿。
-- DONE Q3.1.3 `agentflow-worker`：`run_forever` 在首次 transport 错误上 abort；
+    - Workspace `cargo build` + `yanshi-tracing` / `yanshi-cli` /
+      `yanshi-harness` lib tests 全绿。
+- DONE Q3.1.3 `yanshi-worker`：`run_forever` 在首次 transport 错误上 abort；
   `WorkerCancellationToken` 已存在但 `main.rs` 从未注册信号 hook。
-  - 审计来源：`docs/audit/agentflow-worker.md` M1, M2
+  - 审计来源：`docs/audit/yanshi-worker.md` M1, M2
   - 修复：
     1. 新增 `ReconnectBackoff` 配置：`initial / max / multiplier_percent /
        max_attempts / jitter`；`Default` 是 100ms → 30s × 2 + ±25% jitter，
@@ -712,13 +712,13 @@ reports + README). The live queue retains only the H and P-A backlogs.
          race against cancellation，所以 SIGTERM 不必等满 30s 才能退出）。
        - 其他 `WorkerError`（`InvalidWorkerId` 等）→ 仍然 fatal。
        - `max_attempts` 触顶 → 把最后一次 `Transport` 错误返还给调用方。
-    3. `agentflow-worker/src/main.rs` 新增 `shutdown_signal()`（match
-       agentflow-cli/server 的 Q3.1.1 模式：`ctrl_c` + 可选 SIGTERM unix
+    3. `yanshi-worker/src/main.rs` 新增 `shutdown_signal()`（match
+       yanshi-cli/server 的 Q3.1.1 模式：`ctrl_c` + 可选 SIGTERM unix
        handler），`run_runtime` 用 `tokio::select!` 把 `run_forever` 跟
        signal future race；信号触发 → `cancellation_token.cancel()` +
        30s drain timeout + 干净退出。k8s rolling deploy 现在能在
        `terminationGracePeriodSeconds` 窗口内 drain。
-  - 测试：`agentflow-worker/src/lib.rs` 新增 5 个用例：
+  - 测试：`yanshi-worker/src/lib.rs` 新增 5 个用例：
     - `reconnect_backoff_doubles_until_cap` — 纯函数 backoff 曲线
       (100 → 200 → 400 → 800 → 1000 → 1000，deterministic 模式)。
     - `reconnect_backoff_jitter_stays_within_window` — jitter 50 次都
@@ -730,12 +730,12 @@ reports + README). The live queue retains only the H and P-A backlogs.
     - `run_forever_cancellation_unblocks_backoff_sleep` — 60s backoff
       window 期间触发 cancel，runtime 必须在 2s 内退出（验证
       backoff sleep 用了 `tokio::select!` 而不是 plain `sleep`）。
-  - `cargo test -p agentflow-worker --lib` 13 / 13 通过。
+  - `cargo test -p yanshi-worker --lib` 13 / 13 通过。
 
-### Q3.2 — agentflow-mcp: 健壮性（MAJOR × 2）
+### Q3.2 — yanshi-mcp: 健壮性（MAJOR × 2）
 
 - DONE Q3.2.1 stdio 子进程继承父进程完整环境（含 secret）
-  - 审计来源：`docs/audit/agentflow-mcp.md`
+  - 审计来源：`docs/audit/yanshi-mcp.md`
   - 修复：`StdioTransport` 默认 `env_clear()` + 显式 forward 一个
     `SAFE_INHERITED_ENV_VARS` 白名单（PATH/HOME/USER/LOGNAME/SHELL/LANG/
     TZ/TERM/TMPDIR/PWD + Windows 等价 + 所有 `LC_*`）；再叠加 `self.env`。
@@ -743,13 +743,13 @@ reports + README). The live queue retains only the H and P-A backlogs.
     新增 `with_inherit_parent_env(true)` 显式 opt-back-in。两个集成测试
     （unix-only）用 `/usr/bin/env` 作为 MCP server，验证默认 sandbox
     + 显式 opt-in 两条路径都 round-trip 正确。
-  - 审计来源：`docs/audit/agentflow-mcp.md` M1
+  - 审计来源：`docs/audit/yanshi-mcp.md` M1
   - 现状：无 `env_clear` / 无 `current_dir` / 无 fd 收缩，第三方 stdio MCP server
     可读取所有 env 变量。
   - 验收：spawn 前 `env_clear`；显式 allowlist 注入；可选 `current_dir`
     pin 到 skill 工作目录；测试覆盖 env 不可见。
 - DONE Q3.2.2 transport `Arc<Mutex<Box<dyn Transport>>>` 串行化所有 call
-  - 审计来源：`docs/audit/agentflow-mcp.md` M6
+  - 审计来源：`docs/audit/yanshi-mcp.md` M6
   - 修复（大改）：
     1. `Transport` trait：`send_message` / `send_notification` /
        `receive_message` 改成 `&self`（interior mutability）。
@@ -808,14 +808,14 @@ reports + README). The live queue retains only the H and P-A backlogs.
     - 旧 `test_check_process_health_*` 3 个删（helper 已不存在），
       换成 3 个 `is_connected()`-based 等价测试，验证 EOF 检测
       会真翻 false。
-    `cargo test -p agentflow-mcp` 37 + 1 ignored，
-    `cargo test -p agentflow-skills --lib mcp_tools` 5/5 通过，
+    `cargo test -p yanshi-mcp` 37 + 1 ignored，
+    `cargo test -p yanshi-skills --lib mcp_tools` 5/5 通过，
     `cargo build --workspace` 整体绿。
 
-### Q3.3 — agentflow-worker: 并发与 proto（MAJOR × 3）
+### Q3.3 — yanshi-worker: 并发与 proto（MAJOR × 3）
 
 - DONE Q3.3.1 `Mutex<Grpc<Channel>>` 让单 worker 进程并发硬卡 1
-  - 审计来源：`docs/audit/agentflow-worker.md` M3
+  - 审计来源：`docs/audit/yanshi-worker.md` M3
   - 修复：`GrpcWorkerProtocol` 字段从 `inner: Arc<Mutex<Grpc<Channel>>>`
     改成 `channel: Channel`，`unary()` 每次调用 `Grpc::new(self.channel.clone())`
     构造新 Grpc 实例（`Channel::clone` 是 `Arc::clone`，cost negligible；
@@ -830,11 +830,11 @@ reports + README). The live queue retains only the H and P-A backlogs.
     in-flight high-water mark；8 个 cloned protocol 并发 fire heartbeat
     必须：(a) 全部 8 个完成；(b) peak in-flight >= 2（pre-fix
     必锁死 1）；(c) wall clock < 1.2s（serial 8 × 200ms = 1.6s 会
-    fail，parallel 应该 ~200ms）。`cargo test -p agentflow-server
-    --lib scheduler` 62/62 + `cargo test -p agentflow-worker
+    fail，parallel 应该 ~200ms）。`cargo test -p yanshi-server
+    --lib scheduler` 62/62 + `cargo test -p yanshi-worker
     --lib` 16/16 全部通过，无回归。
 - DONE Q3.3.2 `free_slots` 广告但从未强制
-  - 审计来源：`docs/audit/agentflow-worker.md` M4
+  - 审计来源：`docs/audit/yanshi-worker.md` M4
   - 修复：`WorkerRuntime` 加 `dispatch_slots: Arc<tokio::sync::Semaphore>`
     initialised to `config.free_slots`（clamp >= 1 防止 0 死锁）。
     `run_forever` 重写为并行 dispatcher：
@@ -860,25 +860,25 @@ reports + README). The live queue retains only the H and P-A backlogs.
       `HeartbeatRecorder` 捕获每次 heartbeat 的 `free_slots`，
       assert 至少一次观察到 < `config.free_slots`（动态报告
       而非 static config），并且当所有 permit 都占用时报 0。
-    `cargo test -p agentflow-worker --lib` 16/16 通过。
+    `cargo test -p yanshi-worker --lib` 16/16 通过。
 - DONE Q3.3.3 `worker.proto` 落后于 prost 手写结构
-  - 审计来源：`docs/audit/agentflow-worker.md` M5
+  - 审计来源：`docs/audit/yanshi-worker.md` M5
   - 现状：缺 `accepted_node_types` / `locality_run_id` / `node_type`，非 Rust
     语言绑定不兼容。
   - 修复（三层验收全部完成）：
-    1. **`.proto` 与 prost 对齐**：`agentflow-server/proto/agentflow/scheduler/v1/worker.proto`
+    1. **`.proto` 与 prost 对齐**：`yanshi-server/proto/yanshi/scheduler/v1/worker.proto`
        补齐 3 个 P10.16.2-FU1 字段——`WorkerTask.node_type = 6`、
        `ClaimTaskRequest.{accepted_node_types = 2, locality_run_id = 3}`、
        `HeartbeatRequest.accepted_node_types = 5`，并标注新字段的
        backward-compat 语义（空值 = pre-FU1）。
-    2. **`build.rs` 改为从 `.proto` 生成**：新增 `agentflow-server/build.rs`
+    2. **`build.rs` 改为从 `.proto` 生成**：新增 `yanshi-server/build.rs`
        调用 `tonic_build::configure().build_client(false).build_server(false)
        .compile_protos(...)`，只生成 prost message 结构；手写的
        `WorkerControl` trait + Tower `Service` impl 保留（它们叠加了
        自定义 W3C traceparent scope + admission credential 提取，
        tonic 生成的 stub 没有这一层）。`src/scheduler/grpc.rs::pb`
        从手写 120 行降到 3 行的 `tonic::include_proto!`。
-       `agentflow-server/Cargo.toml` 加 `tonic-build = "0.12"`
+       `yanshi-server/Cargo.toml` 加 `tonic-build = "0.12"`
        到 `[build-dependencies]` 并显式 `build = "build.rs"`。
     3. **CI 加 `protoc` 校验**：`.github/workflows/quality.yml` 新增
        `proto-validate` job——`arduino/setup-protoc@v3` 装 protoc 27.x
@@ -886,33 +886,33 @@ reports + README). The live queue retains only the H and P-A backlogs.
        校验 .proto 语法，并 grep `tonic::include_proto!` 防止有人
        再退回手写 pb。`proto-validate` 进 `release-gate` 的
        `needs:` 列表，与 fmt/clippy/test 一起作为发布门禁。
-       clippy / doctest / examples / agentflow-cli test matrix /
+       clippy / doctest / examples / yanshi-cli test matrix /
        ui-e2e.yml 全部加 `Install protoc` 步骤，因为它们 transitively
-       编译 agentflow-server。
+       编译 yanshi-server。
   - 测试：新增 `proto_schema_drift_tests` 8 个用例覆盖：textual pin
     `worker.proto` 中的每个字段名+tag 三元组（防 .proto 被人改动
     后没人发现）+ prost encode→decode round-trip 验证 3 个新字段
     跨 wire 正确传输 + pre-FU1 空字节默认 decode。
-    `cargo test -p agentflow-server --all-targets` 298 test 全绿；
-    `cargo build -p agentflow-server --release` 通过；
-    `cargo fmt -p agentflow-server -- --check` 在我触碰的代码上无 diff。
+    `cargo test -p yanshi-server --all-targets` 298 test 全绿；
+    `cargo build -p yanshi-server --release` 通过；
+    `cargo fmt -p yanshi-server -- --check` 在我触碰的代码上无 diff。
 
-### Q3.4 — agentflow-server: 余下 MAJOR
+### Q3.4 — yanshi-server: 余下 MAJOR
 
-- DONE Q3.4.1 `AGENTFLOW_MAX_REQUEST_BODY_BYTES` 读入但从未挂到 router
-  - 审计来源：`docs/audit/agentflow-server.md` M1
+- DONE Q3.4.1 `YANSHI_MAX_REQUEST_BODY_BYTES` 读入但从未挂到 router
+  - 审计来源：`docs/audit/yanshi-server.md` M1
   - 修复：`create_router` 顶层 stack 上加 `DefaultBodyLimit::max(global)`，
     其中 `global = state.security.request_limits.max_request_body_bytes`。
     Per-route 已有的 workflow/skill/harness limits 仍然 shadow 这个全局
     cap，但 `/v1/preferences` 等其余 POST endpoint 现在也有上限保护。
 - DONE Q3.4.2 Worker PSK 比较非常量时间（`HashSet::contains`）
-  - 审计来源：`docs/audit/agentflow-server.md` C3
+  - 审计来源：`docs/audit/yanshi-server.md` C3
   - 修复：PSK 比对从 `HashSet::contains` 改为 walk-all + `constant_time_eq`
     （新增 helper，xor-accumulate 字节差异，不 break-early），匹配
     `src/auth.rs::constant_time_eq` 的 bearer 路径。即使首字节就 mismatch
     也跑完所有 rotation 条目，total compute time 不再泄漏匹配位置。
 - DONE Q3.4.3 `LiveHarnessExecutor` 每个并发 session 起一条 OS 线程
-  - 审计来源：`docs/audit/agentflow-server.md` M6
+  - 审计来源：`docs/audit/yanshi-server.md` M6
   - 修复：临时方案——加并发上限 + 排队。`LiveHarnessExecutor` 新增
     `concurrency_limit: Arc<tokio::sync::Semaphore>`，默认 cap 32（由
     `default_max_concurrent_sessions()` 返回）；`execute()` 进入时先
@@ -921,27 +921,27 @@ reports + README). The live queue retains only the H and P-A backlogs.
     `with_max_concurrent_sessions(N)` builder 覆盖。根因（HarnessRuntime
     !Sync → 必须 spawn_blocking）留作后续上游修复（Q3.4.3-FU）。
 
-### Q3.5 — agentflow-cli: 余下 MAJOR
+### Q3.5 — yanshi-cli: 余下 MAJOR
 
 - DONE Q3.5.1 `llm chat` 隐藏接收且丢弃 `--model/--system/--save/--load`
-  - 审计来源：`docs/audit/agentflow-cli.md` M3
+  - 审计来源：`docs/audit/yanshi-cli.md` M3
   - 修复：clap 层把这四个 args 完全删除——`LlmCommands::Chat {}` 改成
     unit-like variant。handler 仍返回原有的"retired，请用 skill chat"
     redirect message，但不再接受 structured 参数让用户误以为它们生效。
 - DONE Q3.5.2 `plugin` / `rag` feature 不在 `default = []`，与 CLAUDE.md/RoadMap.md
   N10 "closed" 状态矛盾
-  - 审计来源：`docs/audit/agentflow-cli.md` M4
-  - 修复：`agentflow-cli/Cargo.toml` 改 `default = ["plugin", "rag"]`。
-    新装 `agentflow` 现在 `rag --help` / `plugin --help` 直接出真子命令
+  - 审计来源：`docs/audit/yanshi-cli.md` M4
+  - 修复：`yanshi-cli/Cargo.toml` 改 `default = ["plugin", "rag"]`。
+    新装 `yanshi` 现在 `rag --help` / `plugin --help` 直接出真子命令
     （rag search/index/collections/eval、plugin install/list/inspect 等），
-    而不是 `FeatureUnavailableArgs` stub。`mcp` 保持 opt-in：`agentflow
-    mcp *` 本身不需要 `agentflow-nodes/mcp`（CLI 自己已 dep
-    `agentflow-mcp`），feature gate 只影响 workflow YAML 中的 `type:
+    而不是 `FeatureUnavailableArgs` stub。`mcp` 保持 opt-in：`yanshi
+    mcp *` 本身不需要 `yanshi-nodes/mcp`（CLI 自己已 dep
+    `yanshi-mcp`），feature gate 只影响 workflow YAML 中的 `type:
     mcp` 节点。
-  - 测试：`cargo build -p agentflow-cli` 默认通过；手动 smoke
+  - 测试：`cargo build -p yanshi-cli` 默认通过；手动 smoke
     `rag --help` / `plugin --help` 真子命令出现。
 - DONE Q3.5.3 `workflow logs --follow` SSE 无重连 backoff
-  - 审计来源：`docs/audit/agentflow-cli.md` M5
+  - 审计来源：`docs/audit/yanshi-cli.md` M5
   - 修复：在 `commands/workflow/server_ops.rs` 加
     `stream_events_with_reconnect` 包装：
     - 每次 SSE close / transport error 后 1s → 2s → 4s ... 30s
@@ -961,28 +961,28 @@ reports + README). The live queue retains only the H and P-A backlogs.
     返 seq 0+1 then close（模拟 blip），第二次根据 after_seq
     返 seq 2+3 then close；CLI 必须 surface 4 个事件无重复、
     stderr 有 reconnect 提示、server 恰好收到 2 次 attempt。
-    `cargo test -p agentflow-cli --test workflow_logs_tests` 6/6
+    `cargo test -p yanshi-cli --test workflow_logs_tests` 6/6
     通过。
 
-### Q3.6 — agentflow-llm: 余下 MAJOR
+### Q3.6 — yanshi-llm: 余下 MAJOR
 
-- DONE Q3.6.1 `agentflow-core` 在 Cargo.toml 声明但从未 import（死依赖）
-  - 审计来源：`docs/audit/agentflow-llm.md` M4
-  - 修复：`grep -r agentflow_core agentflow-llm/src/` 0 命中，确认死依赖；
-    `agentflow-llm/Cargo.toml` 删除该行，留注释解释为什么之前在那里。
+- DONE Q3.6.1 `yanshi-core` 在 Cargo.toml 声明但从未 import（死依赖）
+  - 审计来源：`docs/audit/yanshi-llm.md` M4
+  - 修复：`grep -r yanshi_core yanshi-llm/src/` 0 命中，确认死依赖；
+    `yanshi-llm/Cargo.toml` 删除该行，留注释解释为什么之前在那里。
     cargo build 通过，无 import 需要清理。
 - DONE Q3.6.2 完整 prompt/response 在 DEBUG 级日志（PII 风险）
-  - 审计来源：`docs/audit/agentflow-llm.md` M6
+  - 审计来源：`docs/audit/yanshi-llm.md` M6
   - 修复：`LLMClient::log_request_start` / `log_request_complete` 在 DEBUG
     级只打 `len=N sha_prefix=...`（FNV-1a 64-bit 指纹，stable cross-run），
     全文 prompt/response 降级到 TRACE 级。新增 `prompt_fingerprint(text)`
     helper，专门 deduplicate 关联追踪而无需写出 PII。FNV 而非 sha256 是
     deliberate—不做认证，避免引入新 crypto dep 给日志用。
 
-### Q3.7 — agentflow-ui: 结构性 MAJOR
+### Q3.7 — yanshi-ui: 结构性 MAJOR
 
 - DONE Q3.7.1 `main.tsx` 2624 行单体 + 无 ErrorBoundary (commits 9ba4f00 + 24537ce)
-  - 审计来源：`docs/audit/agentflow-ui.md` M1, M2
+  - 审计来源：`docs/audit/yanshi-ui.md` M1, M2
   - 验收：按 page / hook / component 拆分；顶层加 ErrorBoundary 防白屏。
   - **Stage A (9ba4f00)**：新增 `src/components/ErrorBoundary.tsx` —
     class-based React ErrorBoundary 包住 `<App />`。捕获未处理 throw
@@ -1012,15 +1012,15 @@ reports + README). The live queue retains only the H and P-A backlogs.
       引用 state/effects 多，拆分价值低；以后文件再涨再拆）
   - 测试：`tsc --noEmit` exit 0；`npm run build` (vite) 干净 (app.js
     312 KiB)；`schemas.test.ts` 16/16；`ErrorBoundary.test.tsx` 5/5；
-    `cargo test -p agentflow-server --lib ui::` 4/4；
+    `cargo test -p yanshi-server --lib ui::` 4/4；
     Playwright MCP 各 route (`/ui` / `/ui/runs/new` / `/ui/diagnostics` /
     `/ui/harness/sessions` / `/ui/harness/sessions/new`) DOM 结构
     与重构前 baseline 完全一致。
 - DONE Q3.7.2 23 处未检查的 `as Type` JSON 响应断言 (commit 4e7423d)
-  - 审计来源：`docs/audit/agentflow-ui.md` M3
+  - 审计来源：`docs/audit/yanshi-ui.md` M3
   - 验收：引入 zod / valibot / typia 之一做 runtime 校验；最少先包裹 SSE 与
     重要 GET。
-  - 修复：选 zod 4 (~10 KiB gzip 增量)。新建 `agentflow-ui/src/schemas.ts`
+  - 修复：选 zod 4 (~10 KiB gzip 增量)。新建 `yanshi-ui/src/schemas.ts`
     (235 行) 给 11 种 JSON 响应形状各定 schema：RunRecord / RunEnvelope /
     ListRunsEnvelope / CreateRunEnvelope / CancelRunEnvelope /
     StreamedEvent / HarnessSession / HarnessEvent / PendingApproval /
@@ -1046,10 +1046,10 @@ reports + README). The live queue retains only the H and P-A backlogs.
     SchemaValidationError 摘要截断；`npm test` (tsc --noEmit) exit 0；
     `npm run build` (vite) 干净（app.js 311 KiB）；
     `npx tsx src/schemas.test.ts` 16/16 通过；
-    `cargo test -p agentflow-server --lib ui::` 4/4 通过（embed SPA 没破）。
+    `cargo test -p yanshi-server --lib ui::` 4/4 通过（embed SPA 没破）。
 - DONE Q3.7.3 SSE 断连重连用陈旧 snapshot 从 `seq=-1` 回放；run list 不自动
   刷新；轮询 interval 叠加 (commit 76a8814)
-  - 审计来源：`docs/audit/agentflow-ui.md` M4, M5, M6
+  - 审计来源：`docs/audit/yanshi-ui.md` M4, M5, M6
   - 修复：
     1. **M4 (SSE reconnect stale snapshot)**：
        - 用 `useRef<number>(-1)` 跟踪最新看到的 `seq`，绕开 effect
@@ -1078,23 +1078,23 @@ reports + README). The live queue retains only the H and P-A backlogs.
     helpers (10/10) 全绿；`tsc --noEmit` exit 0；`npm run build`
     干净（app.js 313 KiB，+0.7 KiB vs Q3.7.1 stage B）；
     Playwright MCP 各 route DOM 与之前完全一致；
-    `cargo test -p agentflow-server --lib ui::` 4/4 通过（embed
+    `cargo test -p yanshi-server --lib ui::` 4/4 通过（embed
     SPA 没破）；现场观察 4s 周期 `GET /v1/runs?…&limit=20`
     404 在 cadence 上重发，验证 interval 活着。
 
-### Q3.8 — agentflow-nodes: MAJOR
+### Q3.8 — yanshi-nodes: MAJOR
 
 - DONE Q3.8.1 `MarkMapConfig::default()` 硬编码 personal Cloudflare Worker URL
-  - 审计来源：`docs/audit/agentflow-nodes.md` M5
+  - 审计来源：`docs/audit/yanshi-nodes.md` M5
   - 修复：`MarkMapConfig::default().api_url` 从 hardcoded
     `markmap-api.jinpeng-ti.workers.dev` 改为读 env
-    `AGENTFLOW_MARKMAP_API_URL`；未设置时 `None`。execute 阶段无 url
+    `YANSHI_MARKMAP_API_URL`；未设置时 `None`。execute 阶段无 url
     fail-fast 抛 `ConfigurationError`，错误消息指明环境变量名 + 安全
     背景。原 live-network test 改成断言 fail-fast 路径，不再依赖第三方
     endpoint 的可用性。
 - DONE Q3.8.2 `template.rs` 全局 `Mutex<Tera>` 串行化所有渲染且 `.lock().unwrap()`
   poison panic
-  - 审计来源：`docs/audit/agentflow-nodes.md` M3
+  - 审计来源：`docs/audit/yanshi-nodes.md` M3
   - 修复（poison panic 部分）：`tera.lock().unwrap()` 改为
     `.lock().unwrap_or_else(|poisoned| { eprintln! warn; poisoned.into_inner() })`。
     一次 panic-mid-render 不再下次直接撞死整个 workflow；Tera 的 internal
@@ -1103,8 +1103,8 @@ reports + README). The live queue retains only the H and P-A backlogs.
     注册逻辑搬迁，留作未来优化（template render 通常不是热点路径）。
 - DONE Q3.8.3 `NodeFactory` trait 声明且公开但全 workspace 零实现（CLI 用平行
   API）
-  - 审计来源：`docs/audit/agentflow-nodes.md` M4
-  - 修复：删除 `agentflow-nodes/src/factory_traits.rs` + 移除
+  - 审计来源：`docs/audit/yanshi-nodes.md` M4
+  - 修复：删除 `yanshi-nodes/src/factory_traits.rs` + 移除
     `lib.rs` 的 `pub mod factory_traits` 及 4 个 re-export
     (`NodeConfig` / `NodeFactory` / `NodeRegistry` /
     `ResolvedNodeConfig`)。CLI 用的是 `executor::build_flow_from_definition`
@@ -1113,28 +1113,28 @@ reports + README). The live queue retains only the H and P-A backlogs.
     顶部留 deletion note 解释为何移除以及替代方案。
     `cargo build --workspace` 通过。
 - DONE Q3.8.4 `src/nodes/while.rs` 0 字节空文件且不在 `mod.rs` 中
-  - 审计来源：`docs/audit/agentflow-nodes.md` M6
-  - 修复：`rm agentflow-nodes/src/nodes/while.rs`。文件本就是 0 字节
+  - 审计来源：`docs/audit/yanshi-nodes.md` M6
+  - 修复：`rm yanshi-nodes/src/nodes/while.rs`。文件本就是 0 字节
     orphan、未在 `mod.rs` 声明，删除不影响任何调用方。
-    `cargo build -p agentflow-nodes` 通过。
+    `cargo build -p yanshi-nodes` 通过。
 - DONE Q3.8.5 documented per-modality feature gates（`asr` / `tts` /
   `text_to_image` 等）实际不存在
-  - 审计来源：`docs/audit/agentflow-nodes.md` M7
+  - 审计来源：`docs/audit/yanshi-nodes.md` M7
   - 验收路径选 B：文档已在 Q4.5 修正（CLAUDE.md 改成 "NOT
     individually gated today"），本任务加保护性回归测试 + 文档化
     Cargo.toml [features] 段以杜绝再次漂移。`实装 gate` 路径被
-    放弃，理由：agentflow-llm 仍是硬依赖，per-modality feature
+    放弃，理由：yanshi-llm 仍是硬依赖，per-modality feature
     带来的 binary size 收益边际；维护 8 个 feature + CI matrix 行
     成本远大于收益。
   - 修复：
-    1. `agentflow-nodes/Cargo.toml` `[features]` 段顶上加 27 行
+    1. `yanshi-nodes/Cargo.toml` `[features]` 段顶上加 27 行
        注释块，逐项解释 `llm/http/file/template` 各自实际 gate 了
        什么（哪些只 gate `pub use`、哪些 gate transitive dep），
        opt-in `mcp/rag/batch/conditional`，以及为什么
        `asr/tts/text_to_image/image_*/arxiv/markmap`故意不 gate。
        新 contributor 看到 feature 矩阵就能知道 "改这块需要同步
        更新 CLAUDE.md + pin test"。
-    2. 新增 `agentflow-nodes/tests/feature_gate_pin_tests.rs` 2 个
+    2. 新增 `yanshi-nodes/tests/feature_gate_pin_tests.rs` 2 个
        用例：
        - `per_modality_nodes_are_unconditional_under_default_features`：
          在 default features 下 use 8 个 modality / 内容节点
@@ -1147,16 +1147,16 @@ reports + README). The live queue retains only the H and P-A backlogs.
          per-modality feature 行（`asr = [`、`tts = [` 等）
          不存在。任何漂移 → 测试失败 + 错误信息明确指向
          CLAUDE.md L2 段 + 本测试要一起改。
-  - 测试：`cargo test -p agentflow-nodes --test feature_gate_pin_tests`
-    2/2 通过；`cargo test -p agentflow-nodes --all-targets` 既有 33
-    个 lib test 仍全绿；`cargo fmt -p agentflow-nodes` 我触碰的
-    文件无 diff。Pre-existing `cargo check -p agentflow-nodes
+  - 测试：`cargo test -p yanshi-nodes --test feature_gate_pin_tests`
+    2/2 通过；`cargo test -p yanshi-nodes --all-targets` 既有 33
+    个 lib test 仍全绿；`cargo fmt -p yanshi-nodes` 我触碰的
+    文件无 diff。Pre-existing `cargo check -p yanshi-nodes
     --no-default-features` 失败（`arxiv.rs:202` 直接用 `reqwest::get`
     但 reqwest 是 http feature-gated 的 dep）在 stash 验证下确认
     与本任务无关，留给未来 follow-up。
 - DONE Q3.8.6 `arxiv.rs:252` `r"\\begin{document}"` 匹配字面两个反斜杠，永远
   不命中
-  - 审计来源：`docs/audit/agentflow-nodes.md` m7
+  - 审计来源：`docs/audit/yanshi-nodes.md` m7
   - 修复：审计建议的 `r"\\begin\{document\}"` 仍是两个反斜杠（同样错），
     正确字面量是 `r"\begin{document}"`（单反斜杠，匹配真实 LaTeX 源）。
     抽出 `contains_document_marker(&str) -> bool` 自由函数让单测能
@@ -1166,12 +1166,12 @@ reports + README). The live queue retains only the H and P-A backlogs.
     files 噪声。
   - 测试：`detects_real_latex_begin_document_marker` /
     `ignores_supporting_tex_files_without_marker` 单测覆盖正反样本，
-    `cargo test -p agentflow-nodes --lib nodes::arxiv` 2/2 通过。
+    `cargo test -p yanshi-nodes --lib nodes::arxiv` 2/2 通过。
 
-### Q3.9 — agentflow-rag: MAJOR
+### Q3.9 — yanshi-rag: MAJOR
 
 - DONE Q3.9.1 Chunker `overlap >= chunk_size` panic（无 constructor 校验）
-  - 审计来源：`docs/audit/agentflow-rag.md` M
+  - 审计来源：`docs/audit/yanshi-rag.md` M
   - 修复：3 个 chunker（`FixedSizeChunker` / `SentenceChunker` /
     `RecursiveChunker`）：
     1. `new()` 保留 infallible 签名（不破 callers），但 clamp
@@ -1186,9 +1186,9 @@ reports + README). The live queue retains only the H and P-A backlogs.
        silently 被 clamp（operator 想知道自己写错了）。
   - 测试：`chunking/mod.rs::tests` 新增 6 个用例（reject 重叠/0、
     accept 正常、clamp 不会无限循环、create_chunker 拒绝越界）。
-    `cargo test -p agentflow-rag --lib chunking` 32/32 通过。
+    `cargo test -p yanshi-rag --lib chunking` 32/32 通过。
 - DONE Q3.9.2 `RecursiveChunker` / `SemanticChunker` UTF-8 边界风险（CJK/emoji）
-  - 审计来源：`docs/audit/agentflow-rag.md` M
+  - 审计来源：`docs/audit/yanshi-rag.md` M
   - 现状：审计点名 RecursiveChunker + SemanticChunker，但深审后
     SemanticChunker.apply_overlap 已经走 `chars().rev().take()`
     char-safe 路径（不 panic）；`split_large_chunk` 用
@@ -1210,10 +1210,10 @@ reports + README). The live queue retains only the H and P-A backlogs.
     - `floor_char_boundary_returns_valid_offset`：纯函数
       invariants（mid-codepoint 向下 snap、ASCII fast path、
       target > len 时 clamp 到 len）。
-    `cargo test -p agentflow-rag --lib chunking::recursive` 11/11 通过。
+    `cargo test -p yanshi-rag --lib chunking::recursive` 11/11 通过。
 - DONE Q3.9.3 Qdrant client 无 API key / TLS / timeout 配置面（Qdrant Cloud
   不可用）
-  - 审计来源：`docs/audit/agentflow-rag.md` M
+  - 审计来源：`docs/audit/yanshi-rag.md` M
   - 修复：`QdrantStoreBuilder` 加 4 个 production-critical 配置：
     - `.api_key(impl Into<String>)` —— Qdrant Cloud 必填，
       自托管 + `service.api_key` 也必填；客户端走 gRPC `api-key`
@@ -1231,10 +1231,10 @@ reports + README). The live queue retains only the H and P-A backlogs.
   - 测试：`qdrant_builder_threads_q393_knobs` 验 4 个 setter
     都正确落到字段；`qdrant_builder_with_api_key_from_env_respects_unset_and_empty`
     覆盖 env 未设/空/有值 3 个分支。
-    `cargo test -p agentflow-rag --lib --features qdrant
+    `cargo test -p yanshi-rag --lib --features qdrant
     vectorstore::qdrant` 8/8 通过。
 - DONE Q3.9.4 `IndexingPipeline::index_documents` 纯串行
-  - 审计来源：`docs/audit/agentflow-rag.md` M
+  - 审计来源：`docs/audit/yanshi-rag.md` M
   - 修复：把原 `for doc in docs { ... await }` 串行循环改成
     `futures::stream::iter(docs).map(...).buffer_unordered(N).collect()`
     fan-out。`IndexingPipeline` 新增 `max_concurrency: usize` 字段
@@ -1256,12 +1256,12 @@ reports + README). The live queue retains only the H and P-A backlogs.
       —— pipeline default 1，但 one-shot override=6 实测 peak ≥ 2。
     - `index_documents_isolates_per_document_errors` —— 1 失败 + 3
       成功 → `errors=1, documents_processed=3`。
-    `cargo test -p agentflow-rag --lib indexing` 5/5 通过；
-    `cargo test -p agentflow-rag --all-targets` 既有 164 测试不动；
-    `cargo fmt -p agentflow-rag` indexing/mod.rs clean；
-    `cargo clippy -p agentflow-rag --all-targets` indexing 无新 warning。
+    `cargo test -p yanshi-rag --lib indexing` 5/5 通过；
+    `cargo test -p yanshi-rag --all-targets` 既有 164 测试不动；
+    `cargo fmt -p yanshi-rag` indexing/mod.rs clean；
+    `cargo clippy -p yanshi-rag --all-targets` indexing 无新 warning。
 - DONE Q3.9.5 BM25 O(N²) indexing：`add_document` 每次触发完整 IDF 重算
-  - 审计来源：`docs/audit/agentflow-rag.md` M
+  - 审计来源：`docs/audit/yanshi-rag.md` M
   - 修复：把 `idf: HashMap<String, f32>` + `avg_doc_length: f32`
     迁移到 `derived: Mutex<DerivedStats { idf, avg_doc_length, dirty }>`
     内部可变状态。变更：
@@ -1287,10 +1287,10 @@ reports + README). The live queue retains only the H and P-A backlogs.
       契约都正确。
     - `remove_document_defers_recompute` —— remove 也走 lazy 路径。
     `test_idf_calculation` 既有用例同步改成 `finalize() + derived.lock()`
-    读法。`cargo test -p agentflow-rag --lib retrieval` 28/28 通过
+    读法。`cargo test -p yanshi-rag --lib retrieval` 28/28 通过
     （含 BM25 17 + Hybrid 11）。
 - DONE Q3.9.6 PDF / HTML loader 无 size cap / 无 timeout（DoS 面）
-  - 审计来源：`docs/audit/agentflow-rag.md` M
+  - 审计来源：`docs/audit/yanshi-rag.md` M
   - 修复：两个 loader 都加 `max_bytes: Option<u64>` 字段 + 默认值
     + `with_max_bytes(Option<u64>)` builder：
     - `PdfLoader` 默认 50 MiB（pub const `DEFAULT_PDF_MAX_BYTES`）
@@ -1311,14 +1311,14 @@ reports + README). The live queue retains only the H and P-A backlogs.
     `html_loader_default_has_10_mib_cap`。
     顺便修了 `test_load_simple_html` / `test_html_title_extraction`
     pre-existing 编译错误（`MetadataValue` 无 `Display`）。
-    `cargo test -p agentflow-rag --lib --features pdf,html sources::{pdf,html::tests::html_loader_*}` 8/8 通过。
+    `cargo test -p yanshi-rag --lib --features pdf,html sources::{pdf,html::tests::html_loader_*}` 8/8 通过。
     （`test_html_removes_scripts` 仍因 SCRIPT_REGEX 用 look-around
     panic，pre-existing 问题非本任务范围。）
 
-### Q3.10 — agentflow-harness: 余下 MAJOR
+### Q3.10 — yanshi-harness: 余下 MAJOR
 
 - DONE Q3.10.1 `HookedTool::build_pending` 硬编码 `step_index: 0`
-  - 审计来源：`docs/audit/agentflow-harness.md` M1
+  - 审计来源：`docs/audit/yanshi-harness.md` M1
   - 修复：`HookConfig` 加 `step_index_counter: Arc<AtomicU64>`
     （和 `seq_counter` 同样的 inject 模式，配套
     `with_step_index_counter` builder），`SharedHookConfig` 复制
@@ -1330,9 +1330,9 @@ reports + README). The live queue retains only the H and P-A backlogs.
   - 测试：`pending_step_index_increments_per_call`（监 hook 收到
     0/1/2 三次单调递增）+ `shared_step_index_counter_is_honored`
     （inject counter seed=42 → 观察 42/43 + counter end=44）。
-    `cargo test -p agentflow-harness --lib hooks_runtime` 15/15 通过。
+    `cargo test -p yanshi-harness --lib hooks_runtime` 15/15 通过。
 - DONE Q3.10.2 `stop_after_deny` 拒绝后续 call 但不发任何 approval event（静默 gate）
-  - 审计来源：`docs/audit/agentflow-harness.md` M2
+  - 审计来源：`docs/audit/yanshi-harness.md` M2
   - 修复：`hooks_runtime::resolve_proceed_decision` 命中
     `cache.stop_after_deny` 的 short-circuit 路径上现在 emit 一对
     synthetic ApprovalRequested + ApprovalDecided（`request_id`
@@ -1346,10 +1346,10 @@ reports + README). The live queue retains only the H and P-A backlogs.
       改 assert 2 个 Requested + 2 个 Decided（1 real + 1 synthetic）。
     - 新增 `stop_after_deny_gate_emits_namespaced_events_with_redacted_params`
       验证 request_id 前缀 + decided_by + redaction 全部正确。
-    - `cargo test -p agentflow-harness --lib hooks_runtime` 13/13 通过。
+    - `cargo test -p yanshi-harness --lib hooks_runtime` 13/13 通过。
 - DONE Q3.10.3 Cached decision 用合成 `request_id: "cached-<tool>"`，无前置
   `ApprovalRequested`
-  - 审计来源：`docs/audit/agentflow-harness.md` M3
+  - 审计来源：`docs/audit/yanshi-harness.md` M3
   - 修复：`emit_cached_decision` 现在 emit 两个事件：先发一个合成
     `ApprovalRequested`（id `cached-<tool>-<uuid>`，每次唯一；
     带 redacted params_summary、risk、reason、step_index），
@@ -1360,11 +1360,11 @@ reports + README). The live queue retains only the H and P-A backlogs.
   - 测试：`session_scope_decisions_are_cached_across_calls`
     更新断言为 3 Requested + 3 Decided（1 real + 2 cached），
     并新增 request_id correlation 反断言（每个 Decided 都能在
-    Requested 流里找到匹配 id）。`cargo test -p agentflow-harness
+    Requested 流里找到匹配 id）。`cargo test -p yanshi-harness
     --lib hooks_runtime` 15/15 通过。
 - DONE Q3.10.4 `tracing_bridge` 只返回 JsonlEventSink，没真正接
-  `agentflow_tracing::ExecutionTrace`，但 CLAUDE.md 把 P-H.5 标 closed
-  - 审计来源：`docs/audit/agentflow-harness.md` M4
+  `yanshi_tracing::ExecutionTrace`，但 CLAUDE.md 把 P-H.5 标 closed
+  - 审计来源：`docs/audit/yanshi-harness.md` M4
   - 修复：实装 `ExecutionTraceSink`（per-session 累计 ExecutionTrace
     + on Stopped persist 到任意 `TraceStorage`）+ `open_execution_trace_sink(storage)`
     factory。Translation rules：
@@ -1402,29 +1402,29 @@ reports + README). The live queue retains only the H and P-A backlogs.
       "execution_trace"`（区分 SinkChain 中的 JSONL sink）。
     - `execution_trace_sink_drops_orphan_events` —— 没 SessionStarted
       前来的 events 静默丢弃，无 panic 无 fake save。
-    `cargo test -p agentflow-harness --lib tracing_bridge` 8/8 通过。
+    `cargo test -p yanshi-harness --lib tracing_bridge` 8/8 通过。
 
-### Q3.11 — agentflow-db: 余下 MAJOR
+### Q3.11 — yanshi-db: 余下 MAJOR
 
 - DONE Q3.11.1 `next_event_seq` server-side 用 `list_after(..., 10_000)` cap，
   超大 run 会碰撞 PK
-  - 审计来源：`docs/audit/agentflow-db.md` M3
+  - 审计来源：`docs/audit/yanshi-db.md` M3
   - 修复：
-    1. `agentflow-db::EventRepo` trait 加 `max_seq(tenant_id, run_id)
+    1. `yanshi-db::EventRepo` trait 加 `max_seq(tenant_id, run_id)
        -> Result<Option<i64>>`；`PgEventRepo` 实现 `SELECT MAX(seq)
        FROM events WHERE tenant_id = $1 AND run_id = $2`（命中
        `events_tenant_run_idx` 覆盖索引，O(1) read）。
-    2. `agentflow-server::runs::next_event_seq` 切到 `events.max_seq +
+    2. `yanshi-server::runs::next_event_seq` 切到 `events.max_seq +
        1` 而不是 paging `list_after(..., 10_000)`；超 10k events 的
        run 不再 silent roll-back seq 导致 PK 碰撞。
     3. `harness.rs::next_event_seq` 同样切到现成的
        `harness_events.max_seq + 1`（之前也走 10k cap）。
   - 测试：`cargo build --workspace` 通过。Pg-touching repo 测试需要
-    `AGENTFLOW_DATABASE_TEST_URL`，本机未设置，自动 skip；CI
+    `YANSHI_DATABASE_TEST_URL`，本机未设置，自动 skip；CI
     覆盖既有 list_after 路径不动。
 - DONE Q3.11.2 Connection pool 缺 `test_before_acquire` / `max_lifetime`（云 LB
   reap 问题）
-  - 审计来源：`docs/audit/agentflow-db.md` M4
+  - 审计来源：`docs/audit/yanshi-db.md` M4
   - 修复：抽出 `apply_pool_defaults(PgPoolOptions)` 一处 statement
     of pool 默认值，primary 和 replica 都走它。设置：
     - `test_before_acquire(true)` —— 处理 RDS / Cloud SQL / Aiven /
@@ -1437,10 +1437,10 @@ reports + README). The live queue retains only the H and P-A backlogs.
     - `acquire_timeout(3s)` 保持不变。
   - 测试：`pool_defaults_enable_test_before_acquire_and_max_lifetime`
     pin 配置（不需要真实 Postgres，用 PgPoolOptions getter assert）。
-    `cargo test -p agentflow-db --lib database` 5/5 通过。
+    `cargo test -p yanshi-db --lib database` 5/5 通过。
 - DONE Q3.11.3 Migration `0003` 的 unbatched `UPDATE...FROM` backfill 在大表
   上锁写
-  - 审计来源：`docs/audit/agentflow-db.md` M5
+  - 审计来源：`docs/audit/yanshi-db.md` M5
   - 修复：选 **文档化 operator playbook** 而不是改已发布的 migration
     （`sqlx::migrate!` 编译期 checksum 每个 .sql 文件，改动会让
     已应用过的部署拒绝启动）。新增 `docs/MIGRATIONS.md`，覆盖：
@@ -1456,21 +1456,21 @@ reports + README). The live queue retains only the H and P-A backlogs.
     4. 未来 migration 写法 + 显式 forward-only 回滚说明。
     Migration 文件本身保持不动，部署兼容性 0 风险。
 
-### Q3.12 — agentflow-agents: 余下 MAJOR
+### Q3.12 — yanshi-agents: 余下 MAJOR
 
 - DONE Q3.12.1 Cancellation 通过 `select!` drop in-flight tool future 但不真正
   abort detached work
-  - 审计来源：`docs/audit/agentflow-agents.md` M2
+  - 审计来源：`docs/audit/yanshi-agents.md` M2
   - 决策：选 Path A（"文档化 cooperative 模型"）而不是 Path B（"给
     `Tool::execute` 加 per-call cancellation token"）。Path B 是
-    workspace 级 breaking change（agentflow-tools / agentflow-mcp /
+    workspace 级 breaking change（yanshi-tools / yanshi-mcp /
     所有 plugin 的 Tool impl 都要改），且对 4 个内建 tool
     (File/Http/Shell/Script) 几乎不增收益——它们的 future 已经
     cooperatively 可 drop（reqwest / tokio::process / tokio::time）。
     Path A 把"实际行为"与"用户期望"对齐，让 tool 作者写 detached
     work 时知道自己需要 wire 自己的 cancellation signal。
   - 修复：
-    1. `agentflow-tools/src/tool.rs` `Tool::execute` rustdoc 加 27 行
+    1. `yanshi-tools/src/tool.rs` `Tool::execute` rustdoc 加 27 行
        cancellation contract 段：明确"runtime 用 tokio::select! drop
        future，无 Tool::cancel hook"；列举 cooperatively-cancellable
        await（reqwest / tokio::time::sleep / tokio::process::Child
@@ -1478,7 +1478,7 @@ reports + README). The live queue retains only the H and P-A backlogs.
        work（tokio::spawn 不 join / spawn_blocking / FFI /
        std::process::Child without kill_on_drop）；指向回归测试 +
        Q3.12.1。
-    2. `agentflow-agents/src/runtime.rs` `AgentCancellationToken`
+    2. `yanshi-agents/src/runtime.rs` `AgentCancellationToken`
        rustdoc 加 28 行 propagation model 段：把 ReActAgent /
        PlanExecuteAgent / supervisors 的 cancellation check 行为
        条理化；列举 cooperative-OK 和 detached-leak 两类；解释
@@ -1494,13 +1494,13 @@ reports + README). The live queue retains only the H and P-A backlogs.
          立即 await sleep；cancellation 后断言 detached work 仍然
          完成（pin 当前 cooperative 模型的边界，未来若加 per-call
          token 这个 assertion 翻转就强制 author 同步更新 rustdoc）。
-  - 测试：`cargo test -p agentflow-agents --lib runtime::tests`
-    19/19 通过；`cargo test -p agentflow-agents --lib` 全部 175 个
-    lib test 仍全绿；`cargo test -p agentflow-tools --lib` 85/85
-    通过；`cargo fmt -p agentflow-agents -p agentflow-tools` 无 diff。
+  - 测试：`cargo test -p yanshi-agents --lib runtime::tests`
+    19/19 通过；`cargo test -p yanshi-agents --lib` 全部 175 个
+    lib test 仍全绿；`cargo test -p yanshi-tools --lib` 85/85
+    通过；`cargo fmt -p yanshi-agents -p yanshi-tools` 无 diff。
 - DONE Q3.12.2 `Blackboard.write_internal` 用 `.expect("blackboard version
   poisoned")`，相邻 lock site 都用 `if let Ok`
-  - 审计来源：`docs/audit/agentflow-agents.md` M4
+  - 审计来源：`docs/audit/yanshi-agents.md` M4
   - 修复：`next_version.lock()` 的 `expect` 改为 `match ... Err(poisoned)
     => poisoned.into_inner()`，跟相邻 `entries.write()` / `ops.lock()`
     的 `if let Ok` 风格对齐。version counter 是 monotonic u64，
@@ -1508,12 +1508,12 @@ reports + README). The live queue retains only the H and P-A backlogs.
   - 测试：`write_survives_prior_version_lock_panic` — 在另一个线程
     panic-while-holding 该锁触发 poison（用 `is_poisoned()`
     pre-condition assert），然后调用 `write_internal` 必须不 panic
-    且 entry 落库 + version=1。`cargo test -p agentflow-agents --lib
+    且 entry 落库 + version=1。`cargo test -p yanshi-agents --lib
     supervisor::blackboard` 13/13 通过。
 
-### Q3.13 — agentflow-core: 余下 MINOR-ish MAJOR
+### Q3.13 — yanshi-core: 余下 MINOR-ish MAJOR
 
-（其余 minor 项在 `docs/audit/agentflow-core.md` 中，承担方在 Q5 sweep 中处理。）
+（其余 minor 项在 `docs/audit/yanshi-core.md` 中，承担方在 Q5 sweep 中处理。）
 
 ---
 
@@ -1523,39 +1523,39 @@ reports + README). The live queue retains only the H and P-A backlogs.
 心智模型，长期成本极高。
 
 - DONE Q4.1 `CLAUDE.md` 把 db "Eight-table schema" 改成 9 张表（含
-  `user_preferences`）；`agentflow-db/src/lib.rs` / `models.rs` / `repo.rs` 中
+  `user_preferences`）；`yanshi-db/src/lib.rs` / `models.rs` / `repo.rs` 中
   "six tables" 注释一并更新。
-  - 审计来源：`docs/audit/agentflow-db.md` 文档漂移
+  - 审计来源：`docs/audit/yanshi-db.md` 文档漂移
   - 修复：CLAUDE.md 改 "Nine-table schema (... + user_preferences)" +
     把 `UserPreferenceRepo` 加进 Repository layer 列表；`repo.rs`
     顶部 "//! Repository abstractions over the gateway's nine tables"
     + 列出全部 9 个 Pg* repo；`models.rs` "nine-table schema" +
     explicit table list。
-- DONE Q4.2 `CLAUDE.md` 关于 `agentflow-server` 的 "Real Flow runner replacing
+- DONE Q4.2 `CLAUDE.md` 关于 `yanshi-server` 的 "Real Flow runner replacing
   StubExecutor lands in v0.4.0" 已落地（`FlowRunExecutor` 已是默认）；更新陈述。
-  - 审计来源：`docs/audit/agentflow-server.md` 文档漂移
+  - 审计来源：`docs/audit/yanshi-server.md` 文档漂移
   - 修复：改成 "`FlowRunExecutor` is the production default and runs
     config-first workflows in-process; `StubExecutor` remains as the
     test-only stand-in for route-plumbing tests that don't need
     real execution."
-- DONE Q4.3 `CLAUDE.md` 关于 `agentflow-mcp` 的 "adapter into
-  agentflow-tools::ToolRegistry" 描述错位——adapter 实际在
-  `agentflow-skills/src/mcp_tools.rs`。
-  - 审计来源：`docs/audit/agentflow-mcp.md` 文档漂移
-  - 修复：明确"MCP→agentflow-tools::Tool 适配器（`McpToolAdapter` +
-    `McpClientPool`）lives in `agentflow-skills/src/mcp_tools.rs`，
-    不在本 crate" + 解释为什么 (`agentflow-skills` owns it because
+- DONE Q4.3 `CLAUDE.md` 关于 `yanshi-mcp` 的 "adapter into
+  yanshi-tools::ToolRegistry" 描述错位——adapter 实际在
+  `yanshi-skills/src/mcp_tools.rs`。
+  - 审计来源：`docs/audit/yanshi-mcp.md` 文档漂移
+  - 修复：明确"MCP→yanshi-tools::Tool 适配器（`McpToolAdapter` +
+    `McpClientPool`）lives in `yanshi-skills/src/mcp_tools.rs`，
+    不在本 crate" + 解释为什么 (`yanshi-skills` owns it because
     the skill builder is the entry point that knows which MCP
     servers a manifest declares)。
-- DONE Q4.4 `CLAUDE.md` 关于 `agentflow-rag` 提到 "StepFun embedding"，但只
+- DONE Q4.4 `CLAUDE.md` 关于 `yanshi-rag` 提到 "StepFun embedding"，但只
   实装 OpenAI + ONNX。删除 StepFun 声明或单独 TODO 实现。
-  - 审计来源：`docs/audit/agentflow-rag.md` 文档漂移
-  - 修复：CLAUDE.md L2 — agentflow-rag 段从 "embeddings (OpenAI/StepFun
+  - 审计来源：`docs/audit/yanshi-rag.md` 文档漂移
+  - 修复：CLAUDE.md L2 — yanshi-rag 段从 "embeddings (OpenAI/StepFun
     API or local ONNX)" 改成 "embeddings (OpenAI API or local ONNX)"，
     末尾加显式注释 "StepFun embedding provider mentioned in earlier
     drafts is not implemented; only OpenAI + local ONNX exist
     today."；顺便补 Q3.9.6 的 PDF/HTML size cap default 提示。
-- DONE Q4.5 `CLAUDE.md` 关于 `agentflow-nodes` 的 per-modality feature gates
+- DONE Q4.5 `CLAUDE.md` 关于 `yanshi-nodes` 的 per-modality feature gates
   与代码不一致（参考 Q3.8.5）。
   - 修复：明确列出实际 default features `["llm", "http", "file",
     "template"]`、opt-in features `mcp` / `rag` / `batch` /
@@ -1588,28 +1588,28 @@ reports + README). The live queue retains only the H and P-A backlogs.
 
 - DONE Q5.1 `unwrap()` / `expect()` production code sweep（违反 user 全局规则）
   - 范围：
-    - `agentflow-llm` × 6（Q2.5.3 已含 build_headers，其余顺手）
-    - `agentflow-agents` × 2（Q2.9.1 + Blackboard，Q3.12.2 已含）
-    - `agentflow-cli` × 2（`commands/eval.rs:240, 252`）
-    - `agentflow-nodes` × ~16（含 template.rs，Q3.8.2 已含）
-    - `agentflow-core` × 1（ScopedPermit::Drop，Q2.4.6 已含）
-    - `agentflow-rag` × ~12（大部分为 compile-time regex，需逐一判定是否真无害）
+    - `yanshi-llm` × 6（Q2.5.3 已含 build_headers，其余顺手）
+    - `yanshi-agents` × 2（Q2.9.1 + Blackboard，Q3.12.2 已含）
+    - `yanshi-cli` × 2（`commands/eval.rs:240, 252`）
+    - `yanshi-nodes` × ~16（含 template.rs，Q3.8.2 已含）
+    - `yanshi-core` × 1（ScopedPermit::Drop，Q2.4.6 已含）
+    - `yanshi-rag` × ~12（大部分为 compile-time regex，需逐一判定是否真无害）
   - 验收：单一 PR 或 1 PR/crate；新增 clippy lint `-D clippy::unwrap_used
     -D clippy::expect_used` 在 CI workspace 级别（test/example 用 `#[allow]`
     标注）。
   - **WAVE 1 (commit 90d5f72)**：21 个文件 / 298 insertions / 130
     deletions / 21 个 fmt-clean、全部相关 crate `cargo test --lib` 全绿。
     覆盖的命中点：
-    - `agentflow-cli/src/commands/eval.rs` × 2（Mutex poison recovery）
-    - `agentflow-llm`：6 个 production 站点全部修掉
+    - `yanshi-cli/src/commands/eval.rs` × 2（Mutex poison recovery）
+    - `yanshi-llm`：6 个 production 站点全部修掉
       （discovery 三个 Default 删除 + model_validator/anthropic/google
       逻辑不变量重写 + openai_asr 链式 fallback + stepfun 三个
       `get_or_insert_with` + VoiceLabel 加 Default）
-    - `agentflow-nodes`：6 个文件 14 处 production 命中
+    - `yanshi-nodes`：6 个文件 14 处 production 命中
       （batch / rag / template / tera_helpers / text_to_image 重构 +
       arxiv 6 个 regex 提到 LazyLock 并 `#[allow(clippy::expect_used,
       reason = "...")]` 注解）
-    - `agentflow-rag`：6 个文件 12 处 production 命中
+    - `yanshi-rag`：6 个文件 12 处 production 命中
       （onnx file_stem fallback + chunking/sentence last() let-else +
       bm25 Mutex poison recovery × 2 + eval/runner ok_or_else +
       eval/compare let-else + sources/html.rs & preprocessing.rs
@@ -1618,25 +1618,25 @@ reports + README). The live queue retains only the H and P-A backlogs.
     deletions / 910 lib test 全绿、`cargo clippy --workspace --lib
     --no-deps -- -D clippy::unwrap_used -D clippy::expect_used` 0 errors.
     覆盖的命中点：
-    - `agentflow-server` × 15（4 个 Mutex poison hot spot →
+    - `yanshi-server` × 15（4 个 Mutex poison hot spot →
       私有 `lock_inner()` helper：harness_approval / events_stream /
       harness / runs；3 个 build-time invariant 加 per-site
       `#[allow(.., reason = "...")]`：serve/events_filter/scheduler）
-    - `agentflow-server/build.rs` → file-level `#![allow]`
+    - `yanshi-server/build.rs` → file-level `#![allow]`
       （build script 按约定豁免）
-    - `agentflow-mcp/src/transport/mock.rs` × 17 → file-level
+    - `yanshi-mcp/src/transport/mock.rs` × 17 → file-level
       `#![allow]`（public test fixture）
-    - `agentflow-tracing/src/types.rs` × 2 → `NodeTrace::complete()` /
+    - `yanshi-tracing/src/types.rs` × 2 → `NodeTrace::complete()` /
       `fail()` 捕获 `now` 复用，消除 `completed_at.unwrap()`
-    - `agentflow-harness/src/persistence.rs:142` → `ok_or_else`
+    - `yanshi-harness/src/persistence.rs:142` → `ok_or_else`
       返回 HarnessError envelope（替代 `expect("file opened…")`）
-    - `agentflow-skills/src/remote_marketplace.rs:64` reqwest
+    - `yanshi-skills/src/remote_marketplace.rs:64` reqwest
       infallible expect → per-site allow
-    - `agentflow-agents/src/common/pdf_parser.rs` × 2 →
+    - `yanshi-agents/src/common/pdf_parser.rs` × 2 →
       `path.file_name()` 链 `unwrap_or_else("upload.pdf")`
-    - `agentflow-agents/src/common/batch_processor.rs` × 2 →
+    - `yanshi-agents/src/common/batch_processor.rs` × 2 →
       Semaphore acquire per-site allow（semaphore 私有不会 close）
-    - `agentflow-cli/src/commands/skill/mcp_discovery_cache.rs:194`
+    - `yanshi-cli/src/commands/skill/mcp_discovery_cache.rs:194`
       → String-only struct `to_vec` per-site allow
   - **CI 落地（wave 2 同一 commit）**：`.github/workflows/quality.yml`
     新增 `clippy-lib-deny` 作业 + 进入 `release-gate.needs`。
@@ -1649,7 +1649,7 @@ reports + README). The live queue retains only the H and P-A backlogs.
     bench/build script。
 - DONE Q5.2 Workspace-wide redaction audit (commit abd6a6f)
   - 范围：找出所有把 user-supplied data 写入 log / trace / event payload 的
-    位置，确认 `agentflow-tracing::redaction` 一致调用。
+    位置，确认 `yanshi-tracing::redaction` 一致调用。
   - 已知 missing：harness `params_summary`（Q1.7.2）、llm DEBUG log（Q3.6.2）、
     mcp env inheritance（Q3.2.1）、tracing redaction key 子串匹配（Q2.3.5）+
     内联 redaction URL-aware（Q2.3.6）。
@@ -1658,15 +1658,15 @@ reports + README). The live queue retains only the H and P-A backlogs.
     key/Authorization header/CRLF。
   - 修复：
     1. **Production fixes** — 3 处 DEBUG/INFO 级 log 泄漏：
-       - `agentflow-agents/src/react/agent.rs:773` `debug!(response = %raw)`
+       - `yanshi-agents/src/react/agent.rs:773` `debug!(response = %raw)`
          → `debug!(response_len, response_sha = %fingerprint)`，全文 → TRACE
-       - `agentflow-agents/src/react/agent.rs:1222` `info!(thought = %x)`
+       - `yanshi-agents/src/react/agent.rs:1222` `info!(thought = %x)`
          → fingerprint + len at INFO，全文 → TRACE
-       - `agentflow-agents/src/plan_execute.rs:212` planner response → 同 pattern
-    2. **Helper 共享**：`agentflow_llm::prompt_fingerprint` 从 private
-       提升为 `pub`，agentflow-agents 直接复用，避免重复 FNV-1a 实现。
+       - `yanshi-agents/src/plan_execute.rs:212` planner response → 同 pattern
+    2. **Helper 共享**：`yanshi_llm::prompt_fingerprint` 从 private
+       提升为 `pub`，yanshi-agents 直接复用，避免重复 FNV-1a 实现。
     3. **xtask `redaction-lint`**（new）：
-       - 扫所有 `agentflow-*/src/**/*.rs` 找
+       - 扫所有 `yanshi-*/src/**/*.rs` 找
          `(debug|info|warn|error)!(... <danger> = %text, ...)` /
          `... "{<danger>}"` format-string interpolation
        - 11 个 danger tokens：prompt / response / content / body /
@@ -1678,7 +1678,7 @@ reports + README). The live queue retains only the H and P-A backlogs.
        - workspace 当前：`redaction-lint: OK (16 crate dirs scanned)`
     4. **CI gate**：`.github/workflows/quality.yml` 新增 `redaction-lint`
        job + 进 `release-gate.needs`。
-    5. **Redaction dataset 扩展**（`agentflow-tracing/src/redaction.rs`）：
+    5. **Redaction dataset 扩展**（`yanshi-tracing/src/redaction.rs`）：
        7 个新测试 — JWT (Bearer header / URL query)、AWS credentials
        (3 个 key 一行 env dump)、CRLF 边界、LF-only 边界、Cookie 紧凑
        form、Set-Cookie inline-text known-limitation pin、
@@ -1686,18 +1686,18 @@ reports + README). The live queue retains only the H and P-A backlogs.
        一个是 redact_text 的 tokenizer 已知 gap (whitespace 后 colon
        的 header 值会泄漏)，另一个证明生产 redact_value path（agent
        tool call 走的）没这个 gap。
-  - 测试：`cargo test -p agentflow-tracing --lib redaction` 16/16 通过；
+  - 测试：`cargo test -p yanshi-tracing --lib redaction` 16/16 通过；
     `cargo test -p xtask redaction_lint` 7/7 通过；`cargo xtask
-    redaction-lint` 现场 0 hit；`cargo test -p agentflow-llm
-    -p agentflow-agents -p agentflow-tracing --lib` 413 个 lib test
+    redaction-lint` 现场 0 hit；`cargo test -p yanshi-llm
+    -p yanshi-agents -p yanshi-tracing --lib` 413 个 lib test
     全绿；`cargo clippy --workspace --lib --no-deps -- -A warnings
     -D clippy::unwrap_used -D clippy::expect_used`（Q5.1 wave 2 lint）
     仍 clean。
 - DONE Q5.3 Workspace-wide signal handler sweep（Q3.1 的 meta）
-  - 验收：建立 `agentflow-core::shutdown` 帮助函数，统一 cli + server + worker
+  - 验收：建立 `yanshi-core::shutdown` 帮助函数，统一 cli + server + worker
     使用；新增 SIGTERM 集成测试模板。
   - 修复：
-    1. 新建 `agentflow-core/src/shutdown.rs`：
+    1. 新建 `yanshi-core/src/shutdown.rs`：
        - `pub const SIGINT_EXIT_CODE: i32 = 130` / `pub const
          SIGTERM_EXIT_CODE: i32 = 143`（POSIX 128 + signal number）。
        - `pub enum ShutdownReason { Interrupt, Terminate }` +
@@ -1716,39 +1716,39 @@ reports + README). The live queue retains only the H and P-A backlogs.
          doctest 校验类型正确性，但 `# ignore` 不实际触发 signal
          （避免污染其他并发测试进程）。
     2. 迁移三个调用方：
-       - `agentflow-cli::shutdown` 改成薄 re-export：`pub use
-         agentflow_core::shutdown::{...}`，保留 CLI-only
+       - `yanshi-cli::shutdown` 改成薄 re-export：`pub use
+         yanshi_core::shutdown::{...}`，保留 CLI-only
          `DEFAULT_TRACE_FLUSH_TIMEOUT`。既有 `workflow_ctrl_c_tests`
          的 `SIGINT_EXIT_CODE` pin test 因 re-export 自动通过。
-       - `agentflow-server::serve::shutdown_signal` 删除 38 行
+       - `yanshi-server::serve::shutdown_signal` 删除 38 行
          in-line 实现，调 `shutdown_signal_with_reason`
          + match ShutdownReason 维持现有 info-level 日志区分。
          **关键修复**：消除两处 `.expect("install … signal
          handler")` panic 站点（Q1 / Q5.1 关心的 panic 隐患）。
-       - `agentflow-worker/src/main.rs` 删 33 行 inline 实现，
-         改 `use agentflow_core::shutdown::shutdown_signal`。
-         agentflow-core 已是它的硬依赖，无新增 dep。
+       - `yanshi-worker/src/main.rs` 删 33 行 inline 实现，
+         改 `use yanshi_core::shutdown::shutdown_signal`。
+         yanshi-core 已是它的硬依赖，无新增 dep。
   - 测试：
-    - `agentflow_core::shutdown::tests` 5 个用例：常数 = 128 + signal
+    - `yanshi_core::shutdown::tests` 5 个用例：常数 = 128 + signal
       number；`ShutdownReason.exit_code()` round-trip；`PartialEq` /
       `Eq` 派生；签名类型 pin（`shutdown_signal_with_reason() ->
       ShutdownReason`、`shutdown_signal() -> ()`）。
-    - 既有 `agentflow_cli` 的 `workflow_ctrl_c_tests::ctrl_c_constants_match_posix`
+    - 既有 `yanshi_cli` 的 `workflow_ctrl_c_tests::ctrl_c_constants_match_posix`
       和 `cancel_and_flush_writes_workflow_cancelled_to_trace_file`
       均自动通过 re-export 继续验证 CLI 接入 ok。
-    - `cargo test -p agentflow-core -p agentflow-server -p agentflow-worker
+    - `cargo test -p yanshi-core -p yanshi-server -p yanshi-worker
       --lib --tests` 全部通过；`cargo build --workspace` clean；
       `cargo fmt` 我触碰的文件无 diff。
-    - 预先存在 `cargo test -p agentflow-cli` 的
+    - 预先存在 `cargo test -p yanshi-cli` 的
       `llm_chat_is_retired_with_agent_first_guidance` 单元测试失败
       （Q3.5.1 删除 `--model` 等参数后的 stale test）与本任务无关。
 - DONE Q5.4 Workspace-wide HashMap → BTreeMap / sorted-iter sweep（影响决定性）
-  - 范围：`agentflow-core::topological_sort`（Q2.4.1 之前已 DONE）、
-    `agentflow-tools::ToolRegistry`（openai_tools_array / list /
-    prompt_tools_description 三个外部可见接口）、`agentflow-llm`
+  - 范围：`yanshi-core::topological_sort`（Q2.4.1 之前已 DONE）、
+    `yanshi-tools::ToolRegistry`（openai_tools_array / list /
+    prompt_tools_description 三个外部可见接口）、`yanshi-llm`
     `ValidationReport.summary()`（CLI 用户面）。
   - 修复：
-    1. **`agentflow-tools::ToolRegistry`**：内部 `tools` 字段从
+    1. **`yanshi-tools::ToolRegistry`**：内部 `tools` 字段从
        `HashMap<String, Arc<dyn Tool>>` 改为 `BTreeMap<...>`。
        BTreeMap iteration 按 key 字母序，所有 `tools.values()` /
        `tools.get(name)` 调用 API 不变，但 wire-shape 一致性
@@ -1756,26 +1756,26 @@ reports + README). The live queue retains only the H and P-A backlogs.
        `openai_tools_array()` 字节级别相同。Doc-comment 顶部
        新增 Q5.4 注释解释为什么必须 deterministic（feeds LLM
        request body）。
-    2. **`agentflow-llm::validate_all_providers`**：返回前对
+    2. **`yanshi-llm::validate_all_providers`**：返回前对
        `valid_providers` 和 `invalid_providers` 按 name 排序。
        底层 `HashMap` 保留（迁移成本不划算），但 reporter
        输出 deterministic。
   - 测试：2 个新决定性回归用例：
-    - `agentflow_tools::registry::tests::registry_iteration_is_deterministic_across_registration_orders`：
+    - `yanshi_tools::registry::tests::registry_iteration_is_deterministic_across_registration_orders`：
       用 5 个工具（zebra/alpha/mango/delta/echo）以 forward /
       reverse / shuffled 三种顺序注册，断言 `openai_tools_array()`
       JSON 序列化、`list()` name 序列、`prompt_tools_description()`
       字节级相同；额外断言 `list()` 输出按字母序（alpha < delta
       < echo < mango < zebra）pin 住 contract。
-    - `agentflow_llm::registry::model_registry::tests::validation_report_summary_is_deterministic_in_provider_order`：
+    - `yanshi_llm::registry::model_registry::tests::validation_report_summary_is_deterministic_in_provider_order`：
       构造混乱顺序的 valid/invalid provider 列表 + 调用
       summary()，用 string position 断言 anthropic < google <
       openai 顺序、moonshot < zhipu 顺序。
-    `cargo test -p agentflow-tools --all-targets` 85 + 既有测试
-    全绿；`cargo test -p agentflow-llm --lib --tests` 全部通过；
-    `cargo fmt -p agentflow-tools -p agentflow-llm` 无 diff。
-    workspace-level pre-existing failure（`agentflow-cli` 的
+    `cargo test -p yanshi-tools --all-targets` 85 + 既有测试
+    全绿；`cargo test -p yanshi-llm --lib --tests` 全部通过；
+    `cargo fmt -p yanshi-tools -p yanshi-llm` 无 diff。
+    workspace-level pre-existing failure（`yanshi-cli` 的
     `llm_chat_is_retired_with_agent_first_guidance` Q3.5.1 fallout
-    + `agentflow-llm/benches/provider_hop.rs` missing `thinking`
+    + `yanshi-llm/benches/provider_hop.rs` missing `thinking`
     字段）已经在 main 上存在，确认与 Q5.4 无关。
 

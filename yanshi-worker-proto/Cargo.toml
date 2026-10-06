@@ -1,0 +1,36 @@
+[package]
+name = "yanshi-worker-proto"
+version = "0.1.0"
+description = "Shared worker control-plane contract: WorkerProtocol, wire types, and the gRPC client (worker <-> server)"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+build = "build.rs"
+
+[build-dependencies]
+# Generates `OUT_DIR/yanshi.scheduler.v1.rs` (message structs only;
+# the tower service stays hand-written in `yanshi-server`).
+tonic-build = { version = "0.12", default-features = false, features = ["prost"] }
+
+[dependencies]
+# `FlowValue` for `NodeExecutionPayload`; trace-context for gRPC traceparent.
+yanshi-value = { path = "../yanshi-value", version = "0.1" }
+yanshi-tracing = { path = "../yanshi-tracing", version = "0.1" }
+
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+prost = "0.13"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
+# T1.2: `tls`/`tls-roots` are explicit, not incidental. Without this,
+# `ClientTlsConfig` only compiles today because `qdrant-client` (pulled in
+# transitively by yanshi-rag) happens to unify tonic's TLS feature in —
+# trimming that dependency elsewhere in the workspace would silently break
+# the worker's TLS wiring.
+tonic = { version = "0.12", features = ["tls", "tls-roots"] }
+tracing = "0.1"
+uuid = { workspace = true, features = ["serde"] }

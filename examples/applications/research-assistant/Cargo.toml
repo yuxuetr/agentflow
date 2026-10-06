@@ -8,9 +8,9 @@ publish = false
 description = "A3 dogfooding application: fetch arxiv category → diff against seen-papers entity-fact store → LLM summarize new papers into markdown briefing"
 
 [dependencies]
-agentflow-core   = { path = "../../../agentflow-core" }
-agentflow-llm    = { path = "../../../agentflow-llm" }
-agentflow-memory = { path = "../../../agentflow-memory" }
+yanshi-core   = { path = "../../../yanshi-core" }
+yanshi-llm    = { path = "../../../yanshi-llm" }
+yanshi-memory = { path = "../../../yanshi-memory" }
 
 tokio              = { version = "1", features = ["full"] }
 async-trait        = "0.1"

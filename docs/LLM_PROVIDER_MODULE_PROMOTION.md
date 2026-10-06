@@ -1,16 +1,16 @@
 # LLM Provider Module Promotion Criteria
 
 Status: **Decision document for P10.3.2**
-Owner: AgentFlow core / `agentflow-llm`
+Owner: Yanshi core / `yanshi-llm`
 Last updated: 2026-05-20
 Closes: P10.3.2 (Medium — v1.x)
 
-`agentflow-llm` ships dedicated provider modules for 5 vendors
+`yanshi-llm` ships dedicated provider modules for 5 vendors
 (`OpenAI`, `Anthropic`, `Google`, `Moonshot`, `StepFun`) plus a
 `Mock`. Four more OpenAI-compat vendors — **GLM (Zhipu)**,
 **DashScope (Alibaba)**, **DeepSeek**, and **MiniMax** — share the
 `OpenAIProvider` implementation via `create_provider` in
-`agentflow-llm/src/providers/mod.rs:242-256`. P10.3.2 is the
+`yanshi-llm/src/providers/mod.rs:242-256`. P10.3.2 is the
 placeholder for "would we ever peel one of those off into its own
 module?"
 
@@ -42,7 +42,7 @@ streaming / tool-calling code:
 | Multimodal `content: [{type, …}]` | ✅ | ✅ | ✅ | ⚠️ (text-only family today) | ✅ |
 | Bearer-token auth header | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-Verification: `agentflow-llm/tests/provider_consistency_live.rs`
+Verification: `yanshi-llm/tests/provider_consistency_live.rs`
 runs the four `cross_provider_*_paths_*_uniform_*` invariants
 against all four shared-adapter vendors in the nightly
 `llm-live.yml` GitHub Action. Tonight's run is the running proof
@@ -97,7 +97,7 @@ for that specific vendor:
    to escape.
 
 6. **Operator-side request.** A real downstream consumer of
-   `agentflow-llm` files an issue saying "I need feature X from
+   `yanshi-llm` files an issue saying "I need feature X from
    vendor Y and the shared adapter eats it." Empirical demand
    beats hypothetical purity.
 
@@ -110,20 +110,20 @@ suite passes for all four shared-adapter vendors.
 
 When the trigger fires for vendor `V`, the change is mechanical:
 
-1. **New file** `agentflow-llm/src/providers/<v>.rs` (~300-500
+1. **New file** `yanshi-llm/src/providers/<v>.rs` (~300-500
    LoC per the TODO estimate). Implements `LLMProvider`. Starts
    as a copy-of-`OpenAIProvider` minus the bits the divergence
    moves to. *Do not* generalise prematurely — copy first, then
    refactor common helpers up if a second vendor extracts later.
 
 2. **Dispatch update** in
-   `agentflow-llm/src/providers/mod.rs::create_provider`: change
+   `yanshi-llm/src/providers/mod.rs::create_provider`: change
    `"v" => Ok(Box::new(OpenAIProvider::new(...)))` to
    `"v" => Ok(Box::new(VProvider::new(...)))`. Drop the
    `"<vendor> is OpenAI-compatible"` comment.
 
 3. **Consistency tests** in
-   `agentflow-llm/tests/provider_consistency_live.rs`: the
+   `yanshi-llm/tests/provider_consistency_live.rs`: the
    vendor was already covered by the cross-provider suite. The
    peel-off shouldn't break that coverage; if it does, the
    peel-off was premature.
@@ -135,7 +135,7 @@ When the trigger fires for vendor `V`, the change is mechanical:
 5. **Docs**: update the wire-shape table at the top of this
    file (mark the divergence row with ⚠️ or ❌ for the vendor),
    and add a one-line entry to the vendor's row in
-   `agentflow-llm/templates/default_models.yml` describing
+   `yanshi-llm/templates/default_models.yml` describing
    what changed.
 
 The total per-vendor cost is roughly:
@@ -187,16 +187,16 @@ only ensuring the next contributor has clear criteria.
 
 ## References
 
-- `agentflow-llm/src/providers/mod.rs::create_provider` — the
+- `yanshi-llm/src/providers/mod.rs::create_provider` — the
   current dispatch table.
-- `agentflow-llm/src/providers/openai.rs` — the shared adapter.
-- `agentflow-llm/tests/provider_consistency_live.rs` — the
+- `yanshi-llm/src/providers/openai.rs` — the shared adapter.
+- `yanshi-llm/tests/provider_consistency_live.rs` — the
   cross-provider invariants that fire when divergence happens.
 - `.github/workflows/llm-live.yml` — nightly cross-provider
   live suite. Per-provider tests self-skip when the
   corresponding `*_API_KEY` secret is absent, so flipping a
   single provider is safe.
-- `agentflow-llm/templates/default_models.yml` — the
+- `yanshi-llm/templates/default_models.yml` — the
   authoritative model registry; vendor-specific divergence
   shows up here first.
 - `docs/WASM_PLUGIN_EVALUATION.md` (P10.19.1) — the template

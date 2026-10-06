@@ -354,7 +354,7 @@ mod tests {
       root.path(),
       r#"{
         "benchmarks": {
-          "agentflow-core/scheduler": {
+          "yanshi-core/scheduler": {
             "scheduler/flow_linear/serial/10": { "median_ns": 1000000 }
           }
         }
@@ -380,7 +380,7 @@ mod tests {
       root.path(),
       r#"{
         "benchmarks": {
-          "agentflow-core/scheduler": {
+          "yanshi-core/scheduler": {
             "scheduler/flow_linear/serial/10": { "median_ns": 1000000 }
           }
         }
@@ -407,7 +407,7 @@ mod tests {
       root.path(),
       r#"{
         "benchmarks": {
-          "agentflow-core/scheduler": {
+          "yanshi-core/scheduler": {
             "scheduler/flow_linear/serial/10": { "median_ns": 1000000 }
           }
         }
@@ -434,7 +434,7 @@ mod tests {
       root.path(),
       r#"{
         "benchmarks": {
-          "agentflow-core/scheduler": {
+          "yanshi-core/scheduler": {
             "scheduler/flow_linear/serial/10": { "median_ns": 1000000 }
           }
         }

@@ -1,6 +1,6 @@
 # Extensibility Model
 
-AgentFlow currently has a layered extension model built around Rust nodes,
+Yanshi currently has a layered extension model built around Rust nodes,
 runtime tools, MCP servers, Skills, local and remote marketplace catalogs, and
 subprocess plugins.
 
@@ -10,7 +10,7 @@ subprocess plugins.
 | --- | --- | --- |
 | Add deterministic workflow behavior inside a DAG | Rust node | Nodes participate in `Flow` dependency ordering, checkpointing, and workflow state. |
 | Let an agent call a local function or wrapper | Tool | Tools are runtime-callable functions registered in `ToolRegistry`. |
-| Expose tools implemented outside AgentFlow | MCP server | MCP provides an external protocol/transport boundary; discovered tools are adapted into `ToolRegistry`. |
+| Expose tools implemented outside Yanshi | MCP server | MCP provides an external protocol/transport boundary; discovered tools are adapted into `ToolRegistry`. |
 | Package an agent capability for reuse | Skill | Skills combine persona, model defaults, tools, MCP servers, knowledge, memory, and security. |
 | Share Skills or Plugins inside a repo or organization | Skill registry / marketplace catalog | Index and marketplace files resolve packages; remote marketplace entries are verified before being cached locally. |
 | Load arbitrary workflow extensions dynamically | Plugin | Subprocess JSON-RPC plugins provide process isolation, a manifest, lifecycle handshake, workflow node execution, and sandbox handoff. |
@@ -21,7 +21,7 @@ subprocess plugins.
 
 A Rust node implements workflow behavior for deterministic DAG execution. Use a
 node when the work belongs inside a workflow graph and should be orchestrated by
-`agentflow-core::Flow`.
+`yanshi-core::Flow`.
 
 Current surfaces:
 
@@ -48,13 +48,13 @@ tool implementation runs.
 ### MCP
 
 MCP is the external tool transport/protocol boundary. An MCP server owns its
-implementation and schema; AgentFlow connects to it, lists tools, validates
+implementation and schema; Yanshi connects to it, lists tools, validates
 tool arguments against `inputSchema`, and adapts each remote tool into the local
 `ToolRegistry`.
 
 Use MCP when:
 
-- the tool implementation already exists outside AgentFlow;
+- the tool implementation already exists outside Yanshi;
 - a separate process/runtime is desirable;
 - the boundary should be protocol-based rather than linked into Rust.
 
@@ -93,7 +93,7 @@ Current catalog behavior:
   verification.
 
 Remote `install` currently stops at the verified artifact cache. Package-specific
-unpack into `~/.agentflow/skills` or `~/.agentflow/plugins` is the remaining
+unpack into `~/.yanshi/skills` or `~/.yanshi/plugins` is the remaining
 handoff step.
 
 ### Plugin
@@ -109,12 +109,12 @@ Current plugin behavior:
   drop-time cleanup;
 - workflow YAML node type `plugin` routed through the CLI executor when built
   with the `plugin` feature;
-- `agentflow plugin install|list|inspect|uninstall` for local plugin
+- `yanshi plugin install|list|inspect|uninstall` for local plugin
   management;
-- sandbox bridge through `AGENTFLOW_PLUGIN_SANDBOX=1`, translating plugin
+- sandbox bridge through `YANSHI_PLUGIN_SANDBOX=1`, translating plugin
   manifest capabilities into the same OS sandbox backend used by process tools;
-- reference `agentflow-echo-plugin` binary and host demo under
-  `agentflow-core`.
+- reference `yanshi-echo-plugin` binary and host demo under
+  `yanshi-core`.
 
 The first runtime is deliberately subprocess-based. WASM remains a possible
 future runtime tier; native `dlopen` is not part of the supported extension

@@ -1,6 +1,6 @@
 # Skills
 
-Skills package reusable agent capabilities for AgentFlow. A skill can define:
+Skills package reusable agent capabilities for Yanshi. A skill can define:
 
 - Agent instructions and persona.
 - Runtime limits such as model name, max iterations, and token budget.
@@ -112,7 +112,7 @@ my-skill/
     summarize.sh
 ```
 
-When the skill is built, AgentFlow registers one `script` tool rooted at that directory. The script tool always validates wrapper parameters with JSON Schema before execution. By default it only accepts a plain `script` filename ending in `.py`, `.sh`, or `.js`, plus optional `args`; extra top-level parameters are rejected.
+When the skill is built, Yanshi registers one `script` tool rooted at that directory. The script tool always validates wrapper parameters with JSON Schema before execution. By default it only accepts a plain `script` filename ending in `.py`, `.sh`, or `.js`, plus optional `args`; extra top-level parameters are rejected.
 
 Script parameters can be further constrained with a JSON schema through `skill.toml`:
 
@@ -131,7 +131,7 @@ type = "string"
 type = "array"
 ```
 
-For sandboxing, script tools resolve and canonicalize the target path before execution. Symlinks or paths that escape `scripts/` are rejected. If a skill declares only the `script` tool and omits `allowed_commands`, AgentFlow allows only the known script interpreters: `python3`, `bash`, and `node`.
+For sandboxing, script tools resolve and canonicalize the target path before execution. Symlinks or paths that escape `scripts/` are rejected. If a skill declares only the `script` tool and omits `allowed_commands`, Yanshi allows only the known script interpreters: `python3`, `bash`, and `node`.
 
 ## Code Execution Tool
 
@@ -148,12 +148,12 @@ Declare it the same way as any other tool — no additional constraint fields ar
 - Every call gets a fresh, disposable working directory, discarded when the call returns.
 - No network access at all, always — there is no opt-in yet (an egress allowlist proxy is a planned prerequisite before that changes).
 - Resident memory, CPU time, and process count are capped (256 MiB / 30 CPU-seconds / 32 processes as of this writing) and enforced by the container engine.
-- Requires a container engine on the host. If none is available, `code_exec` refuses every call rather than running unsandboxed — check `agentflow doctor` or `agentflow skill inspect --explain-permissions` for the current status.
+- Requires a container engine on the host. If none is available, `code_exec` refuses every call rather than running unsandboxed — check `yanshi doctor` or `yanshi skill inspect --explain-permissions` for the current status.
 - Only Python is supported in this version.
 
 ## MCP Tools
 
-Skills can mount MCP servers declaratively. AgentFlow starts the configured server, calls `list_tools`, and registers each discovered remote tool in the local `ToolRegistry`.
+Skills can mount MCP servers declaratively. Yanshi starts the configured server, calls `list_tools`, and registers each discovered remote tool in the local `ToolRegistry`.
 
 ```markdown
 ---
@@ -184,7 +184,7 @@ Names are lowercased, non-alphanumeric characters are normalized to underscores,
 
 Relative MCP command parts such as `./server.py` are resolved from the skill directory. MCP connect, discovery, and tool calls use `timeout_secs`, defaulting to 30 seconds.
 
-MCP startup is governed by `[security]` in `skill.toml` or matching frontmatter fields in `SKILL.md`. By default, AgentFlow allows only common stdio server launchers (`python`, `python3`, `node`, `npx`, `uvx`), limits a skill to 4 MCP servers, clamps MCP timeouts to 1-120 seconds, and admits at most 4 concurrent calls per server. If an MCP server forwards environment variables, list their names in `mcp_env_allowlist`; audit logs record command names and env keys, never env values.
+MCP startup is governed by `[security]` in `skill.toml` or matching frontmatter fields in `SKILL.md`. By default, Yanshi allows only common stdio server launchers (`python`, `python3`, `node`, `npx`, `uvx`), limits a skill to 4 MCP servers, clamps MCP timeouts to 1-120 seconds, and admits at most 4 concurrent calls per server. If an MCP server forwards environment variables, list their names in `mcp_env_allowlist`; audit logs record command names and env keys, never env values.
 
 Tool execution is also governed at call time. Set `tool_permission_allowlist` under `[security]` to restrict registered tools by permission category such as `filesystem_read`, `filesystem_write`, `process_exec`, `network`, `mcp`, or `workflow`. Empty means all registered tool permissions are allowed.
 
@@ -194,7 +194,7 @@ See [MCP_SKILLS.md](MCP_SKILLS.md) for the MCP Skills usage guide and [MCP_SKILL
 
 There are two ways to add local context:
 
-- `references/`: standard Skill directory for Markdown or text files. AgentFlow loads `.md` and `.txt` files in deterministic order and injects them into the persona.
+- `references/`: standard Skill directory for Markdown or text files. Yanshi loads `.md` and `.txt` files in deterministic order and injects them into the persona.
 - `[[knowledge]]`: `skill.toml` entries for explicit files or glob patterns.
 
 Example:
@@ -261,7 +261,7 @@ chunk_overlap = 0
   chunks.
 - `"heading"` — splits Markdown documents at heading boundaries.
 - `"code_ast"` — splits Rust source at function/impl boundaries (requires
-  `agentflow-rag`'s `code-chunking` feature; source must be valid Rust).
+  `yanshi-rag`'s `code-chunking` feature; source must be valid Rust).
 - `"semantic"` — splits at topic boundaries detected via embedding
   similarity between sentences, instead of a fixed size. Requires an OpenAI
   API key — see below.
@@ -306,7 +306,7 @@ Skills can configure memory in `skill.toml`:
 ```toml
 [memory]
 type = "sqlite"
-db_path = "~/.agentflow/memory/repo-helper.db"
+db_path = "~/.yanshi/memory/repo-helper.db"
 window_tokens = 8000
 ```
 
@@ -323,7 +323,7 @@ Supported values are:
 Create a new skill scaffold:
 
 ```bash
-cargo run -p agentflow-cli -- skill init ./my-skill \
+cargo run -p yanshi-cli -- skill init ./my-skill \
   --description "Describe when this skill should be used."
 ```
 
@@ -332,50 +332,50 @@ The scaffold includes `SKILL.md`, `README.md`, `references/example.md`, `scripts
 Inspect a shared registry index:
 
 ```bash
-cargo run -p agentflow-cli -- skill index validate agentflow-skills/examples/skills.index.toml
-cargo run -p agentflow-cli -- skill index list agentflow-skills/examples/skills.index.toml
-cargo run -p agentflow-cli -- skill index resolve agentflow-skills/examples/skills.index.toml mcp-demo
+cargo run -p yanshi-cli -- skill index validate yanshi-skills/examples/skills.index.toml
+cargo run -p yanshi-cli -- skill index list yanshi-skills/examples/skills.index.toml
+cargo run -p yanshi-cli -- skill index resolve yanshi-skills/examples/skills.index.toml mcp-demo
 ```
 
-`skills.index.toml` is a local, organization-owned catalog. Each entry pins a skill `version` and can optionally lock the manifest with `manifest_sha256`. Relative `path` values are resolved from the index file directory, so a repository can keep shared skills and the index side by side. The checked-in example resolves `mcp-demo` to `agentflow-skills/examples/skills/mcp-basic`. See [SKILL_REGISTRY.md](SKILL_REGISTRY.md) for the schema, compatibility policy, locking model, install flow, and future remote registry boundaries.
+`skills.index.toml` is a local, organization-owned catalog. Each entry pins a skill `version` and can optionally lock the manifest with `manifest_sha256`. Relative `path` values are resolved from the index file directory, so a repository can keep shared skills and the index side by side. The checked-in example resolves `mcp-demo` to `yanshi-skills/examples/skills/mcp-basic`. See [SKILL_REGISTRY.md](SKILL_REGISTRY.md) for the schema, compatibility policy, locking model, install flow, and future remote registry boundaries.
 
 Install a skill from a local registry index:
 
 ```bash
-cargo run -p agentflow-cli -- skill install agentflow-skills/examples/skills.index.toml mcp-demo \
-  --dir /tmp/agentflow-skills
-cargo run -p agentflow-cli -- skill validate /tmp/agentflow-skills/mcp-basic
+cargo run -p yanshi-cli -- skill install yanshi-skills/examples/skills.index.toml mcp-demo \
+  --dir /tmp/yanshi-skills
+cargo run -p yanshi-cli -- skill validate /tmp/yanshi-skills/mcp-basic
 ```
 
-`skill install` copies the resolved local skill directory into the target skills directory using the canonical skill name as the destination directory. It refuses to overwrite an existing skill unless `--force` is passed. The default target is `~/.agentflow/skills`.
+`skill install` copies the resolved local skill directory into the target skills directory using the canonical skill name as the destination directory. It refuses to overwrite an existing skill unless `--force` is passed. The default target is `~/.yanshi/skills`.
 
 Browse a Skill catalog that groups one or more registry indexes:
 
 ```bash
-cargo run -p agentflow-cli -- skill marketplace list agentflow-skills/examples/marketplace.toml
-cargo run -p agentflow-cli -- skill marketplace resolve agentflow-skills/examples/marketplace.toml mcp-demo
+cargo run -p yanshi-cli -- skill marketplace list yanshi-skills/examples/marketplace.toml
+cargo run -p yanshi-cli -- skill marketplace resolve yanshi-skills/examples/marketplace.toml mcp-demo
 ```
 
 Marketplace files are Skill catalogs only. They point at registry indexes and print
-the matching `agentflow skill install <index_file> <skill>` command; install
+the matching `yanshi skill install <index_file> <skill>` command; install
 still validates and copies from the resolved registry index.
 
 Validate a skill:
 
 ```bash
-cargo run -p agentflow-cli -- skill validate agentflow-skills/examples/skills/mcp-basic
+cargo run -p yanshi-cli -- skill validate yanshi-skills/examples/skills/mcp-basic
 ```
 
 List all tools exposed by a skill:
 
 ```bash
-cargo run -p agentflow-cli -- skill list-tools agentflow-skills/examples/skills/mcp-basic
+cargo run -p yanshi-cli -- skill list-tools yanshi-skills/examples/skills/mcp-basic
 ```
 
 Run the skill test gate:
 
 ```bash
-cargo run -p agentflow-cli -- skill test agentflow-skills/examples/skills/mcp-basic
+cargo run -p yanshi-cli -- skill test yanshi-skills/examples/skills/mcp-basic
 ```
 
 `skill test` runs manifest validation, tool discovery, and built-in minimal regressions. For the default scaffold it invokes `scripts/hello.py` through the script tool. Pass `--smoke` to also run `tests/smoke.sh` when present.
@@ -383,14 +383,14 @@ cargo run -p agentflow-cli -- skill test agentflow-skills/examples/skills/mcp-ba
 Run one message through a skill:
 
 ```bash
-cargo run -p agentflow-cli -- skill run agentflow-skills/examples/skills/mcp-basic \
+cargo run -p yanshi-cli -- skill run yanshi-skills/examples/skills/mcp-basic \
   --message "echo hello through MCP"
 ```
 
 Start an interactive session:
 
 ```bash
-cargo run -p agentflow-cli -- skill chat agentflow-skills/examples/skills/mcp-basic
+cargo run -p yanshi-cli -- skill chat yanshi-skills/examples/skills/mcp-basic
 ```
 
 `skill run` and `skill chat` build a `ReActAgent` from the manifest, attach the built tool registry, and execute through the agent runtime. Use `--trace` with `skill run` to print the structured runtime trace.

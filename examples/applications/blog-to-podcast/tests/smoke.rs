@@ -20,12 +20,12 @@ fn binary_path() -> PathBuf {
   PathBuf::from(env!("CARGO_BIN_EXE_blog-to-podcast"))
 }
 
-/// Mirror `load_agentflow_dotenv` in main.rs so the live test's
+/// Mirror `load_yanshi_dotenv` in main.rs so the live test's
 /// env-var presence checks see the same keys the spawned binary
 /// would. No-op when the file is missing.
-fn load_agentflow_dotenv() {
+fn load_yanshi_dotenv() {
   if let Some(home) = std::env::home_dir() {
-    let _ = dotenvy::from_path(home.join(".agentflow").join(".env"));
+    let _ = dotenvy::from_path(home.join(".yanshi").join(".env"));
   }
 }
 
@@ -73,7 +73,7 @@ fn unknown_flag_errors() {
 #[test]
 #[ignore = "requires MOONSHOT_API_KEY + (MINIMAX_API_KEY or EDGE_TTS_OK=1); run with --ignored"]
 fn live_blog_to_podcast_produces_audio_and_srt() {
-  load_agentflow_dotenv();
+  load_yanshi_dotenv();
   let moonshot = std::env::var("MOONSHOT_API_KEY");
   if moonshot.is_err() {
     eprintln!("skipping: MOONSHOT_API_KEY not set");

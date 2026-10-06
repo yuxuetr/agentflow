@@ -226,22 +226,20 @@ mod check_changelog_tests {
     assert!(is_trivial_changelog_path("README.md"));
     assert!(is_trivial_changelog_path("CHANGELOG.md"));
     assert!(is_trivial_changelog_path("Cargo.lock"));
-    assert!(is_trivial_changelog_path("agentflow-ui/package-lock.json"));
+    assert!(is_trivial_changelog_path("yanshi-ui/package-lock.json"));
     assert!(is_trivial_changelog_path(".gitignore"));
     assert!(is_trivial_changelog_path(".github/workflows/quality.yml"));
     assert!(is_trivial_changelog_path("tests/foo.rs"));
+    assert!(is_trivial_changelog_path("yanshi-llm/tests/integration.rs"));
     assert!(is_trivial_changelog_path(
-      "agentflow-llm/tests/integration.rs"
+      "yanshi-cli/tests/fixtures/x.json"
     ));
-    assert!(is_trivial_changelog_path(
-      "agentflow-cli/tests/fixtures/x.json"
-    ));
-    assert!(is_trivial_changelog_path("agentflow-ui/src/foo.test.ts"));
+    assert!(is_trivial_changelog_path("yanshi-ui/src/foo.test.ts"));
 
     // Real source files must NOT be classified as trivial.
-    assert!(!is_trivial_changelog_path("agentflow-core/src/flow.rs"));
-    assert!(!is_trivial_changelog_path("agentflow-cli/Cargo.toml"));
-    assert!(!is_trivial_changelog_path("agentflow-ui/src/main.tsx"));
+    assert!(!is_trivial_changelog_path("yanshi-core/src/flow.rs"));
+    assert!(!is_trivial_changelog_path("yanshi-cli/Cargo.toml"));
+    assert!(!is_trivial_changelog_path("yanshi-ui/src/main.tsx"));
   }
 
   #[test]

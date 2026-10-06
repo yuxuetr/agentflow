@@ -1,12 +1,20 @@
-# AgentFlow V2
+# Yanshi 偃师
 
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Documentation](https://img.shields.io/badge/docs-manual-green.svg)](https://yuxuetr.github.io/agentflow/)
+[![Documentation](https://img.shields.io/badge/docs-manual-green.svg)](https://yuxuetr.github.io/yanshi/)
 
 > **A modular Rust agent framework for deterministic DAG workflows, agent-native execution loops, Skills, MCP tools, memory, tracing, and checkpointed recovery.**
 
-AgentFlow V2 is evolving from a workflow orchestration engine into an agent framework with a shared runtime foundation. It supports deterministic DAG workflows for production automation and agent-native loops for planning, tool use, reflection, memory, and multi-step decision making.
+**About the name.** In the *Liezi* (列子·汤问), the artificer Yanshi (偃师) presents
+King Mu of Zhou with a figure that sings, dances and acts on its own — and, taken
+apart, turns out to be nothing but leather, wood, glue and lacquer, assembled
+by structure, that "works again as before" once put back together. It is the
+oldest Chinese account of a built autonomous agent, and the idea this project
+is built on: autonomous agents assembled from explicit, inspectable structure
+(workflows, contracts, tools) that can be traced, replayed and recomposed.
+
+Yanshi V2 is evolving from a workflow orchestration engine into an agent framework with a shared runtime foundation. It supports deterministic DAG workflows for production automation and agent-native loops for planning, tool use, reflection, memory, and multi-step decision making.
 
 For the maintained snapshot of implemented surfaces, stability boundaries, and
 active work, see [docs/CURRENT_STATUS.md](docs/CURRENT_STATUS.md). For the
@@ -16,7 +24,7 @@ context windows, error mapping, rate-limit handling), see
 
 ## 🏗️ Architecture: Shared Runtime For Workflows And Agents
 
-AgentFlow is built on five core principles:
+Yanshi is built on five core principles:
 
 1. **Directed Acyclic Graph (DAG)**: Workflows are defined as graphs where nodes have explicit dependencies.
 2. **Agent-native runtime**: Agents record observe, plan, tool call, tool result, reflection, and final answer steps.
@@ -26,19 +34,19 @@ AgentFlow is built on five core principles:
 
 ## 🤖 Agent Framework Positioning
 
-AgentFlow supports **four execution paradigms** on one shared runtime — points on a
+Yanshi supports **four execution paradigms** on one shared runtime — points on a
 single *planning / binding-time* spectrum, from fully-fixed to decided-every-step:
 
-- **Static DAG** — `agentflow-core::Flow` for deterministic production pipelines,
+- **Static DAG** — `yanshi-core::Flow` for deterministic production pipelines,
   batch jobs, RAG flows, and business processes (the plan is authored up front).
-- **Native agent loop** — `agentflow-agents::ReActAgent` for autonomous
+- **Native agent loop** — `yanshi-agents::ReActAgent` for autonomous
   observe/plan/act loops with tool use, reflection, memory, and runtime guards
   (the plan is decided every step).
 - **Dynamic workflow** — an agent *generates* a plan at runtime that compiles to a
-  `Flow` and executes deterministically: `agentflow_agents::dynamic::{compile_plan_to_flow,
+  `Flow` and executes deterministically: `yanshi_agents::dynamic::{compile_plan_to_flow,
   DynamicWorkflowAgent}`. One up-front planning decision, then a replayable,
   parallel DAG — the flexibility of an agent with the reliability of a workflow.
-- **Harness governance** — `agentflow-harness` wraps a runtime with approval,
+- **Harness governance** — `yanshi-harness` wraps a runtime with approval,
   hooks, sandbox, audit, limits, and background tasks.
 
 Two orthogonal axes round it out: a shared **capability substrate** (Tools, MCP,
@@ -48,7 +56,7 @@ RAG, Memory, Skills — all paradigms call the same `ToolRegistry`) and the
 - Use **`AgentNode`** to embed an agent *in* a DAG (a Flow step that is an agent).
 - Use **`WorkflowTool`** to expose a DAG *as* a tool to an agent.
 
-These unify at a narrow **contract kernel** (`agentflow-value` / `-graph` /
+These unify at a narrow **contract kernel** (`yanshi-value` / `-graph` /
 `-store-spi` / `-agent-spi` / `-async-util`): the runtimes never depend on each
 other, only on shared contracts. See
 [`docs/ARCHITECTURE.md` § Four Execution Paradigms](docs/ARCHITECTURE.md#four-execution-paradigms--mental-model)
@@ -61,14 +69,14 @@ for the full three-axis mental model (with an honest model-vs-code status), and
 For developers who need maximum power and type-safety.
 
 ```rust
-use agentflow_core::{
+use yanshi_core::{
     FlowExt, // brings `flow.run()` into scope (the executor for the graph IR)
     flow::{Flow, GraphNode, NodeType},
     async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
     value::FlowValue,
 };
-use agentflow_nodes::nodes::llm::LlmNode;
-use agentflow_nodes::nodes::template::TemplateNode;
+use yanshi_nodes::nodes::llm::LlmNode;
+use yanshi_nodes::nodes::template::TemplateNode;
 use std::collections::HashMap;
 use std::sync::Arc;
 use serde_json::json;
@@ -145,7 +153,7 @@ nodes:
 
 ```bash
 # Execute via CLI
-agentflow workflow run workflow_v2.yml
+yanshi workflow run workflow_v2.yml
 ```
 
 ## 🚀 Key V2 Features
@@ -155,7 +163,7 @@ agentflow workflow run workflow_v2.yml
 - **DAG Execution Engine**: Workflows are defined with explicit `dependencies` for clear, traceable execution.
 - **Explicit Input Mapping**: The `input_mapping` field provides full control over data flow between nodes.
 - **Powerful Control Flow**: Native support for conditional execution (`run_if`), `while` loops, and `map` iteration (with parallel execution support).
-- **File-based Persistence**: Each workflow run is saved to a unique directory for debugging and auditing; `workflow run --run-dir` or `AGENTFLOW_RUN_DIR` can make the base path explicit.
+- **File-based Persistence**: Each workflow run is saved to a unique directory for debugging and auditing; `workflow run --run-dir` or `YANSHI_RUN_DIR` can make the base path explicit.
 - **Agent Runtime**: ReAct-compatible runtime with structured steps/events, stop reasons, reflection hooks, runtime guards, and golden test coverage.
 - **Hybrid DAG + Agent Execution**: `AgentNode` embeds agents in DAGs; `WorkflowTool` lets agents call DAG workflows.
 - **Skills + MCP Tools**: Skills can declare MCP servers, discover tools, expose schemas, and call them through the unified tool registry.
@@ -164,13 +172,13 @@ agentflow workflow run workflow_v2.yml
 
 ## ✨ New in v0.2.0: Production-Ready Stability
 
-AgentFlow v0.2.0 introduces comprehensive stability and observability improvements for production workflows. The 2026-05-24 deep audit (`docs/audit/`) flagged several gaps in the retry / timeout / checkpoint paths; those are tracked in `TODOs.md` under the Q2 wave and progressively hardened — most recently `ExponentialBackoff` jitter (Q2.4.2), retry error-cause preservation (Q2.4.3), and graceful Ctrl-C / SIGTERM handling for CLI + worker + server (Q3.1.1 / Q3.1.2 / Q3.1.3). The examples below reflect the post-audit shape; see `TODOs.md` "Quality Gates" for any open items.
+Yanshi v0.2.0 introduces comprehensive stability and observability improvements for production workflows. The 2026-05-24 deep audit (`docs/audit/`) flagged several gaps in the retry / timeout / checkpoint paths; those are tracked in `TODOs.md` under the Q2 wave and progressively hardened — most recently `ExponentialBackoff` jitter (Q2.4.2), retry error-cause preservation (Q2.4.3), and graceful Ctrl-C / SIGTERM handling for CLI + worker + server (Q3.1.1 / Q3.1.2 / Q3.1.3). The examples below reflect the post-audit shape; see `TODOs.md` "Quality Gates" for any open items.
 
 ### 🔄 Retry Mechanism
 Automatic retry with configurable strategies for handling transient failures.
 
 ```rust
-use agentflow_core::{RetryPolicy, RetryStrategy, execute_with_retry};
+use yanshi_core::{RetryPolicy, RetryStrategy, execute_with_retry};
 
 let policy = RetryPolicy::builder()
     .max_attempts(3)
@@ -191,7 +199,7 @@ let result = execute_with_retry(&policy, "api_call", || async {
 Detailed error tracking with full execution context and history.
 
 ```rust
-use agentflow_core::{execute_with_retry_and_context, ErrorContext};
+use yanshi_core::{execute_with_retry_and_context, ErrorContext};
 
 let result = execute_with_retry_and_context(
     &policy, "run_123", "process_node", Some("processor"),
@@ -211,23 +219,23 @@ Interactive workflow debugging and inspection via CLI.
 
 ```bash
 # Validate workflow configuration
-agentflow workflow debug workflow.yml --validate
+yanshi workflow debug workflow.yml --validate
 
 # Visualize DAG structure
-agentflow workflow debug workflow.yml --visualize
+yanshi workflow debug workflow.yml --visualize
 
 # Analyze complexity and bottlenecks
-agentflow workflow debug workflow.yml --analyze
+yanshi workflow debug workflow.yml --analyze
 
 # Dry-run without execution
-agentflow workflow debug workflow.yml --dry-run --verbose
+yanshi workflow debug workflow.yml --dry-run --verbose
 ```
 
 ### 💾 Resource Management
 Configurable memory limits with automatic cleanup and monitoring.
 
 ```rust
-use agentflow_core::{ResourceLimits, StateMonitor};
+use yanshi_core::{ResourceLimits, StateMonitor};
 
 let limits = ResourceLimits::builder()
     .max_state_size(100 * 1024 * 1024)  // 100 MB
@@ -251,7 +259,7 @@ if monitor.should_cleanup() {
 Comprehensive timeout management for async operations.
 
 ```rust
-use agentflow_core::timeout::{with_timeout, TimeoutConfig};
+use yanshi_core::timeout::{with_timeout, TimeoutConfig};
 
 let config = TimeoutConfig::production();
 
@@ -265,7 +273,7 @@ let result = with_timeout(
 Kubernetes-compatible health and readiness monitoring.
 
 ```rust
-use agentflow_core::health::{HealthChecker, HealthStatus};
+use yanshi_core::health::{HealthChecker, HealthStatus};
 
 let checker = HealthChecker::new();
 
@@ -285,7 +293,7 @@ let report = checker.check_health().await;
 Persistent workflow state for fault tolerance and resumability.
 
 ```rust
-use agentflow_core::checkpoint::{CheckpointManager, CheckpointConfig};
+use yanshi_core::checkpoint::{CheckpointManager, CheckpointConfig};
 
 let config = CheckpointConfig::default();
 let manager = CheckpointManager::new(config)?;
@@ -326,7 +334,7 @@ cargo check --workspace
 
 ### Core Documentation
 - **[Docs Index](docs/README.md)**: Current documentation entry point.
-- **[RoadMap](RoadMap.md)**: Current direction for evolving AgentFlow into a DAG + agent framework.
+- **[RoadMap](RoadMap.md)**: Current direction for evolving Yanshi into a DAG + agent framework.
 - **[Architecture](docs/ARCHITECTURE.md)**: The four-paradigm mental model (with an honest model-vs-code status), workspace layout, runtime model, CLI surface, and persistence.
 - **[Crate Architecture RFC](docs/RFC_CRATE_ARCHITECTURE.md)** + **[Evaluation](docs/ARCHITECTURE_EVALUATION_2026-06-20.md)**: The contract-kernel design (narrow-waist `value`/`graph`/`store-spi`/`agent-spi`/`async-util` + eight dependency laws, enforced by `cargo xtask check-arch`) and its dependency-graph validation.
 - **[Configuration](docs/CONFIGURATION.md)**: CLI config, secrets, workflow YAML, and run directories.
@@ -339,7 +347,7 @@ cargo check --workspace
 ### v0.2.0 Feature Guides
 - **[Retry Mechanism](docs/RETRY_MECHANISM.md)**: Comprehensive guide to retry configuration and strategies
 - **[Workflow Debugging](docs/WORKFLOW_DEBUGGING.md)**: CLI debugging tools and workflow visualization
-- **[Resource Management (archived)](docs/archive/RESOURCE_MANAGEMENT_2026-08-12-pre-w5.3.md)**: Superseded by an advisory-only `ResourceLimits` warning (see `agentflow-core/src/scheduler.rs`'s `FlowExecutionConfig::resource_limits`) — the eviction/monitoring design this doc described was never wired in and part of it was found unsafe (W5.3)
+- **[Resource Management (archived)](docs/archive/RESOURCE_MANAGEMENT_2026-08-12-pre-w5.3.md)**: Superseded by an advisory-only `ResourceLimits` warning (see `yanshi-core/src/scheduler.rs`'s `FlowExecutionConfig::resource_limits`) — the eviction/monitoring design this doc described was never wired in and part of it was found unsafe (W5.3)
 - **[Timeout Control](docs/TIMEOUT_CONTROL.md)**: Operation timeout management and configuration
 - **[Health Checks](docs/HEALTH_CHECKS.md)**: Kubernetes-compatible health and readiness monitoring
 - **[Checkpoint Recovery](docs/CHECKPOINT_RECOVERY.md)**: Workflow state persistence and fault tolerance
@@ -347,31 +355,31 @@ cargo check --workspace
 - **[Release Notes v0.2.0](docs/RELEASE_NOTES_v0.2.0.md)**: Complete changelog and improvements
 
 ### Examples
-- `agentflow-core/examples/retry_example.rs`: Retry mechanism demonstrations
-- `agentflow-core/examples/fixed_dag_workflow.rs`: Deterministic fixed DAG workflow example
-- `agentflow-core/examples/resource_management_example.rs`: Resource monitoring examples
-- `agentflow-agents/examples/agent_native_react.rs`: Self-contained ReAct agent-native runtime example
-- `agentflow-agents/examples/react_agent.rs`: ReAct agent runtime example
-- `agentflow-agents/examples/hybrid_workflow_agent.rs`: DAG + Agent hybrid example
-- `agentflow-agents/examples/dynamic_workflow_spike.rs`: Dynamic workflow — a runtime generates a `Flow` and the engine executes it
-- `agentflow-agents/examples/dynamic_workflow_plan.rs`: Dynamic workflow from a declarative JSON plan, compiled to a parallel `Flow` of tool calls
-- `agentflow-skills/examples/skill_calls_mcp_tool.rs`: Skill-to-MCP tool call example
+- `yanshi-core/examples/retry_example.rs`: Retry mechanism demonstrations
+- `yanshi-core/examples/fixed_dag_workflow.rs`: Deterministic fixed DAG workflow example
+- `yanshi-core/examples/resource_management_example.rs`: Resource monitoring examples
+- `yanshi-agents/examples/agent_native_react.rs`: Self-contained ReAct agent-native runtime example
+- `yanshi-agents/examples/react_agent.rs`: ReAct agent runtime example
+- `yanshi-agents/examples/hybrid_workflow_agent.rs`: DAG + Agent hybrid example
+- `yanshi-agents/examples/dynamic_workflow_spike.rs`: Dynamic workflow — a runtime generates a `Flow` and the engine executes it
+- `yanshi-agents/examples/dynamic_workflow_plan.rs`: Dynamic workflow from a declarative JSON plan, compiled to a parallel `Flow` of tool calls
+- `yanshi-skills/examples/skill_calls_mcp_tool.rs`: Skill-to-MCP tool call example
 - `examples/skills/mcp-basic`: Minimal Skill with MCP server configuration
-- `agentflow-cli/examples/workflows/`: Complete workflow examples including AI research assistant
+- `yanshi-cli/examples/workflows/`: Complete workflow examples including AI research assistant
 
 ## 📦 Installation
 
 ### For Developers (Core SDK)
 ```toml
 [dependencies]
-agentflow-core = { path = "agentflow-core" }
-agentflow-nodes = { path = "agentflow-nodes" }
+yanshi-core = { path = "yanshi-core" }
+yanshi-nodes = { path = "yanshi-nodes" }
 ```
 
 ### For CLI Usage
 ```bash
-cargo install --path agentflow-cli
-agentflow --help
+cargo install --path yanshi-cli
+yanshi --help
 ```
 
 ## 🛣️ Development Plan

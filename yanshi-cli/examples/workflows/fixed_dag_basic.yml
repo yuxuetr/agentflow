@@ -1,0 +1,28 @@
+# Fixed DAG Basic Example
+#
+# No external API keys required.
+#
+# Dry run:
+#   yanshi workflow run yanshi-cli/examples/workflows/fixed_dag_basic.yml --dry-run
+#
+# Run:
+#   yanshi workflow run yanshi-cli/examples/workflows/fixed_dag_basic.yml \
+#     --input topic Yanshi \
+#     --output /tmp/yanshi-fixed-dag.json
+
+name: "Fixed DAG Basic"
+description: "A deterministic two-step template workflow."
+
+nodes:
+  - id: prepare
+    type: template
+    parameters:
+      template: "Topic: {{ topic | default(value='Yanshi') }}"
+
+  - id: summarize
+    type: template
+    dependencies: ["prepare"]
+    input_mapping:
+      prepared: "{{ nodes.prepare.outputs.output }}"
+    parameters:
+      template: "Summary generated from {{ prepared }}"

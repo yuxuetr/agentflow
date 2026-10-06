@@ -20,15 +20,15 @@ together.
 ## Validate Samples
 
 ```bash
-env CARGO_TARGET_DIR=/tmp/agentflow-target \
-  cargo run -p agentflow-cli -- skill validate examples/ecosystem/skills/code-reviewer
+env CARGO_TARGET_DIR=/tmp/yanshi-target \
+  cargo run -p yanshi-cli -- skill validate examples/ecosystem/skills/code-reviewer
 
-env CARGO_TARGET_DIR=/tmp/agentflow-target \
-  cargo run -p agentflow-cli --features plugin -- \
+env CARGO_TARGET_DIR=/tmp/yanshi-target \
+  cargo run -p yanshi-cli --features plugin -- \
   plugin inspect examples/ecosystem/plugins/echo
 
-env CARGO_TARGET_DIR=/tmp/agentflow-target \
-  cargo run -p agentflow-cli -- \
+env CARGO_TARGET_DIR=/tmp/yanshi-target \
+  cargo run -p yanshi-cli -- \
   marketplace search examples/ecosystem/marketplace/remote-marketplace.toml
 ```
 
@@ -46,16 +46,16 @@ The hybrid workflow includes:
 Validate the workflow without live services:
 
 ```bash
-env CARGO_TARGET_DIR=/tmp/agentflow-target \
-  cargo run -p agentflow-cli --features "mcp rag plugin" -- \
+env CARGO_TARGET_DIR=/tmp/yanshi-target \
+  cargo run -p yanshi-cli --features "mcp rag plugin" -- \
   workflow validate examples/ecosystem/workflows/hybrid_offline_demo.yml --strict
 ```
 
 Dry-run the workflow shape:
 
 ```bash
-env CARGO_TARGET_DIR=/tmp/agentflow-target \
-  cargo run -p agentflow-cli --features "mcp rag plugin" -- \
+env CARGO_TARGET_DIR=/tmp/yanshi-target \
+  cargo run -p yanshi-cli --features "mcp rag plugin" -- \
   workflow run examples/ecosystem/workflows/hybrid_offline_demo.yml --dry-run
 ```
 
@@ -64,22 +64,22 @@ collection, and model configuration. For a live run, set provider config,
 enable tracing, and point the RAG/MCP nodes at local services:
 
 ```bash
-export AGENTFLOW_TRACE_DIR=/tmp/agentflow-traces
-env CARGO_TARGET_DIR=/tmp/agentflow-target \
-  cargo run -p agentflow-cli --features "mcp rag plugin" -- \
+export YANSHI_TRACE_DIR=/tmp/yanshi-traces
+env CARGO_TARGET_DIR=/tmp/yanshi-target \
+  cargo run -p yanshi-cli --features "mcp rag plugin" -- \
   workflow run examples/ecosystem/workflows/hybrid_offline_demo.yml \
   --model mock-model \
-  --output /tmp/agentflow-hybrid-output.json
+  --output /tmp/yanshi-hybrid-output.json
 ```
 
 Then inspect the run through trace replay or the Web UI:
 
 ```bash
-env CARGO_TARGET_DIR=/tmp/agentflow-target \
-  cargo run -p agentflow-cli -- trace replay <run_id> --dir /tmp/agentflow-traces
+env CARGO_TARGET_DIR=/tmp/yanshi-target \
+  cargo run -p yanshi-cli -- trace replay <run_id> --dir /tmp/yanshi-traces
 
-env CARGO_TARGET_DIR=/tmp/agentflow-target \
-  cargo run -p agentflow-server
+env CARGO_TARGET_DIR=/tmp/yanshi-target \
+  cargo run -p yanshi-server
 ```
 
 Open `http://localhost:8080/ui` and paste the server run id when the workflow

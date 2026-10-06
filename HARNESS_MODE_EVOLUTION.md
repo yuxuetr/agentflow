@@ -4,13 +4,13 @@ Last updated: 2026-05-10
 
 ## Executive Summary
 
-This document evaluates how AgentFlow can evolve to support a Harness Agent
+This document evaluates how Yanshi can evolve to support a Harness Agent
 mode. The goal is not to clone OpenHarness. The goal is to absorb the useful
 runtime pattern behind Harness-style agents: a long-lived, tool-using,
 workspace-aware, governable, resumable agent session that can coordinate
 skills, tools, memory, background tasks, and multi-agent collaboration.
 
-Overall difficulty: **medium, about 5.5 / 10** for a practical AgentFlow-native
+Overall difficulty: **medium, about 5.5 / 10** for a practical Yanshi-native
 Harness Mode.
 
 Difficulty rises to **7.5 / 10 or higher** only if the target expands into a
@@ -20,8 +20,8 @@ multi-channel personal-assistant surfaces.
 
 Recommended positioning:
 
-> AgentFlow Harness Mode should be a Rust-native intelligent work-session layer
-> built on AgentFlow's existing DAG, AgentRuntime, ToolRegistry, Skill, MCP,
+> Yanshi Harness Mode should be a Rust-native intelligent work-session layer
+> built on Yanshi's existing DAG, AgentRuntime, ToolRegistry, Skill, MCP,
 > memory, tracing, checkpoint, and server foundations. It should not become a
 > parallel framework or a UI-first clone of OpenHarness.
 
@@ -36,7 +36,7 @@ Reference:
 
 - OpenHarness repository: <https://github.com/HKUDS/OpenHarness>
 
-For AgentFlow, the important part is the architectural pattern:
+For Yanshi, the important part is the architectural pattern:
 
 - The agent does not just answer a prompt.
 - The agent operates inside a workspace.
@@ -47,9 +47,9 @@ For AgentFlow, the important part is the architectural pattern:
 - The agent can stream structured progress.
 - The agent can recover from interruption.
 
-## Current AgentFlow Fit
+## Current Yanshi Fit
 
-AgentFlow already has many of the lower-level primitives needed for this mode.
+Yanshi already has many of the lower-level primitives needed for this mode.
 The missing work is mostly an integration layer and a stronger interactive
 runtime protocol.
 
@@ -57,7 +57,7 @@ runtime protocol.
 
 #### Agent Runtime
 
-AgentFlow already has a shared `AgentRuntime` abstraction with:
+Yanshi already has a shared `AgentRuntime` abstraction with:
 
 - `AgentContext`
 - `RuntimeLimits`
@@ -72,13 +72,13 @@ serializable, inspectable, and composable.
 
 Relevant files:
 
-- `agentflow-agents/src/runtime.rs`
-- `agentflow-agents/src/react/agent.rs`
-- `agentflow-agents/src/plan_execute.rs`
+- `yanshi-agents/src/runtime.rs`
+- `yanshi-agents/src/react/agent.rs`
+- `yanshi-agents/src/plan_execute.rs`
 
 #### Tool System
 
-AgentFlow already has a central `ToolRegistry` and tool contract:
+Yanshi already has a central `ToolRegistry` and tool contract:
 
 - JSON-schema-like tool parameters
 - typed tool output parts
@@ -91,16 +91,16 @@ AgentFlow already has a central `ToolRegistry` and tool contract:
 
 Relevant files:
 
-- `agentflow-tools/src/tool.rs`
-- `agentflow-tools/src/registry.rs`
-- `agentflow-tools/src/policy.rs`
-- `agentflow-tools/src/capability.rs`
+- `yanshi-tools/src/tool.rs`
+- `yanshi-tools/src/registry.rs`
+- `yanshi-tools/src/policy.rs`
+- `yanshi-tools/src/capability.rs`
 
 This maps well to Harness-style tool governance.
 
 #### Security And Governance
 
-AgentFlow has already started moving toward explicit tool governance:
+Yanshi has already started moving toward explicit tool governance:
 
 - tool allow-list policy
 - permission allow-list policy
@@ -120,21 +120,21 @@ protocol and hook system to become Harness-grade.
 
 #### Skills
 
-AgentFlow supports `SKILL.md` parsing and converts skills into internal
-manifests. It also supports AgentFlow-specific extensions for MCP servers and
+Yanshi supports `SKILL.md` parsing and converts skills into internal
+manifests. It also supports Yanshi-specific extensions for MCP servers and
 security controls.
 
 Relevant files:
 
-- `agentflow-skills/src/skill_md.rs`
-- `agentflow-skills/src/builder.rs`
-- `agentflow-skills/src/manifest.rs`
+- `yanshi-skills/src/skill_md.rs`
+- `yanshi-skills/src/builder.rs`
+- `yanshi-skills/src/manifest.rs`
 
-This gives AgentFlow a natural path to on-demand capability packages.
+This gives Yanshi a natural path to on-demand capability packages.
 
 #### MCP And Plugins
 
-AgentFlow has MCP client integration, MCP nodes, MCP CLI commands, and Skill
+Yanshi has MCP client integration, MCP nodes, MCP CLI commands, and Skill
 MCP attachment. It also has a plugin/custom node foundation using subprocess
 JSON-RPC.
 
@@ -150,7 +150,7 @@ should assemble tools from multiple capability sources:
 
 #### Multi-Agent Collaboration
 
-AgentFlow already supports three multi-agent collaboration patterns:
+Yanshi already supports three multi-agent collaboration patterns:
 
 - handoff
 - blackboard
@@ -162,13 +162,13 @@ cover routing, shared-artifact collaboration, and independent verification.
 Relevant files:
 
 - `docs/MULTI_AGENT.md`
-- `agentflow-agents/src/supervisor/handoff.rs`
-- `agentflow-agents/src/supervisor/blackboard.rs`
-- `agentflow-agents/src/supervisor/debate.rs`
+- `yanshi-agents/src/supervisor/handoff.rs`
+- `yanshi-agents/src/supervisor/blackboard.rs`
+- `yanshi-agents/src/supervisor/debate.rs`
 
 #### Checkpoint, Resume, And Trace
 
-AgentFlow already has workflow checkpointing and partial ReAct resume support.
+Yanshi already has workflow checkpointing and partial ReAct resume support.
 The current ReAct resume strategy restores durable observations and refuses
 unsafe unresolved tool calls unless replay is safe.
 
@@ -177,7 +177,7 @@ interruptions and avoid silently repeating side-effecting tools.
 
 #### Server, SSE, And Web UI Foundation
 
-AgentFlow already has:
+Yanshi already has:
 
 - `/v1/runs`
 - run cancellation
@@ -188,9 +188,9 @@ AgentFlow already has:
 
 Relevant files:
 
-- `agentflow-server/src/lib.rs`
-- `agentflow-server/src/runs.rs`
-- `agentflow-server/src/events_stream.rs`
+- `yanshi-server/src/lib.rs`
+- `yanshi-server/src/runs.rs`
+- `yanshi-server/src/events_stream.rs`
 - `docs/WEB_UI.md`
 
 This can become the control plane for Harness sessions without replacing the
@@ -200,7 +200,7 @@ CLI-first and SDK-first model.
 
 ### Gap 1: No First-Class Harness Session
 
-Current AgentFlow has workflows, agent runs, skills, and server runs. It does
+Current Yanshi has workflows, agent runs, skills, and server runs. It does
 not yet have a first-class long-lived work session that coordinates all of
 them.
 
@@ -229,7 +229,7 @@ Difficulty: **medium**.
 
 ### Gap 2: Hook Bus Is Too Narrow
 
-AgentFlow currently has memory hooks and rich trace events, but it does not
+Yanshi currently has memory hooks and rich trace events, but it does not
 have a generic runtime hook bus comparable to Harness-style hooks.
 
 Needed hooks:
@@ -254,7 +254,7 @@ Difficulty: **medium**.
 
 ### Gap 3: Interactive Approval Protocol
 
-AgentFlow has policy decisions and capability decisions, but not a runtime
+Yanshi has policy decisions and capability decisions, but not a runtime
 approval loop.
 
 Harness Mode needs a protocol that can work across:
@@ -299,7 +299,7 @@ Difficulty: **medium-high** because it touches runtime control flow.
 OpenHarness-style operation expects a model to issue multiple tool calls in
 one turn, and for the runtime to execute safe calls in parallel.
 
-AgentFlow has DAG-level concurrency and Rust async foundations. However,
+Yanshi has DAG-level concurrency and Rust async foundations. However,
 `ReActAgent` currently dispatches only the first native tool call from an LLM
 response and warns when multiple calls are returned.
 
@@ -315,7 +315,7 @@ Difficulty: **medium**.
 
 ### Gap 5: Background Task Runtime
 
-AgentFlow has server runs, cancellation, workers, and multi-agent supervisors.
+Yanshi has server runs, cancellation, workers, and multi-agent supervisors.
 It does not yet expose Harness-style task tools directly to agents.
 
 Suggested tools:
@@ -328,7 +328,7 @@ Suggested tools:
 
 These tools should map to existing server/run infrastructure where possible.
 The first implementation can be process-local. A later implementation can
-delegate to `agentflow-server` and worker runtime.
+delegate to `yanshi-server` and worker runtime.
 
 Difficulty: **medium-high**.
 
@@ -336,7 +336,7 @@ Difficulty: **medium-high**.
 
 Harness agents need workspace context beyond normal chat memory.
 
-AgentFlow currently has:
+Yanshi currently has:
 
 - `AGENTS.md`
 - `TODOs.md`
@@ -359,7 +359,7 @@ pub trait ContextProvider {
 
 Initial providers:
 
-- workspace instructions provider: `AGENTS.md`, `CLAUDE.md`, `.agentflow/*`
+- workspace instructions provider: `AGENTS.md`, `CLAUDE.md`, `.yanshi/*`
 - TODO provider: `TODOs.md`
 - roadmap provider: `RoadMap.md`
 - git status provider
@@ -377,7 +377,7 @@ designed around Harness-style streaming agent events.
 Needed CLI mode:
 
 ```bash
-agentflow harness run "..." --output stream-json
+yanshi harness run "..." --output stream-json
 ```
 
 Each line should be a stable event envelope:
@@ -397,14 +397,14 @@ Difficulty: **medium**.
 ### Gap 8: Provider Profile And Subscription Bridge
 
 OpenHarness includes strong provider setup ergonomics and subscription bridge
-ideas. AgentFlow has multiple LLM providers and model registry support, but it
+ideas. Yanshi has multiple LLM providers and model registry support, but it
 does not aim to bridge third-party subscription products.
 
 Recommendation:
 
-- Support provider profiles for AgentFlow-native config.
+- Support provider profiles for Yanshi-native config.
 - Do not prioritize subscription bridge compatibility in V1 Harness Mode.
-- Keep provider behavior behind `agentflow-llm`.
+- Keep provider behavior behind `yanshi-llm`.
 
 Difficulty for provider profiles: **medium**.
 Difficulty for subscription bridges: **high**, and strategically lower value.
@@ -416,18 +416,18 @@ Difficulty for subscription bridges: **high**, and strategically lower value.
 Add a new crate:
 
 ```text
-agentflow-harness
+yanshi-harness
 ```
 
 This crate should depend on existing surfaces:
 
-- `agentflow-agents`
-- `agentflow-tools`
-- `agentflow-skills`
-- `agentflow-memory`
-- `agentflow-mcp`
-- `agentflow-tracing`
-- `agentflow-core`
+- `yanshi-agents`
+- `yanshi-tools`
+- `yanshi-skills`
+- `yanshi-memory`
+- `yanshi-mcp`
+- `yanshi-tracing`
+- `yanshi-core`
 
 It should not own low-level tool execution, workflow scheduling, or LLM
 provider logic.
@@ -522,12 +522,12 @@ Recommended event kind namespace:
 Minimum CLI:
 
 ```bash
-agentflow harness run "Analyze this project and propose next steps"
-agentflow harness run --skill ./skills/code-review "Review current changes"
-agentflow harness run --output stream-json "Implement the next TODO safely"
-agentflow harness resume <session_id>
-agentflow harness list
-agentflow harness inspect <session_id>
+yanshi harness run "Analyze this project and propose next steps"
+yanshi harness run --skill ./skills/code-review "Review current changes"
+yanshi harness run --output stream-json "Implement the next TODO safely"
+yanshi harness resume <session_id>
+yanshi harness list
+yanshi harness inspect <session_id>
 ```
 
 Useful flags:
@@ -572,7 +572,7 @@ first-class.
 
 ### Compatible With Harness Agent Mode
 
-AgentFlow should be compatible with the mode, meaning:
+Yanshi should be compatible with the mode, meaning:
 
 - long-lived work sessions
 - workspace-aware context
@@ -586,7 +586,7 @@ AgentFlow should be compatible with the mode, meaning:
 
 ### Not A Clone
 
-AgentFlow should not treat these as short-term requirements:
+Yanshi should not treat these as short-term requirements:
 
 - exact OpenHarness command compatibility
 - exact OpenHarness plugin format compatibility
@@ -611,8 +611,8 @@ Tasks:
 - Define `ApprovalRequest` and `ApprovalDecision`.
 - Define hook trait boundaries.
 - Define minimal CLI contract.
-- Decide whether `agentflow-harness` is a new crate or initially a module in
-  `agentflow-agents`.
+- Decide whether `yanshi-harness` is a new crate or initially a module in
+  `yanshi-agents`.
 
 Estimated effort: **2-4 days**.
 
@@ -624,7 +624,7 @@ Goal: run one Harness session locally through CLI.
 
 Scope:
 
-- `agentflow-harness` crate
+- `yanshi-harness` crate
 - `HarnessRuntime`
 - `HarnessContext`
 - `HarnessEvent`
@@ -745,7 +745,7 @@ Risk: high if not scoped tightly.
 ### Risk 1: Creating A Parallel Runtime
 
 If Harness Mode bypasses `AgentRuntime`, `ToolRegistry`, or trace contracts, it
-will fragment AgentFlow.
+will fragment Yanshi.
 
 Mitigation:
 
@@ -816,7 +816,7 @@ It fits especially well with:
 
 Harness MVP is useful when all of the following are true:
 
-- A user can run `agentflow harness run "..."` from a workspace.
+- A user can run `yanshi harness run "..."` from a workspace.
 - The runtime reads project instructions from `AGENTS.md` when present.
 - The runtime can load one explicit Skill.
 - The runtime can use built-in tools through `ToolRegistry`.
@@ -829,11 +829,11 @@ Harness MVP is useful when all of the following are true:
 
 ## Final Recommendation
 
-AgentFlow should support Harness Agent mode as an evolution of its current
+Yanshi should support Harness Agent mode as an evolution of its current
 runtime architecture.
 
 The right implementation is not a clone of OpenHarness. The right
-implementation is a small, stable, AgentFlow-native Harness layer that:
+implementation is a small, stable, Yanshi-native Harness layer that:
 
 - makes agents workspace-aware
 - composes Skills, MCP, plugins, workflows, and built-in tools
@@ -843,7 +843,7 @@ implementation is a small, stable, AgentFlow-native Harness layer that:
 - exposes task delegation
 - reuses existing multi-agent supervisors
 
-This direction increases AgentFlow's practical intelligence without abandoning
+This direction increases Yanshi's practical intelligence without abandoning
 its core strengths: deterministic workflows, Rust-native reliability,
 structured tracing, explicit security governance, and composable runtime
 contracts.

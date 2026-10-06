@@ -1,10 +1,10 @@
-# Fresh-VM `agentflow doctor` smoke (P10.0.5)
+# Fresh-VM `yanshi doctor` smoke (P10.0.5)
 
 End-to-end reproduction of the
 [`docs/RELEASE_NOTES_v1.0.0-rc.1.md`](../../docs/RELEASE_NOTES_v1.0.0-rc.1.md)
 fresh-VM checklist step: provision a clean Ubuntu 24.04 environment
-with zero `~/.agentflow/` state, build the `agentflow` binary, run
-`agentflow doctor --profile production --backup-check --format json`,
+with zero `~/.yanshi/` state, build the `yanshi` binary, run
+`yanshi doctor --profile production --backup-check --format json`,
 record the exit code + JSON output.
 
 Drives Apple's `container` CLI by default; pass
@@ -33,13 +33,13 @@ The script honours `DOCTOR_SMOKE_RUNTIME` (default `container`).
 ## Expected outcomes
 
 The doctor's `status` field maps to an exit code (see
-`agentflow-cli/src/commands/doctor.rs::DoctorStatus`):
+`yanshi-cli/src/commands/doctor.rs::DoctorStatus`):
 
 | Doctor status | Exit | Fresh-VM expected? | Notes |
 |---------------|-----:|--------------------|-------|
-| `ok`          | 0    | No                 | Implies pre-seeded `~/.agentflow/` (operator already configured the machine). |
+| `ok`          | 0    | No                 | Implies pre-seeded `~/.yanshi/` (operator already configured the machine). |
 | `warning`     | 1    | Yes — on `--profile {dev,local}` | Missing dirs / optional env vars promote to warning, not fail, on non-production profiles. |
-| `fail`        | 2    | **Yes — on `--profile production`** | This is the canonical first-run-on-Ubuntu signal: every default `~/.agentflow/*` dir is missing, and production-profile treats missing dirs as fail. |
+| `fail`        | 2    | **Yes — on `--profile production`** | This is the canonical first-run-on-Ubuntu signal: every default `~/.yanshi/*` dir is missing, and production-profile treats missing dirs as fail. |
 
 `run.sh` only surfaces exit codes `>2` as its own non-zero — those
 represent the binary itself crashing, not the doctor's profile
@@ -53,7 +53,7 @@ Snapshot captured on `apple-aarch64` running Apple `container 0.12.3`
 * `version`: `0.2.0` (the CLI's own version).
 * `profile`: `production`.
 * `config.models_config_source_kind`: `built_in_default` (no
-  `~/.agentflow/default_models.yml` to override the bundled defaults).
+  `~/.yanshi/default_models.yml` to override the bundled defaults).
 * `config.missing_env_vars`: `[]` (none of the bundled default-models
   providers gates the env check — the registry tolerates missing keys
   per P10.3.1).
@@ -84,7 +84,7 @@ scripts/doctor_smoke/run.sh
 * Before cutting a release (the
   `docs/RELEASE_NOTES_v1.0.0-rc.1.md` checklist names this as
   step 5).
-* After any PR that touches `agentflow-cli/src/commands/doctor.rs`.
+* After any PR that touches `yanshi-cli/src/commands/doctor.rs`.
 * After bumping the workspace's Rust toolchain pin (catches a
   cross-compile regression).
 

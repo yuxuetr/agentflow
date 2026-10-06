@@ -9,7 +9,7 @@ the **A6 sweep** delta — 8 commits spanning iter 1 → iter 2 → iter
 **Trigger**: R3 recommended A6 (doc-translator) as the next pillar
 because `map parallel` was the largest un-validated DAG primitive.
 A6 ran across 3 iterations in the same session, surfacing 8 findings
-along the way. 7 closed; 1 documented as not-an-agentflow-bug. The
+along the way. 7 closed; 1 documented as not-an-yanshi-bug. The
 platform pieces that came out (concurrency cap, results_summary,
 item.* lookups, template auto-detect, template extra params) are
 the substantive R4 deliverables.
@@ -21,13 +21,13 @@ the substantive R4 deliverables.
 | # | Commit | Finding / iter | Crate | What landed |
 | --- | --- | --- | --- | --- |
 | 1 | `141b993` | A6 iter 1 | examples/A6 | `map parallel + LLM` primitive validator, hardcoded blurb, 4 langs |
-| 2 | `a4e89e8` | F-A6-1 + F-A6-2 | agentflow-core + agentflow-cli | `max_concurrent: N` on map + schema declares `input_list`/`max_concurrent` |
-| 3 | `fee8586` | F-A6-3 | agentflow-core | `results_summary: {total, ok, err, err_indexes}` on map output |
+| 2 | `a4e89e8` | F-A6-1 + F-A6-2 | yanshi-core + yanshi-cli | `max_concurrent: N` on map + schema declares `input_list`/`max_concurrent` |
+| 3 | `fee8586` | F-A6-3 | yanshi-core | `results_summary: {total, ok, err, err_indexes}` on map output |
 | 4 | `907b6e7` | F-A6-4 | docs (examples conventions + A6 README) | translation `source_lang != target_lang` guard convention |
 | 5 | `4b882eb` | A6 iter 2 | examples/A6 | real file I/O, 2 files × 4 langs, outputs persisted to disk |
-| 6 | `54a2751` | F-A6-5 | agentflow-core + agentflow-cli | `input_mapping` accepts `{{ item.* }}` lookups |
+| 6 | `54a2751` | F-A6-5 | yanshi-core + yanshi-cli | `input_mapping` accepts `{{ item.* }}` lookups |
 | 7 | `ec2c15d` | A6 iter 3 | examples/A6 | cross-product work list (`file_list × lang_list`) via Tera |
-| 8 | `8b73298` | F-A6-6 + F-A6-7 | agentflow-nodes + agentflow-cli | template auto-detect JSON + arbitrary param schema (+ doctor int test patch from F-A7-4) |
+| 8 | `8b73298` | F-A6-6 + F-A6-7 | yanshi-nodes + yanshi-cli | template auto-detect JSON + arbitrary param schema (+ doctor int test patch from F-A7-4) |
 
 **3 application iterations + 5 platform fixes + 1 docs convention.**
 The skew is heavier on platform fixes than the R2 sweep (which was
@@ -124,7 +124,7 @@ you should be running. The next dogfooding session should run
   (any dotted path) lookups inside a map sub-flow. Encoded via the
   sentinel source-node id `"!item"`. Existing
   `{{ nodes.X.outputs.Y }}` lookups work unchanged.
-- `agentflow workflow validate` no longer false-warns on map's
+- `yanshi workflow validate` no longer false-warns on map's
   `input_list` / `max_concurrent`, or on template's user-defined
   Tera context parameters.
 
@@ -150,7 +150,7 @@ you should be running. The next dogfooding session should run
 **F-A6-8 (open, not-a-bug)**: Tera `loop.parent.*` introspection
 doesn't work in this Tera version. The `set_global` accumulator
 workaround is documented in `workflow-iter3.yml` comments. Not an
-agentflow bug — Tera library behaviour.
+yanshi bug — Tera library behaviour.
 
 **A6 iter 4 (blocked on platform work)**: real file discovery needs
 either a wired `type: shell` YAML node (deliberate gap per F-A7-2)
@@ -175,7 +175,7 @@ This is the 18-commit point of a continuous session. The arc:
 
 | Phase | Commits | What got delivered |
 | --- | --- | --- |
-| R2 follow-up sweep | ~8 commits | All R2 agentflow-side findings closed (F-A2-5/6/9/11/12/13, F-A7-4, F-AF-2) |
+| R2 follow-up sweep | ~8 commits | All R2 yanshi-side findings closed (F-A2-5/6/9/11/12/13, F-A7-4, F-AF-2) |
 | R3 retrospective | 1 commit | Documented the R2 sweep + recommended A6 |
 | A6 iter 1 → iter 3 + 5 platform fixes | 8 commits | A6 application + map node + workflow grammar improvements |
 | R4 retrospective | 1 commit | This document |

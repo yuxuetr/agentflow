@@ -1,0 +1,11 @@
+schema_version = 1
+name = "yanshi-example-skills"
+description = "Local example Skill registry for Yanshi tutorials."
+
+[[skills]]
+name = "mcp-basic"
+version = "1.0.0"
+path = "skills/mcp-basic"
+manifest = "SKILL.md"
+aliases = ["mcp-demo"]
+channel = "stable"

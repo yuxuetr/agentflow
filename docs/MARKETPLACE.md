@@ -1,8 +1,8 @@
 # Marketplace
 
-AgentFlow is moving from local-only Skill catalogs toward a unified remote
+Yanshi is moving from local-only Skill catalogs toward a unified remote
 marketplace for both Skills and Plugins. The remote marketplace schema is the
-shared package index that `agentflow marketplace ...` commands can fetch,
+shared package index that `yanshi marketplace ...` commands can fetch,
 cache, verify, and install from.
 
 ## Schema
@@ -11,8 +11,8 @@ Remote marketplace manifests use TOML and schema version `1`.
 
 ```toml
 schema_version = 1
-name = "agentflow-community"
-description = "Remote catalog for AgentFlow Skills and Plugins"
+name = "yanshi-community"
+description = "Remote catalog for Yanshi Skills and Plugins"
 homepage = "https://registry.example.com"
 
 [[entries]]
@@ -29,7 +29,7 @@ checksum_sha256 = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef012345
 
 [entries.signature]
 algorithm = "minisign"
-key_id = "agentflow-community"
+key_id = "yanshi-community"
 value = "base64-or-armored-signature"
 
 [[entries]]
@@ -66,7 +66,7 @@ checksum_sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abc
 
 ## Validation
 
-The schema is implemented in `agentflow-skills::remote_marketplace`.
+The schema is implemented in `yanshi-skills::remote_marketplace`.
 
 Current validation enforces:
 
@@ -89,7 +89,7 @@ Remote registries are plain HTTP(S) endpoints that serve the TOML manifest.
 The first client implementation is `RemoteMarketplaceClient`:
 
 ```rust
-let client = agentflow_skills::RemoteMarketplaceClient::new();
+let client = yanshi_skills::RemoteMarketplaceClient::new();
 let manifest = client
   .fetch_manifest("https://registry.example.com/marketplace.toml")
   .await?;
@@ -105,7 +105,7 @@ Artifact download and verification happen in `RemoteMarketplaceCache`.
 `RemoteMarketplaceCache` stores verified artifacts under:
 
 ```text
-~/.agentflow/marketplace/cache/artifacts/<type>/<name>/<version>/<sha256>.pkg
+~/.yanshi/marketplace/cache/artifacts/<type>/<name>/<version>/<sha256>.pkg
 ```
 
 Package names and versions are path-sanitized before they are used as
@@ -126,7 +126,7 @@ controls the artifact can trivially recompute the checksum it compares
 against. **The CLI does not use this default for non-local registries**; see
 [CLI Default Verifier Selection](#cli-default-verifier-selection) below.
 
-A real `Ed25519SignatureVerifier` also ships in `agentflow-skills` and is what
+A real `Ed25519SignatureVerifier` also ships in `yanshi-skills` and is what
 the CLI wires up by default for HTTP(S) registries. It loads a publisher's
 Ed25519 public key from a keys directory (one `<key_id>.pub` file per
 publisher, base64-encoded raw 32-byte key material) and verifies a
@@ -148,11 +148,11 @@ The top-level marketplace CLI works with either an HTTP(S) registry URL or a
 local remote marketplace TOML file:
 
 ```bash
-agentflow marketplace search https://registry.example.com/marketplace.toml rust --type skill
-agentflow marketplace update https://registry.example.com/marketplace.toml
-agentflow marketplace install https://registry.example.com/marketplace.toml rust-expert --type skill --dir ~/.agentflow/skills
-agentflow marketplace verify https://registry.example.com/marketplace.toml rust-expert --type skill
-agentflow marketplace verify https://registry.example.com/marketplace.toml rust-expert --type skill --strict
+yanshi marketplace search https://registry.example.com/marketplace.toml rust --type skill
+yanshi marketplace update https://registry.example.com/marketplace.toml
+yanshi marketplace install https://registry.example.com/marketplace.toml rust-expert --type skill --dir ~/.yanshi/skills
+yanshi marketplace verify https://registry.example.com/marketplace.toml rust-expert --type skill
+yanshi marketplace verify https://registry.example.com/marketplace.toml rust-expert --type skill --strict
 ```
 
 Command behavior:
@@ -168,8 +168,8 @@ Command behavior:
 
 Install options:
 
-- `--dir <path>` overrides the install root. Defaults to `~/.agentflow/skills`
-  for Skills and `~/.agentflow/plugins` for Plugins.
+- `--dir <path>` overrides the install root. Defaults to `~/.yanshi/skills`
+  for Skills and `~/.yanshi/plugins` for Plugins.
 - `--force` overwrites an existing installed package directory.
 - `--cache-only` stops after verified cache write/verification and does not
   unpack into the runtime install directory.
@@ -190,10 +190,10 @@ remote registry:
 | `http://` / `https://` URL | `Ed25519SignatureVerifier { require_signature: true }` | Every entry **must** carry a valid `[signature]` block with `algorithm = "ed25519"`, or verification fails. |
 | local file path | `ChecksumSha256SignatureVerifier` | Unchanged bootstrap behavior — local manifests have no network-facing publisher identity to verify against. |
 
-Keys are read from `~/.agentflow/marketplace-keys/<key_id>.pub` by default;
+Keys are read from `~/.yanshi/marketplace-keys/<key_id>.pub` by default;
 override the directory with `--keys-dir <path>`. Each file holds a single
 base64-encoded 32-byte raw Ed25519 public key (see
-`Ed25519SignatureVerifier` rustdoc in `agentflow-skills/src/
+`Ed25519SignatureVerifier` rustdoc in `yanshi-skills/src/
 remote_marketplace.rs` for the `openssl` command that produces one).
 
 For a non-local registry, this means by default:
@@ -214,13 +214,13 @@ artifact bytes agree with each other.
 
 ```bash
 # Default: rejected unless the entry carries a valid ed25519 signature.
-agentflow marketplace install https://registry.example.com/marketplace.toml rust-expert --type skill
+yanshi marketplace install https://registry.example.com/marketplace.toml rust-expert --type skill
 
 # Explicit, loudly-warned downgrade to checksum-only verification.
-agentflow marketplace install https://registry.example.com/marketplace.toml rust-expert --type skill --allow-unsigned
+yanshi marketplace install https://registry.example.com/marketplace.toml rust-expert --type skill --allow-unsigned
 
 # Point at a non-default publisher keys directory.
-agentflow marketplace verify https://registry.example.com/marketplace.toml rust-expert --type skill --keys-dir ./ci-marketplace-keys
+yanshi marketplace verify https://registry.example.com/marketplace.toml rust-expert --type skill --keys-dir ./ci-marketplace-keys
 ```
 
 Package artifacts are `.tar` or `.tar.gz` archives. The archive may contain the
@@ -228,7 +228,7 @@ manifest at the root or inside a single top-level directory:
 
 - Skill packages must contain `SKILL.md` and pass `SkillLoader` validation.
 - Plugin packages must contain `plugin.toml` and pass plugin manifest
-  validation. Plugin install requires an `agentflow` binary built with the
+  validation. Plugin install requires an `yanshi` binary built with the
   `plugin` feature.
 
 Archive extraction rejects absolute paths, `..` traversal, symlinks, hardlinks,
@@ -269,7 +269,7 @@ Two verifiers ship today:
 Registries that need transparency/revocation/rotation on top of raw Ed25519
 signature checking should implement `MarketplaceSignatureVerifier` against
 sigstore, minisign with a key-rotation policy, or another signing system, and
-pass it to `RemoteMarketplaceCache::with_client_and_verifier`. `agentflow
+pass it to `RemoteMarketplaceCache::with_client_and_verifier`. `yanshi
 marketplace verify --strict` remains an orthogonal, additional gate — it
 requires signature metadata to be present and successfully checked
 regardless of which verifier is configured.
@@ -285,12 +285,12 @@ default `ChecksumSha256SignatureVerifier` checks. The flow is:
    matters because the signature is derived from the bytes — any change
    in mtime, file order, or compression settings invalidates the
    signature. The reference build used by the fixture tests is in
-   `agentflow-skills/tests/marketplace_signed.rs::build_signed_archive`
+   `yanshi-skills/tests/marketplace_signed.rs::build_signed_archive`
    (fixed mtime, fixed uid/gid, fixed mode, sorted entries).
 2. Compute `sha256_hex(archive_bytes)`.
 3. Set both `source.checksum_sha256` and `signature.value` to the
    resulting digest. Set `signature.algorithm = "checksum-sha256"` and
-   pick a stable `signature.key_id` (e.g. `"agentflow-dev-test"`).
+   pick a stable `signature.key_id` (e.g. `"yanshi-dev-test"`).
 4. Publish the archive at `source.artifact_url` (or, for offline
    tests, hand the bytes to `RemoteMarketplaceCache::cache_artifact_bytes`).
 
@@ -299,8 +299,8 @@ against the CLI's default `Ed25519SignatureVerifier` for a remote registry, an
 entry signed this way is rejected outright (`algorithm` must be `"ed25519"`).
 For a real Ed25519-signed fixture, generate a keypair and sign the archive
 bytes directly; see `Ed25519SignatureVerifier` rustdoc in
-`agentflow-skills/src/remote_marketplace.rs` for the `openssl` commands and
-`agentflow-cli/tests/marketplace_cli_tests.rs`'s
+`yanshi-skills/src/remote_marketplace.rs` for the `openssl` commands and
+`yanshi-cli/tests/marketplace_cli_tests.rs`'s
 `marketplace_verify_remote_registry_accepts_valid_ed25519_signature_by_default`
 for a full worked example (keypair → `.pub` file → signed entry → CLI
 `verify`).
@@ -315,11 +315,11 @@ cached artifact whose `CachedMarketplaceArtifact::signature_checked` is
 Tests covering both paths live alongside the fixture archives:
 
 ```text
-agentflow-skills/tests/fixtures/signed/skill-rust-expert/SKILL.md
-agentflow-core/tests/fixtures/signed/plugin-echo/plugin.toml
-agentflow-skills/tests/marketplace_signed.rs   # strict + non-strict (checksum-only verifier)
-agentflow-core/tests/plugin_signed_fixture.rs  # manifest sanity
-agentflow-cli/tests/marketplace_cli_tests.rs   # T0.1: remote-registry default Ed25519 verification + --allow-unsigned
+yanshi-skills/tests/fixtures/signed/skill-rust-expert/SKILL.md
+yanshi-core/tests/fixtures/signed/plugin-echo/plugin.toml
+yanshi-skills/tests/marketplace_signed.rs   # strict + non-strict (checksum-only verifier)
+yanshi-core/tests/plugin_signed_fixture.rs  # manifest sanity
+yanshi-cli/tests/marketplace_cli_tests.rs   # T0.1: remote-registry default Ed25519 verification + --allow-unsigned
 ```
 
 ## Offline Flow
@@ -328,8 +328,8 @@ After an artifact has been cached, `verify` or `install --cache-only` can run
 with a local copy of the marketplace TOML:
 
 ```bash
-agentflow marketplace update https://registry.example.com/marketplace.toml
-agentflow marketplace verify ~/.agentflow/marketplace/cache/registries/agentflow-community.toml rust-expert --type skill
+yanshi marketplace update https://registry.example.com/marketplace.toml
+yanshi marketplace verify ~/.yanshi/marketplace/cache/registries/yanshi-community.toml rust-expert --type skill
 ```
 
 This checks the cached bytes against the catalog checksum and signature metadata

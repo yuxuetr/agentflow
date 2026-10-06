@@ -1,4 +1,4 @@
-# AgentFlow v1.0.0-rc.1 Release Notes
+# Yanshi v1.0.0-rc.1 Release Notes
 
 **Status**: Release candidate. The `## Production Deployment Checklist`
 section is the v1.0 deployment runbook (stable independent of the tag
@@ -10,7 +10,7 @@ and `## Known Issues` sections below summarise the 531 commits between
 
 **Crate versions at tag time**: the workspace's 15 publishable crates
 remain on their independent pre-1.0 SemVer trajectories
-(`agentflow-core 0.2.0`, `agentflow-rag 0.3.0-alpha`, etc.). The
+(`yanshi-core 0.2.0`, `yanshi-rag 0.3.0-alpha`, etc.). The
 `v1.0.0-rc.1` git tag is a **project-milestone marker** — "the
 operator-facing stability surfaces are RC-ready" — not a coordinated
 crate version bump. Coordinated 1.0 crate publishing is a separate
@@ -21,34 +21,34 @@ follow-up after RC-period feedback.
 ## Production Deployment Checklist
 
 This checklist closes finding `F4` from the v1.0.0-rc.1 dress
-rehearsal: `agentflow doctor --profile production` returns
+rehearsal: `yanshi doctor --profile production` returns
 `status: warning` on a fresh host because nothing under
-`~/.agentflow/` exists yet and `AGENTFLOW_API_TOKEN` is unset.
+`~/.yanshi/` exists yet and `YANSHI_API_TOKEN` is unset.
 None of those are code defects; they are operator-runbook gaps. Walk
 through every step below before swinging traffic at a freshly
 provisioned production host.
 
 The reference deploy shape is `docker-compose.yml` at the repo root
-(Postgres + `agentflow-server`). Bare-metal / Kubernetes deployments
+(Postgres + `yanshi-server`). Bare-metal / Kubernetes deployments
 follow the same env-var contract — only the orchestration layer
 changes.
 
 ### 1. Pick a security profile and wire it through the environment
 
-`AGENTFLOW_SECURITY_PROFILE` selects coarse runtime posture (defined
-in `agentflow-tools/src/security_profile.rs`). Production deployments
+`YANSHI_SECURITY_PROFILE` selects coarse runtime posture (defined
+in `yanshi-tools/src/security_profile.rs`). Production deployments
 **must** set:
 
 ```bash
-export AGENTFLOW_SECURITY_PROFILE=production
+export YANSHI_SECURITY_PROFILE=production
 ```
 
 What this turns on (high level — see `docs/TOOL_PERMISSIONS.md` for
 the full matrix):
 
-- Server auth fail-closed: `AGENTFLOW_API_TOKEN` becomes mandatory.
-  Missing token aborts startup with a clear `AGENTFLOW_API_TOKEN is
-  required when AGENTFLOW_SECURITY_PROFILE is 'production'` error.
+- Server auth fail-closed: `YANSHI_API_TOKEN` becomes mandatory.
+  Missing token aborts startup with a clear `YANSHI_API_TOKEN is
+  required when YANSHI_SECURITY_PROFILE is 'production'` error.
 - CORS defaults to deny-by-default; expose origins explicitly via
   `--cors-origins` (or the equivalent `ServeConfig` field).
 - Plugin install / spawn requires a sandboxed runtime; the
@@ -66,7 +66,7 @@ production deployment.
 ### 2. Provision the API auth token via your secret manager
 
 Generate a random opaque token (≥ 32 characters of CSPRNG output is
-the recommended floor) and inject it as `AGENTFLOW_API_TOKEN`
+the recommended floor) and inject it as `YANSHI_API_TOKEN`
 through your platform's secret manager. Do **not** check the token
 into the repo, the deployment manifest, or shell history.
 
@@ -74,15 +74,15 @@ Examples (substitute the right backend for your platform):
 
 ```bash
 # Kubernetes
-kubectl create secret generic agentflow-api-token \
-  --from-literal=AGENTFLOW_API_TOKEN="$(openssl rand -hex 32)"
+kubectl create secret generic yanshi-api-token \
+  --from-literal=YANSHI_API_TOKEN="$(openssl rand -hex 32)"
 
 # systemd
-sudo systemctl edit agentflow-server.service
+sudo systemctl edit yanshi-server.service
 # add under [Service]:
-#   EnvironmentFile=/etc/agentflow/api-token.env
-# where the file is 0600 root:agentflow and contains
-#   AGENTFLOW_API_TOKEN=...
+#   EnvironmentFile=/etc/yanshi/api-token.env
+# where the file is 0600 root:yanshi and contains
+#   YANSHI_API_TOKEN=...
 
 # docker compose
 # docker-compose.yml already exposes the slot; uncomment and replace
@@ -96,41 +96,41 @@ orchestrator can probe liveness without a token.
 
 ### 3. Pre-provision storage directories
 
-`agentflow-server` writes to three storage roots. In `production`
+`yanshi-server` writes to three storage roots. In `production`
 they should exist with appropriate ownership and free space **before**
-the first `agentflow serve`. The server will auto-create them on
+the first `yanshi serve`. The server will auto-create them on
 first write, but production posture rejects this advisory at
 `doctor` time so a missing path doesn't quietly become a Tier-0
 incident the first time a run lands.
 
-Env-var contract (resolved by `agentflow-cli/src/commands/doctor.rs`
-and `agentflow-server/src/serve.rs`):
+Env-var contract (resolved by `yanshi-cli/src/commands/doctor.rs`
+and `yanshi-server/src/serve.rs`):
 
 | Env var | Default if unset | What lives here |
 | --- | --- | --- |
-| `AGENTFLOW_RUN_DIR` | `$HOME/.agentflow/runs` | Per-run artifact directory (one subdir per run UUID). Cleanup sweep (P2.2) reaps terminal runs past `run_dir_retention_days`. |
-| `AGENTFLOW_TRACE_DIR` | `$HOME/.agentflow/traces` | JSONL trace storage and (when feature-enabled) SQLite trace storage. Consumed by `agentflow trace replay`. |
-| `AGENTFLOW_MARKETPLACE_CACHE` | `$HOME/.agentflow/marketplace-cache` | Verified artifact cache for `agentflow marketplace install`. Backed-up separately from skill / plugin install roots. |
-| `AGENTFLOW_SKILLS_DIR` | `$HOME/.agentflow/skills` | Installed skill manifests + assets. Read by `agentflow skill list` / `inspect` / `run`. |
-| `AGENTFLOW_PLUGINS_DIR` | `$HOME/.agentflow/plugins` | Installed plugin manifests + binaries. Read by `agentflow plugin list` / `inspect`. |
+| `YANSHI_RUN_DIR` | `$HOME/.yanshi/runs` | Per-run artifact directory (one subdir per run UUID). Cleanup sweep (P2.2) reaps terminal runs past `run_dir_retention_days`. |
+| `YANSHI_TRACE_DIR` | `$HOME/.yanshi/traces` | JSONL trace storage and (when feature-enabled) SQLite trace storage. Consumed by `yanshi trace replay`. |
+| `YANSHI_MARKETPLACE_CACHE` | `$HOME/.yanshi/marketplace-cache` | Verified artifact cache for `yanshi marketplace install`. Backed-up separately from skill / plugin install roots. |
+| `YANSHI_SKILLS_DIR` | `$HOME/.yanshi/skills` | Installed skill manifests + assets. Read by `yanshi skill list` / `inspect` / `run`. |
+| `YANSHI_PLUGINS_DIR` | `$HOME/.yanshi/plugins` | Installed plugin manifests + binaries. Read by `yanshi plugin list` / `inspect`. |
 
-Pre-provision example for a system user `agentflow`:
+Pre-provision example for a system user `yanshi`:
 
 ```bash
-sudo install -d -o agentflow -g agentflow -m 0750 \
-  /var/lib/agentflow/runs \
-  /var/lib/agentflow/traces \
-  /var/lib/agentflow/marketplace-cache \
-  /var/lib/agentflow/skills \
-  /var/lib/agentflow/plugins
+sudo install -d -o yanshi -g yanshi -m 0750 \
+  /var/lib/yanshi/runs \
+  /var/lib/yanshi/traces \
+  /var/lib/yanshi/marketplace-cache \
+  /var/lib/yanshi/skills \
+  /var/lib/yanshi/plugins
 
-cat <<'EOF' | sudo tee /etc/agentflow/agentflow-server.env
-AGENTFLOW_SECURITY_PROFILE=production
-AGENTFLOW_RUN_DIR=/var/lib/agentflow/runs
-AGENTFLOW_TRACE_DIR=/var/lib/agentflow/traces
-AGENTFLOW_MARKETPLACE_CACHE=/var/lib/agentflow/marketplace-cache
-AGENTFLOW_SKILLS_DIR=/var/lib/agentflow/skills
-AGENTFLOW_PLUGINS_DIR=/var/lib/agentflow/plugins
+cat <<'EOF' | sudo tee /etc/yanshi/yanshi-server.env
+YANSHI_SECURITY_PROFILE=production
+YANSHI_RUN_DIR=/var/lib/yanshi/runs
+YANSHI_TRACE_DIR=/var/lib/yanshi/traces
+YANSHI_MARKETPLACE_CACHE=/var/lib/yanshi/marketplace-cache
+YANSHI_SKILLS_DIR=/var/lib/yanshi/skills
+YANSHI_PLUGINS_DIR=/var/lib/yanshi/plugins
 EOF
 ```
 
@@ -140,21 +140,21 @@ in `docs/SERVER_BACKUP_RESTORE.md`.
 ### 4. Wire Postgres + run the migration
 
 Provide `DATABASE_URL` pointing at a Postgres 14+ instance the
-deployment owns end-to-end (no shared multi-tenant DB). `agentflow
+deployment owns end-to-end (no shared multi-tenant DB). `yanshi
 serve` runs the embedded `sqlx::migrate!()` chain on first boot, so
 no manual migration step is required for a fresh DB. For DR /
 restored DBs, see `docs/SERVER_BACKUP_RESTORE.md` § "Postgres".
 
 ```bash
-export DATABASE_URL=postgres://agentflow:<password>@db.internal:5432/agentflow
+export DATABASE_URL=postgres://yanshi:<password>@db.internal:5432/yanshi
 ```
 
-### 5. Verify with `agentflow doctor --profile production`
+### 5. Verify with `yanshi doctor --profile production`
 
 Run the structured diagnostic and confirm exit code `0`:
 
 ```bash
-agentflow doctor --profile production --backup-check --format json
+yanshi doctor --profile production --backup-check --format json
 echo "exit=$?"
 ```
 
@@ -179,7 +179,7 @@ validation checklist".
 ### 6. (Optional) Reference: docker-compose smoke
 
 The `docker-compose.yml` at the repo root is the reference deploy
-shape — Postgres + `agentflow-server` on the same network, with
+shape — Postgres + `yanshi-server` on the same network, with
 healthchecks plumbed for both. To smoke-test the image locally
 before the production roll:
 
@@ -191,10 +191,10 @@ curl -fsS http://localhost:3000/health/ready   # -> 200 ok
 open       http://localhost:3000/ui            # SPA shell renders
 ```
 
-The compose file leaves `AGENTFLOW_API_TOKEN` commented out for
+The compose file leaves `YANSHI_API_TOKEN` commented out for
 local dev. **Do not deploy that shape to production untouched** —
 swap the env block to source the token from your secret manager and
-flip `AGENTFLOW_SECURITY_PROFILE` to `production` before promoting.
+flip `YANSHI_SECURITY_PROFILE` to `production` before promoting.
 
 ---
 
@@ -202,10 +202,10 @@ flip `AGENTFLOW_SECURITY_PROFILE` to `production` before promoting.
 
 A fresh operator following the steps above on a clean VM:
 
-1. `agentflow doctor --profile production --backup-check` exits `0`.
-2. `agentflow serve --check --security-profile production` reports
+1. `yanshi doctor --profile production --backup-check` exits `0`.
+2. `yanshi serve --check --security-profile production` reports
    `readiness: ok`.
-3. `agentflow serve` starts cleanly and serves `/health/ready` `200`.
+3. `yanshi serve` starts cleanly and serves `/health/ready` `200`.
 4. An authenticated `POST /v1/runs` against the running gateway
    completes successfully (uses the provisioned token).
 
@@ -234,7 +234,7 @@ Operations) reached operator-ready maturity. Highlights — see
 - **Per-run retention overrides** (P10.14.2): `POST /v1/runs` body
   accepts `retention_overrides: {events_days, artifacts_days}`;
   cleanup sweep uses `max(global, override)`.
-- **Read-replica routing** (P10.15.2): `AGENTFLOW_DATABASE_READ_URL`
+- **Read-replica routing** (P10.15.2): `YANSHI_DATABASE_READ_URL`
   + `--database-read-url`; `Database::read_pool()` falls back to
   primary; SELECT-shaped repo paths auto-route.
 - **Worker pool admission heuristics** (P10.16.1 + FU1): JWT
@@ -245,17 +245,17 @@ Operations) reached operator-ready maturity. Highlights — see
 ### Observability + perf gating
 
 - **Hot-path criterion benches** (P10.1.1 + P10.2.1):
-  `agentflow-core/benches/hot_paths.rs` covers FlowValue decode +
-  checkpoint roundtrip (9 bench points); `agentflow-nodes/benches/
+  `yanshi-core/benches/hot_paths.rs` covers FlowValue decode +
+  checkpoint roundtrip (9 bench points); `yanshi-nodes/benches/
   node_latency.rs` covers template / conditional / file (10 bench
   points). Wired into the `bench-gate` baseline; CI gate runs all
   6 benches per PR at the default 1.25× threshold.
 - **Test-suite-bloat gate** (P10.19.2): `cargo xtask test-gate`
   captures per-crate `cargo test` wall-clock, gates on 1.5×.
-- **`agentflow agent replay --diff`** (P10.8.1): ReAct trace
+- **`yanshi agent replay --diff`** (P10.8.1): ReAct trace
   divergence diff (file-to-file, no LLM call). Step-order +
   tool-call + stop-reason + per-step token-delta dimensions.
-- **`agentflow trace replay --speed`** (P10.10.2): Harness session
+- **`yanshi trace replay --speed`** (P10.10.2): Harness session
   replay with `1x` / `2x` / `inf` / `instant` pacing.
 
 ### LLM provider expansion
@@ -295,7 +295,7 @@ Operations) reached operator-ready maturity. Highlights — see
   shell but not script (or vice versa). Inherits manifest-level
   default when absent.
 - **Skill MCP-discovery cache** (P10.9.1): 24h-TTL persisted cache
-  at `~/.agentflow/cache/skill_mcp_discovery.json`; ` --refresh-mcp
+  at `~/.yanshi/cache/skill_mcp_discovery.json`; ` --refresh-mcp
   -cache` / `--no-mcp-discovery` flags.
 
 ### Storage + memory
@@ -304,10 +304,10 @@ Operations) reached operator-ready maturity. Highlights — see
   `AgeEncryptedPreferenceStore` wraps any `PreferenceStore` with
   X25519 age encryption; `age:v1:` marker prefix; rolling-alias-
   safe identity-file helpers.
-- **`agentflow memory prune` CLI** (P10.7.1): retention-window
+- **`yanshi memory prune` CLI** (P10.7.1): retention-window
   pruning for `preference` + `entity_facts` layers; bare-integer
   durations rejected up front.
-- **Live RAG eval per-chunk-size dimension** (P10.6.3): `agentflow
+- **Live RAG eval per-chunk-size dimension** (P10.6.3): `yanshi
   rag eval --chunk-size N` chunks corpus → remaps chunk-ids back
   to source-doc-ids before scoring. `chunk_size: Option<usize>`
   persists in baseline JSON.
@@ -318,7 +318,7 @@ Operations) reached operator-ready maturity. Highlights — see
 ### Release engineering
 
 - **Reproducible fresh-VM doctor smoke** (P10.0.5): `scripts/
-  doctor_smoke/` runs `agentflow doctor --profile production` in
+  doctor_smoke/` runs `yanshi doctor --profile production` in
   a clean `ubuntu:24.04` Apple container; checked-in JSON
   fixture pins the expected first-run shape.
 - **Production deployment dress-rehearsal** (P10.0.1): `scripts/
@@ -328,7 +328,7 @@ Operations) reached operator-ready maturity. Highlights — see
 - **GitHub Release workflow** (P10.0.4): `.github/workflows/
   release.yml` fires on `v*` tag push; builds 4-target CLI
   matrix (linux x86_64 / arm64, macOS Intel / Apple Silicon) +
-  multi-arch `agentflow-server` GHCR image via buildx + GitHub
+  multi-arch `yanshi-server` GHCR image via buildx + GitHub
   Release with `SHA256SUMS.txt`.
 - **Workspace metadata centralisation** (P10.0.2 + FU1): every
   workspace-internal `[dependencies]` now carries `version =
@@ -369,7 +369,7 @@ adapt to:
   authored before P1 may need to declare `tool_permission_allowlist`
   explicitly under `[security]` if they rely on tools that now
   require explicit opt-in (default tool allowlist is empty).
-- **Workspace dependencies on `agentflow-rag` are pinned to
+- **Workspace dependencies on `yanshi-rag` are pinned to
   `0.3.0-alpha`** (the rag crate's own pre-release). Downstream
   consumers must explicitly opt in to the pre-release version
   spec.
@@ -379,7 +379,7 @@ adapt to:
 Caught during the v1.0.0-rc.1 dress rehearsal (P10.0.1 / P10.0.5);
 none block the RC but are tracked as future-PR follow-ups:
 
-- **`agentflow serve --check` requires a real Postgres connection**
+- **`yanshi serve --check` requires a real Postgres connection**
   despite a source comment claiming "non-binding readiness
   diagnostic which does not require Postgres". Either the comment
   is stale or the implementation drifted; the docker compose
@@ -387,11 +387,11 @@ none block the RC but are tracked as future-PR follow-ups:
   a code-or-comment fix.
 - **GHCR package visibility defaults to `private`** for newly
   published packages. After the first `release.yml` push, an admin
-  must flip `ghcr.io/yuxuetr/agentflow-server` to public via
+  must flip `ghcr.io/yuxuetr/yanshi-server` to public via
   GitHub package settings. Documented in
   `docs/RELEASE_CHECKLIST.md` §10.
 - **`AgeEncryptedPreferenceStore` is not yet wired into the
-  `agentflow memory` CLI** (P10.7.2 closure note). The wrapper +
+  `yanshi memory` CLI** (P10.7.2 closure note). The wrapper +
   trait surface ships, but the CLI's prune / get / set
   subcommands still hard-code `SqlitePreferenceStore`. A
   `--encrypted --identity <path>` flag pair is a separate
@@ -406,7 +406,7 @@ none block the RC but are tracked as future-PR follow-ups:
 - **`scripts/doctor_smoke/`'s expected-exit-2 outcome** on a
   fresh VM is documented behaviour, not a bug. Production-profile
   doctor on a zero-state Ubuntu reports `status: fail` because
-  default `~/.agentflow/*` dirs don't exist — operators must
-  pre-provision them before `agentflow serve`. The
+  default `~/.yanshi/*` dirs don't exist — operators must
+  pre-provision them before `yanshi serve`. The
   `production_dress_rehearsal` script walks the full setup +
   shows doctor exit 0 after the dirs exist.

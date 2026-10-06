@@ -1,0 +1,164 @@
+use anyhow::{Context, Result};
+use std::io::{self, Write};
+use std::path::Path;
+
+use crate::commands::repl::{LineReader, ReadLine};
+
+use super::error_context::mcp_context;
+use super::runtime_options::{apply_memory_override, memory_label};
+use crate::redaction::redact_cli_text;
+use crate::shutdown::{SIGINT_EXIT_CODE, shutdown_signal};
+use yanshi_llm::Yanshi;
+use yanshi_skills::{SkillBuilder, SkillLoader};
+
+const HELP_TEXT: &str = "\
+Commands:
+  /exit, /quit  — end the session
+  /reset        — start a new session (clears memory)
+  /tokens       — show estimated token count for this session
+  /session      — show the current session ID
+  /help         — show this help message
+  (empty line)  — skipped
+";
+
+pub async fn execute(
+  skill_dir: String,
+  model_override: Option<String>,
+  memory_override: Option<String>,
+  session_id: Option<String>,
+) -> Result<()> {
+  let dir = Path::new(&skill_dir);
+
+  // ── Load + validate ───────────────────────────────────────────────────────
+  let mut manifest =
+    SkillLoader::load(dir).with_context(|| format!("Failed to load skill from '{}'", skill_dir))?;
+
+  if let Some(model) = model_override {
+    manifest.model.name = Some(model);
+  }
+  apply_memory_override(&mut manifest, memory_override.as_deref());
+
+  let warnings =
+    SkillLoader::validate(&manifest, dir).with_context(|| "Skill validation failed")?;
+  for w in &warnings {
+    eprintln!("⚠  {}", w);
+  }
+
+  // ── Init LLM ──────────────────────────────────────────────────────────────
+  Yanshi::init()
+    .await
+    .context("Failed to initialise Yanshi — is your API key configured?")?;
+
+  // ── Build agent ───────────────────────────────────────────────────────────
+  let mut agent = SkillBuilder::build(&manifest, dir)
+    .await
+    .with_context(|| mcp_context("Failed to build agent from skill manifest", &manifest))?;
+
+  if let Some(sid) = session_id {
+    agent = agent.with_session_id(sid);
+  }
+
+  // ── Welcome banner ────────────────────────────────────────────────────────
+  println!("╔══════════════════════════════════════════════════╗");
+  println!("║  🤖  Skill Chat — {}  ", manifest.skill.name);
+  println!("║  Model: {}  ", manifest.model.resolved_model());
+  println!("║  Memory: {}  ", memory_label(&manifest));
+  println!("║  Session: {}  ", agent.session_id);
+  println!("╚══════════════════════════════════════════════════╝");
+  println!("Type a message or /help for commands. Ctrl-C to exit.\n");
+
+  // ── REPL ──────────────────────────────────────────────────────────────────
+  let mut stdout = io::stdout();
+  // H.4.1: shared line editor — up/down history + line editing on a TTY, with a
+  // transparent plain-reader fallback when stdin is piped (tests).
+  let mut reader = LineReader::new();
+
+  loop {
+    let line = match reader.read_line("› ").await? {
+      ReadLine::Line(line) => line,
+      // Ctrl-C abandons the current line; Ctrl-D / `/exit` leave.
+      ReadLine::Interrupted => continue,
+      ReadLine::Eof => {
+        println!("👋 Bye!");
+        break;
+      }
+    };
+    let trimmed = line.trim();
+
+    if trimmed.is_empty() {
+      continue;
+    }
+
+    // ── Built-in commands ──────────────────────────────────────────────
+    match trimmed {
+      "/exit" | "/quit" => {
+        println!("👋 Bye!");
+        break;
+      }
+      "/reset" => {
+        agent.reset().await.context("Failed to reset session")?;
+        println!("🔄 Session reset. New session: {}", agent.session_id);
+        continue;
+      }
+      "/tokens" => {
+        match agent.token_count().await {
+          Ok(n) => println!("📊 Estimated tokens in session: {}", n),
+          Err(e) => println!("⚠  Could not get token count: {}", e),
+        }
+        continue;
+      }
+      "/session" => {
+        println!("🔑 Session ID: {}", agent.session_id);
+        continue;
+      }
+      "/help" => {
+        print!("{}", HELP_TEXT);
+        continue;
+      }
+      _ => {}
+    }
+
+    // ── Send to agent ──────────────────────────────────────────────────
+    print!("⏳ Thinking...\r");
+    stdout.flush().ok();
+
+    // Q3.1.2: race the in-flight agent call against SIGINT/SIGTERM so
+    // Ctrl-C during "Thinking..." doesn't leave the user staring at a
+    // dangling line. We exit 130 instead of returning to the REPL —
+    // returning would require also unwinding any in-flight tool calls
+    // safely, which the skill agent doesn't yet expose.
+    let start = std::time::Instant::now();
+    let agent_fut = agent.run(trimmed);
+    tokio::pin!(agent_fut);
+    let outcome = tokio::select! {
+      biased;
+      res = &mut agent_fut => Some(res),
+      _ = shutdown_signal() => None,
+    };
+    match outcome {
+      Some(Ok(answer)) => {
+        let elapsed = start.elapsed();
+        // Clear the "Thinking..." line
+        print!("\r                    \r");
+        println!("🤖  {}", redact_cli_text(&answer));
+        println!("    ⏱  {:.2?}\n", elapsed);
+      }
+      Some(Err(e)) => {
+        print!("\r                    \r");
+        eprintln!("❌  Agent error: {}", redact_cli_text(e.to_string()));
+        eprintln!("    Use /reset to start a fresh session or /exit to quit.\n");
+      }
+      None => {
+        print!("\r                    \r");
+        eprintln!("🛑 Cancelled (received SIGINT/SIGTERM)");
+        std::process::exit(SIGINT_EXIT_CODE);
+      }
+    }
+
+    // Prompt for next input
+    print!("You: ");
+    stdout.flush().ok();
+  }
+
+  Ok(())
+}

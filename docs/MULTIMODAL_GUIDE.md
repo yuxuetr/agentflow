@@ -1,6 +1,6 @@
-# AgentFlow Multimodal LLM Guide
+# Yanshi Multimodal LLM Guide
 
-AgentFlow now supports multimodal LLMs that can process both text and images. This guide covers how to use multimodal capabilities in your agent flows.
+Yanshi now supports multimodal LLMs that can process both text and images. This guide covers how to use multimodal capabilities in your agent flows.
 
 ## Overview
 
@@ -26,15 +26,15 @@ Multimodal LLMs allow you to:
 ### Simple Text + Image Analysis
 
 ```rust
-use agentflow_llm::AgentFlow;
+use yanshi_llm::Yanshi;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize AgentFlow
-    AgentFlow::init().await?;
+    // Initialize Yanshi
+    Yanshi::init().await?;
     
     // Simple image analysis - recreating the Python example
-    let response = AgentFlow::model("step-1o-turbo-vision")
+    let response = Yanshi::model("step-1o-turbo-vision")
         .text_and_image(
             "Describe this image in elegant language",
             "https://www.stepfun.com/assets/section-1-CTe4nZiO.webp"
@@ -51,11 +51,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Complex Multimodal Messages
 
 ```rust
-use agentflow_llm::{AgentFlow, MultimodalMessage};
+use yanshi_llm::{Yanshi, MultimodalMessage};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    AgentFlow::init().await?;
+    Yanshi::init().await?;
     
     // Create a system message (optional)
     let system_message = MultimodalMessage::system()
@@ -69,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .add_image_url_with_detail("https://example.com/building2.jpg", "high")
         .build();
     
-    let response = AgentFlow::model("step-1o-turbo-vision")
+    let response = Yanshi::model("step-1o-turbo-vision")
         .multimodal_messages(vec![system_message, user_message])
         .temperature(0.8)
         .max_tokens(1500)
@@ -128,11 +128,11 @@ let message = MultimodalMessage::text_and_images(
 
 ## Using in Agent Flows
 
-Multimodal capabilities can be integrated into AgentFlow nodes for automated image processing workflows:
+Multimodal capabilities can be integrated into Yanshi nodes for automated image processing workflows:
 
 ```rust
-use agentflow_core::{AsyncFlow, AsyncNode, SharedState};
-use agentflow_llm::{AgentFlow as LLMAgentFlow, MultimodalMessage};
+use yanshi_core::{AsyncFlow, AsyncNode, SharedState};
+use yanshi_llm::{Yanshi as LLMYanshi, MultimodalMessage};
 use async_trait::async_trait;
 
 struct ImageAnalyzerNode {
@@ -141,7 +141,7 @@ struct ImageAnalyzerNode {
 
 #[async_trait]
 impl AsyncNode for ImageAnalyzerNode {
-    async fn exec_async(&self, prep_result: serde_json::Value) -> agentflow_core::Result<serde_json::Value> {
+    async fn exec_async(&self, prep_result: serde_json::Value) -> yanshi_core::Result<serde_json::Value> {
         let image_url = prep_result["image_url"].as_str().unwrap();
         let prompt = prep_result["prompt"].as_str().unwrap();
 
@@ -149,12 +149,12 @@ impl AsyncNode for ImageAnalyzerNode {
         let message = MultimodalMessage::text_and_image("user", prompt, image_url);
 
         // Execute multimodal LLM
-        let response = LLMAgentFlow::model(&self.model_name)
+        let response = LLMYanshi::model(&self.model_name)
             .multimodal_prompt(message)
             .temperature(0.7)
             .execute()
             .await
-            .map_err(|e| agentflow_core::AgentFlowError::AsyncExecutionError {
+            .map_err(|e| yanshi_core::YanshiError::AsyncExecutionError {
                 message: format!("Multimodal LLM failed: {}", e),
             })?;
 
@@ -179,7 +179,7 @@ let message = MultimodalMessage::text_and_image(
     "https://example.com/complex-image.jpg"
 );
 
-let mut stream = AgentFlow::model("step-1o-turbo-vision")
+let mut stream = Yanshi::model("step-1o-turbo-vision")
     .multimodal_prompt(message)
     .execute_streaming()
     .await?;
@@ -228,13 +228,13 @@ Models are automatically configured with multimodal support. You can check if a 
 
 ### Error Handling
 ```rust
-match AgentFlow::model("step-1o-turbo-vision")
+match Yanshi::model("step-1o-turbo-vision")
     .text_and_image("Analyze this", image_url)
     .execute()
     .await
 {
     Ok(response) => println!("Analysis: {}", response),
-    Err(agentflow_llm::LLMError::HttpError { status_code, message }) => {
+    Err(yanshi_llm::LLMError::HttpError { status_code, message }) => {
         println!("API Error {}: {}", status_code, message);
     },
     Err(e) => println!("Other error: {}", e),
@@ -246,7 +246,7 @@ match AgentFlow::model("step-1o-turbo-vision")
 ### Image Description Service
 ```rust
 async fn describe_image(image_url: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let response = AgentFlow::model("step-1o-turbo-vision")
+    let response = Yanshi::model("step-1o-turbo-vision")
         .text_and_image("Describe this image in detail", image_url)
         .temperature(0.5)  // Lower temperature for consistent descriptions
         .execute()
@@ -262,7 +262,7 @@ async fn analyze_multiple_images(image_urls: Vec<&str>) -> Result<Vec<String>, B
     let mut results = Vec::new();
     
     for url in image_urls {
-        let analysis = AgentFlow::model("step-1o-turbo-vision")
+        let analysis = Yanshi::model("step-1o-turbo-vision")
             .text_and_image("What are the key elements in this image?", url)
             .execute()
             .await?;
@@ -283,7 +283,7 @@ async fn answer_about_image(image_url: &str, question: &str) -> Result<String, B
         .add_text("Please provide a specific answer based on what you can see in the image.")
         .build();
     
-    let response = AgentFlow::model("step-1o-turbo-vision")
+    let response = Yanshi::model("step-1o-turbo-vision")
         .multimodal_prompt(message)
         .temperature(0.3)  // Low temperature for factual answers
         .execute()
@@ -327,11 +327,11 @@ async fn answer_about_image(image_url: &str, question: &str) -> Result<String, B
 - Consider resizing images before processing
 - Use smaller context windows when possible
 
-## Integration with Other AgentFlow Features
+## Integration with Other Yanshi Features
 
 ### With Observability
 ```rust
-let response = AgentFlow::model("step-1o-turbo-vision")
+let response = Yanshi::model("step-1o-turbo-vision")
     .text_and_image("Analyze this", image_url)
     .with_metrics(metrics_collector)  // Track multimodal usage
     .execute()
@@ -341,7 +341,7 @@ let response = AgentFlow::model("step-1o-turbo-vision")
 ### With Tools (Future)
 ```rust
 // When MCP integration is available
-let response = AgentFlow::model("step-1o-turbo-vision")
+let response = Yanshi::model("step-1o-turbo-vision")
     .multimodal_prompt(message)
     .tools(vision_tools)  // Image processing tools
     .execute()

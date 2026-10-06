@@ -1,6 +1,6 @@
 # MCP Skills
 
-MCP Skills let a Skill expose tools from one or more Model Context Protocol servers through AgentFlow's normal `ToolRegistry`. Agents then call those tools with the same ReAct loop and trace flow used for built-in, script, and workflow tools.
+MCP Skills let a Skill expose tools from one or more Model Context Protocol servers through Yanshi's normal `ToolRegistry`. Agents then call those tools with the same ReAct loop and trace flow used for built-in, script, and workflow tools.
 
 Use this guide when you want to package an external MCP server with a reusable Skill. For the broader Skill guide, see [SKILLS.md](SKILLS.md). For the lower-level architecture notes, see [MCP_SKILLS_INTEGRATION.md](MCP_SKILLS_INTEGRATION.md).
 
@@ -20,7 +20,7 @@ SKILL.md / skill.toml
   -> MCP tools/call
 ```
 
-AgentFlow discovers MCP tools while building the skill registry. Each discovered remote tool is wrapped as a local `Tool`, preserving the remote description and input schema for prompts and CLI inspection.
+Yanshi discovers MCP tools while building the skill registry. Each discovered remote tool is wrapped as a local `Tool`, preserving the remote description and input schema for prompts and CLI inspection.
 
 ## Minimal SKILL.md
 
@@ -77,7 +77,7 @@ The default `mcp_command_allowlist` (`python`, `python3`, `node`, `npx`, `uvx`)
 only covers script interpreters. **Compiled binary MCP servers — written in
 Rust, Go, etc. — are denied by default** and must be explicitly opted in.
 
-If you skip the opt-in, `agentflow skill validate` will reject the manifest
+If you skip the opt-in, `yanshi skill validate` will reject the manifest
 with a message like:
 
 ```
@@ -147,7 +147,7 @@ args = ["./server.py"]
 timeout_secs = 30
 ```
 
-When `SKILL.md` and `skill.toml` both exist, AgentFlow loads `skill.toml`.
+When `SKILL.md` and `skill.toml` both exist, Yanshi loads `skill.toml`.
 
 ## Tool Naming
 
@@ -161,7 +161,7 @@ Names are lowercased, non-alphanumeric characters become underscores, and leadin
 
 Examples:
 
-| MCP server | MCP tool | AgentFlow tool |
+| MCP server | MCP tool | Yanshi tool |
 | --- | --- | --- |
 | `local-demo` | `echo` | `mcp_local_demo_echo` |
 | `github-server` | `search/repositories` | `mcp_github_server_search_repositories` |
@@ -171,7 +171,7 @@ Duplicate public names fail registry construction so an agent cannot call an amb
 
 ## Discovery And Schemas
 
-During `SkillBuilder::build_registry`, AgentFlow starts each configured MCP server and calls `tools/list`. For each returned tool:
+During `SkillBuilder::build_registry`, Yanshi starts each configured MCP server and calls `tools/list`. For each returned tool:
 
 - MCP `description` becomes the local tool description.
 - MCP `inputSchema` becomes the local tool parameter schema.
@@ -180,7 +180,7 @@ During `SkillBuilder::build_registry`, AgentFlow starts each configured MCP serv
 Check the discovered tools:
 
 ```bash
-cargo run -p agentflow-cli -- skill list-tools agentflow-skills/examples/skills/mcp-basic
+cargo run -p yanshi-cli -- skill list-tools yanshi-skills/examples/skills/mcp-basic
 ```
 
 Expected output includes:
@@ -196,7 +196,7 @@ text (string): Text to echo.
 Validate the manifest and MCP discovery path before running an agent:
 
 ```bash
-cargo run -p agentflow-cli -- skill validate agentflow-skills/examples/skills/mcp-basic
+cargo run -p yanshi-cli -- skill validate yanshi-skills/examples/skills/mcp-basic
 ```
 
 Validation checks:
@@ -214,7 +214,7 @@ Validation prints the number of discovered MCP tools.
 One-shot run:
 
 ```bash
-cargo run -p agentflow-cli -- skill run agentflow-skills/examples/skills/mcp-basic \
+cargo run -p yanshi-cli -- skill run yanshi-skills/examples/skills/mcp-basic \
   --message "echo hello through MCP" \
   --trace
 ```
@@ -222,14 +222,14 @@ cargo run -p agentflow-cli -- skill run agentflow-skills/examples/skills/mcp-bas
 Interactive run:
 
 ```bash
-cargo run -p agentflow-cli -- skill chat agentflow-skills/examples/skills/mcp-basic
+cargo run -p yanshi-cli -- skill chat yanshi-skills/examples/skills/mcp-basic
 ```
 
 `--trace` on `skill run` prints the structured AgentRuntime trace, including tool call steps such as `mcp_local_demo_echo`.
 
 ## MCP Result Mapping
 
-MCP `tools/call` results are converted into AgentFlow `ToolOutput` values:
+MCP `tools/call` results are converted into Yanshi `ToolOutput` values:
 
 - Text content is flattened into compatible string output.
 - Typed content parts are preserved for tools that return text, image, or resource content.
@@ -246,7 +246,7 @@ Each MCP server uses `timeout_secs` for:
 - Tool discovery.
 - Individual tool calls.
 
-On timeout, AgentFlow disconnects the MCP client and clears the pool slot so later calls can reconnect cleanly. The MCP client pool also exposes explicit disconnect behavior used during validation failures and duplicate-name cleanup.
+On timeout, Yanshi disconnects the MCP client and clears the pool slot so later calls can reconnect cleanly. The MCP client pool also exposes explicit disconnect behavior used during validation failures and duplicate-name cleanup.
 
 ## Error Messages
 
@@ -270,7 +270,7 @@ Treat MCP servers as executable dependencies:
 - Review audit logs for `mcp_server_config_audit`; they include server names, command names, arg counts, env keys, timeout, and concurrency limits.
 - Validate a Skill before allowing an agent loop to use it.
 
-MCP server permissions are controlled by the server implementation itself. AgentFlow wraps discovered tools but does not sandbox arbitrary work performed inside an external MCP process.
+MCP server permissions are controlled by the server implementation itself. Yanshi wraps discovered tools but does not sandbox arbitrary work performed inside an external MCP process.
 
 ## Current Boundaries
 

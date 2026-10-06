@@ -1,10 +1,10 @@
 # Simple Agent LLM Flow Example
 
-A comprehensive demonstration of integrating LLM API calls within AgentFlow's async workflow system, showcasing how AI responses can drive intelligent routing and decision-making in agent workflows.
+A comprehensive demonstration of integrating LLM API calls within Yanshi's async workflow system, showcasing how AI responses can drive intelligent routing and decision-making in agent workflows.
 
 ## Overview
 
-This example demonstrates the integration of Large Language Model (LLM) capabilities with AgentFlow's async execution framework. It shows how to:
+This example demonstrates the integration of Large Language Model (LLM) capabilities with Yanshi's async execution framework. It shows how to:
 
 - Create LLM-powered agent nodes using the moonshot demo pattern
 - Process and analyze AI responses programmatically
@@ -63,7 +63,7 @@ flowchart TD
 The core LLM integration component that:
 
 - Uses dynamic prompt templates with placeholder substitution
-- Follows the moonshot demo pattern: `AgentFlow::model("moonshot-v1-8k").prompt().execute()`
+- Follows the moonshot demo pattern: `Yanshi::model("moonshot-v1-8k").prompt().execute()`
 - Provides comprehensive error handling and logging
 - Stores responses in shared state for downstream processing
 
@@ -290,7 +290,7 @@ Implement retry logic in nodes:
 // In exec_async
 let mut attempts = 0;
 loop {
-    match LLMAgentFlow::model(model).prompt(prompt).execute().await {
+    match LLMYanshi::model(model).prompt(prompt).execute().await {
         Ok(response) => return Ok(response),
         Err(e) if attempts < 3 => {
             attempts += 1;
@@ -306,7 +306,7 @@ loop {
 Use streaming for real-time processing:
 
 ```rust
-let stream = LLMAgentFlow::model(model)
+let stream = LLMYanshi::model(model)
     .prompt(prompt)
     .execute_streaming().await?;
 
@@ -367,7 +367,7 @@ while let Some(chunk) = stream.next().await {
 1. **Enable Detailed Logging**:
 
    ```bash
-   RUST_LOG=agentflow_llm=debug cargo run --example simple_agent_llm_flow
+   RUST_LOG=yanshi_llm=debug cargo run --example simple_agent_llm_flow
    ```
 
 2. **Inspect Shared State**:

@@ -40,7 +40,7 @@ Concretely:
      a known entity in a new session, it can't surface a curated
      "you previously discussed X in Sessions Y on Z dates" header.
   3. *Implicit knowledge graph queries.* "Who else has Daisy talked
-     to about AgentFlow?" requires walking across entity facts +
+     to about Yanshi?" requires walking across entity facts +
      session participants, which the current schema doesn't model.
   4. *Conflict resolution across sessions.* Two sessions producing
      contradictory facts about the same `(entity, attribute)` are
@@ -79,7 +79,7 @@ whether linkage actually adds value.
 
 ### UC1 — Session inventory per entity
 
-> *"List the sessions where Daisy discussed AgentFlow's harness
+> *"List the sessions where Daisy discussed Yanshi's harness
 > module."*
 
 Today: requires a full scan of `entity_facts` filtered by entity_id =
@@ -107,7 +107,7 @@ truncation at session start = curated header.
 
 ### UC3 — Implicit knowledge graph queries
 
-> *"Who has Daisy collaborated with on AgentFlow this quarter?"*
+> *"Who has Daisy collaborated with on Yanshi this quarter?"*
 
 This needs proper graph semantics: walk from User(Daisy) → entities
 they've discussed → other users who've discussed those same
@@ -335,7 +335,7 @@ Whichever option lands eventually:
   `EntityFactStore` trait surfaces.
 - **Backfill is opt-in.** Existing sessions don't auto-populate the
   link tables; users who want them backfilled run an
-  `agentflow memory rebuild-index` command (to be designed).
+  `yanshi memory rebuild-index` command (to be designed).
 - **Stability tier** starts at Experimental. Graduates to Beta after
   one minor-release cycle of operator dogfooding.
 

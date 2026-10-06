@@ -1,0 +1,28 @@
+[package]
+name = "yanshi-async-util"
+version = "0.1.0"
+description = "Reliability combinators for Yanshi — retry policies and timeout wrappers"
+keywords = ["ai", "agents", "retry", "timeout"]
+categories = ["asynchronous"]
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+# Combinators surface YanshiError today; the error type pins this dep until a
+# future generic-error refactor (RFC §4 envisioned tokio/futures only).
+yanshi-graph = { path = "../yanshi-graph", version = "0.1" }
+serde = { version = "1.0", features = ["derive"] }
+# `macros` powers the `tokio::select!` in `race::race_with_limits`.
+tokio = { workspace = true, features = ["time", "macros"] }
+humantime-serde = "1.1"
+rand = "0.8"
+# W0.7: unconditional — was behind an `observability` feature nobody
+# ever enabled. See `yanshi-core/Cargo.toml`'s `tracing` entry for
+# the full rationale.
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

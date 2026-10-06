@@ -6,7 +6,7 @@
 
 ## Overview
 
-The Timeout Control System provides comprehensive timeout management for async operations throughout AgentFlow, ensuring that operations don't hang indefinitely and workflows remain responsive.
+The Timeout Control System provides comprehensive timeout management for async operations throughout Yanshi, ensuring that operations don't hang indefinitely and workflows remain responsive.
 
 ## Features
 
@@ -21,7 +21,7 @@ The Timeout Control System provides comprehensive timeout management for async o
 ### Basic Usage
 
 ```rust
-use agentflow_core::timeout::{with_timeout, TimeoutConfig};
+use yanshi_core::timeout::{with_timeout, TimeoutConfig};
 use std::time::Duration;
 
 async fn my_operation() -> Result<String, Box<dyn std::error::Error>> {
@@ -47,7 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Using Environment Presets
 
 ```rust
-use agentflow_core::timeout::TimeoutConfig;
+use yanshi_core::timeout::TimeoutConfig;
 
 // Production environment (stricter timeouts)
 let prod_config = TimeoutConfig::production();
@@ -78,7 +78,7 @@ The `TimeoutConfig` provides different timeout durations for different operation
 ### Custom Configuration
 
 ```rust
-use agentflow_core::timeout::TimeoutConfig;
+use yanshi_core::timeout::TimeoutConfig;
 use std::time::Duration;
 
 let config = TimeoutConfig {
@@ -212,8 +212,8 @@ nodes:
 ### Programmatic Node Execution
 
 ```rust
-use agentflow_core::{Flow, GraphNode, NodeType};
-use agentflow_core::timeout::{with_timeout, TimeoutConfig};
+use yanshi_core::{Flow, GraphNode, NodeType};
+use yanshi_core::timeout::{with_timeout, TimeoutConfig};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -236,16 +236,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Timeout Errors
 
-When a timeout occurs, you'll receive an `AgentFlowError::TimeoutExceeded` error:
+When a timeout occurs, you'll receive an `YanshiError::TimeoutExceeded` error:
 
 ```rust
-use agentflow_core::timeout::with_timeout;
-use agentflow_core::AgentFlowError;
+use yanshi_core::timeout::with_timeout;
+use yanshi_core::YanshiError;
 use std::time::Duration;
 
 match with_timeout(long_operation(), Duration::from_secs(10)).await {
     Ok(result) => println!("Success: {:?}", result),
-    Err(AgentFlowError::TimeoutExceeded { duration, .. }) => {
+    Err(YanshiError::TimeoutExceeded { duration, .. }) => {
         eprintln!("Operation timed out after {:?}", duration);
     }
     Err(e) => eprintln!("Other error: {:?}", e),
@@ -255,7 +255,7 @@ match with_timeout(long_operation(), Duration::from_secs(10)).await {
 ### With Error Context
 
 ```rust
-use agentflow_core::timeout::with_timeout_and_context;
+use yanshi_core::timeout::with_timeout_and_context;
 
 match with_timeout_and_context(
     complex_operation(),
@@ -288,7 +288,7 @@ with_timeout(llm_call(), config.llm_timeout).await?;
 ### 2. Use Environment-Specific Configs
 
 ```rust
-use agentflow_core::timeout::TimeoutConfig;
+use yanshi_core::timeout::TimeoutConfig;
 
 // Determine environment from ENV var
 let config = match std::env::var("ENV").as_deref() {
@@ -317,7 +317,7 @@ with_timeout_and_context(
 ### 4. Handle Timeouts Gracefully
 
 ```rust
-use agentflow_core::AgentFlowError;
+use yanshi_core::YanshiError;
 
 let result = with_timeout(operation(), Duration::from_secs(30)).await;
 
@@ -325,7 +325,7 @@ match result {
     Ok(value) => {
         // Process success
     }
-    Err(AgentFlowError::TimeoutExceeded { .. }) => {
+    Err(YanshiError::TimeoutExceeded { .. }) => {
         // Implement retry logic or fallback
         log::warn!("Operation timed out, falling back to cached result");
         // Use cached result or retry with longer timeout
@@ -340,8 +340,8 @@ match result {
 ### 5. Combine with Retry Mechanism
 
 ```rust
-use agentflow_core::{RetryPolicy, RetryStrategy, execute_with_retry};
-use agentflow_core::timeout::{with_timeout, TimeoutConfig};
+use yanshi_core::{RetryPolicy, RetryStrategy, execute_with_retry};
+use yanshi_core::timeout::{with_timeout, TimeoutConfig};
 
 let config = TimeoutConfig::default();
 let retry_policy = RetryPolicy::builder()
@@ -455,7 +455,7 @@ cargo test --test performance_benchmarks benchmark_timeout_control -- --nocaptur
 ### Example 1: HTTP Request with Timeout
 
 ```rust
-use agentflow_core::timeout::{with_timeout, TimeoutConfig};
+use yanshi_core::timeout::{with_timeout, TimeoutConfig};
 use reqwest;
 
 async fn fetch_api_data(url: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -478,7 +478,7 @@ async fn fetch_api_data(url: &str) -> Result<String, Box<dyn std::error::Error>>
 ### Example 2: Database Query with Timeout
 
 ```rust
-use agentflow_core::timeout::{with_timeout, TimeoutConfig};
+use yanshi_core::timeout::{with_timeout, TimeoutConfig};
 
 async fn query_database(query: &str) -> Result<Vec<Row>, Box<dyn std::error::Error>> {
     let config = TimeoutConfig::default();
@@ -495,7 +495,7 @@ async fn query_database(query: &str) -> Result<Vec<Row>, Box<dyn std::error::Err
 ### Example 3: LLM Call with Retry and Timeout
 
 ```rust
-use agentflow_core::{
+use yanshi_core::{
     RetryPolicy, RetryStrategy, execute_with_retry,
     timeout::{with_timeout, TimeoutConfig},
 };

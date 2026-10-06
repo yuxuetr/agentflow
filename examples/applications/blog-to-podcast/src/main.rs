@@ -4,7 +4,7 @@
 //! two-speaker podcast `.wav` + `.srt` by delegating the heavy lifting
 //! to `phonon-podcast` (script generation + TTS + assembly).
 //!
-//! The interesting bit for AgentFlow validation is the 2-node DAG —
+//! The interesting bit for Yanshi validation is the 2-node DAG —
 //! the trace event listener emits one event per node transition, and
 //! the `Flow` orchestration / checkpoint surface remains usable for
 //! future Plan B (per-segment retry) splits.
@@ -27,11 +27,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use agentflow_core::async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult};
-use agentflow_core::error::AgentFlowError;
-use agentflow_core::events::ConsoleListener;
-use agentflow_core::flow::{Flow, GraphNode, NodeType};
-use agentflow_core::value::FlowValue;
+use yanshi_core::async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult};
+use yanshi_core::error::YanshiError;
+use yanshi_core::events::ConsoleListener;
+use yanshi_core::flow::{Flow, GraphNode, NodeType};
+use yanshi_core::value::FlowValue;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -42,7 +42,7 @@ use podcast_node::{PodcastNode, PodcastNodeConfig, TtsBackend};
 
 /// Reads a text file (UTF-8) and surfaces the contents as
 /// `outputs["text"] = FlowValue::Json(String)`. Kept inline here rather
-/// than reaching into `agentflow-nodes::FileNode` because the FileNode
+/// than reaching into `yanshi-nodes::FileNode` because the FileNode
 /// API has more knobs than this app needs.
 struct ReadBlogNode {
   path: PathBuf,
@@ -52,7 +52,7 @@ struct ReadBlogNode {
 impl AsyncNode for ReadBlogNode {
   async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
     let text =
-      std::fs::read_to_string(&self.path).map_err(|err| AgentFlowError::AsyncExecutionError {
+      std::fs::read_to_string(&self.path).map_err(|err| YanshiError::AsyncExecutionError {
         message: format!("read blog at {}: {err}", self.path.display()),
       })?;
     let mut outputs = HashMap::new();
@@ -120,7 +120,7 @@ fn parse_args() -> Result<Args> {
 
 fn print_help() {
   println!(
-    "blog-to-podcast — AgentFlow A1 app (Plan A thin wrapper)\n\
+    "blog-to-podcast — Yanshi A1 app (Plan A thin wrapper)\n\
      \n\
      USAGE:\n  \
        blog-to-podcast --blog <path> [--output <path>] [--segments N] [--tts minimax|edge|openai]\n\
@@ -141,20 +141,20 @@ fn print_help() {
   );
 }
 
-/// Load `~/.agentflow/.env` if present so dogfooding doesn't require
+/// Load `~/.yanshi/.env` if present so dogfooding doesn't require
 /// `source`-ing the file before every `cargo run`. Silent no-op when
 /// the file is missing (e.g. CI), and existing env vars take
 /// precedence — we never overwrite operator-provided values.
-fn load_agentflow_dotenv() {
+fn load_yanshi_dotenv() {
   if let Some(home) = std::env::home_dir() {
-    let path = home.join(".agentflow").join(".env");
+    let path = home.join(".yanshi").join(".env");
     let _ = dotenvy::from_path(&path);
   }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-  load_agentflow_dotenv();
+  load_yanshi_dotenv();
   tracing_subscriber::fmt()
     .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
     .init();

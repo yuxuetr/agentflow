@@ -1,0 +1,372 @@
+//! MCP server implementation for exposing Yanshi capabilities.
+//!
+//! ## Stability: Beta (P10.5.2)
+//!
+//! The server surface graduated to **Beta** with the P10.5.2 slice.
+//! The closed method set and wire shapes are pinned by fixture-based
+//! compat tests in `yanshi-mcp/tests/server_contracts.rs`; see
+//! `docs/STABILITY.md` for the full Beta promise.
+//!
+//! ### Stable surfaces (Beta)
+//!
+//! - [`MCPServer::new`] constructor.
+//! - [`MCPServer::handle_request`] — the single request → response
+//!   entry point. JSON in, optional JSON out (`None` for
+//!   notifications). The stdio loop is a thin wrapper around it,
+//!   so external integrations using a non-stdio transport (HTTP,
+//!   websocket, in-memory test harness) can drive the same logic.
+//! - [`MCPServerHandler`] trait — implementor surface for the four
+//!   methods below. Default `get_capabilities` / `get_server_info`
+//!   implementations may be overridden.
+//! - Closed method set: `initialize`, `notifications/initialized`,
+//!   `tools/list`, `tools/call`. New methods may be added in
+//!   future minor releases; the existing four stay wire-stable.
+//! - [`STABLE_PROTOCOL_VERSION`] — the protocol version string
+//!   returned by `initialize`. Bumping this is a breaking change.
+//! - JSON-RPC error code mapping per `error::JsonRpcErrorCode`.
+//!
+//! ### NOT stable
+//!
+//! - [`YanshiServerHandler`] is an example implementation, not a
+//!   contract. Its tool set may change.
+//! - The stdio I/O loop's exact framing (line-delimited UTF-8 with
+//!   `\n` separator) is intentionally narrow — operators wanting
+//!   richer transports should drive `handle_request` directly.
+//! - `server/discover` (W5.8-6, additive per the "new methods may be
+//!   added" clause above) and the new [`crate::server_streamable_http`]
+//!   endpoint (W5.8-7) are **Experimental**, not Beta — see
+//!   `docs/STABILITY.md`.
+
+use crate::error::{JsonRpcErrorCode, MCPError, MCPResult};
+use crate::protocol::modern::{MCP_PROTOCOL_VERSION_2026_07_28, SERVER_DISCOVER_METHOD};
+use crate::protocol::types::MCP_PROTOCOL_VERSION;
+use crate::tools::{ToolCall, ToolDefinition, ToolResult};
+use serde_json::{Value, json};
+use std::collections::HashMap;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+/// MCP protocol version this server speaks. Returned by the
+/// `initialize` method's `protocolVersion` field. Bumping this
+/// constant is a breaking change to the Beta wire contract.
+///
+/// W5.6: re-exports `protocol::types::MCP_PROTOCOL_VERSION` (the
+/// client-side constant) instead of duplicating the literal — the two
+/// used to be independently hand-typed copies of the same string, a
+/// latent drift risk if either was ever edited without the other.
+pub const STABLE_PROTOCOL_VERSION: &str = MCP_PROTOCOL_VERSION;
+
+/// Handler trait for MCP server implementations (simplified for now)
+pub trait MCPServerHandler: Send + Sync {
+  /// List available tools
+  fn list_tools(&self) -> Vec<ToolDefinition>;
+
+  /// Execute a tool call (synchronous for simplicity)
+  fn call_tool(&self, tool_call: ToolCall) -> MCPResult<ToolResult>;
+
+  /// Get server capabilities
+  fn get_capabilities(&self) -> Value {
+    json!({
+        "tools": {}
+    })
+  }
+
+  /// Get server information
+  fn get_server_info(&self) -> Value {
+    json!({
+        "name": "yanshi-mcp-server",
+        "version": "0.1.0"
+    })
+  }
+}
+
+/// MCP server for exposing Yanshi functionality
+pub struct MCPServer {
+  handler: Box<dyn MCPServerHandler>,
+}
+
+impl MCPServer {
+  /// V3.5: same rationale/value as `StdioTransport::DEFAULT_MAX_MESSAGE_SIZE`
+  /// — this is the server's own inbound direction (a client talking
+  /// to us over stdin), which had no size cap at all before this fix,
+  /// not even a post-hoc one.
+  pub const DEFAULT_MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+
+  pub fn new(handler: Box<dyn MCPServerHandler>) -> Self {
+    Self { handler }
+  }
+
+  /// Run the server using stdio transport
+  pub async fn run_stdio(&self) -> MCPResult<()> {
+    let stdin = tokio::io::stdin();
+    let mut stdout = tokio::io::stdout();
+    let limit = Self::DEFAULT_MAX_MESSAGE_SIZE as u64;
+    let mut reader = BufReader::new(stdin).take(limit);
+    let mut buf: Vec<u8> = Vec::new();
+
+    loop {
+      buf.clear();
+      reader.set_limit(limit);
+      let bytes_read = reader.read_until(b'\n', &mut buf).await?;
+
+      if bytes_read == 0 {
+        break; // EOF
+      }
+
+      // V3.5: a bounded read that didn't find a `\n` within the cap
+      // means either the line exceeded `DEFAULT_MAX_MESSAGE_SIZE` or
+      // the client closed mid-line — either way the stream can't be
+      // safely resynced, so stop reading rather than misparse
+      // whatever comes next as a new message.
+      if buf.last() != Some(&b'\n') {
+        tracing::error!(
+          bytes = bytes_read,
+          max = Self::DEFAULT_MAX_MESSAGE_SIZE,
+          "stdio request exceeded max message size or ended without a terminator; stopping"
+        );
+        break;
+      }
+
+      let text = match std::str::from_utf8(&buf) {
+        Ok(s) => s,
+        Err(e) => {
+          tracing::error!("stdio request was not valid UTF-8: {}", e);
+          continue;
+        }
+      };
+      let request: Value = match serde_json::from_str(text.trim()) {
+        Ok(req) => req,
+        Err(e) => {
+          tracing::error!("Failed to parse request: {}", e);
+          continue;
+        }
+      };
+
+      let response = self.handle_request(request).await;
+
+      match response {
+        Ok(Some(resp)) => {
+          let response_str = serde_json::to_string(&resp)?;
+          stdout.write_all(response_str.as_bytes()).await?;
+          stdout.write_all(b"\n").await?;
+          stdout.flush().await?;
+        }
+        Ok(None) => {
+          // No response needed (notification)
+        }
+        Err(e) => {
+          tracing::error!("Error handling request: {}", e);
+        }
+      }
+    }
+
+    Ok(())
+  }
+
+  /// Handle a single JSON-RPC request and return the response.
+  ///
+  /// Returns `Ok(Some(response))` for request methods (the four
+  /// in the closed set: `initialize` / `tools/list` / `tools/call`
+  /// / unknown), `Ok(None)` for notifications (`notifications/
+  /// initialized`) where the JSON-RPC spec forbids a reply, and
+  /// `Err` only on protocol-level failures (missing `method`
+  /// field — which today is a hard 32600-style precondition, not
+  /// a per-method tool error).
+  ///
+  /// **Beta wire contract** — pinned by
+  /// `yanshi-mcp/tests/server_contracts.rs`. Existing methods'
+  /// required response fields must not change; new optional
+  /// fields may be added with serde defaults.
+  pub async fn handle_request(&self, request: Value) -> MCPResult<Option<Value>> {
+    let method = request["method"].as_str().ok_or_else(|| {
+      MCPError::protocol(
+        "Missing method in request".to_string(),
+        JsonRpcErrorCode::InvalidRequest,
+      )
+    })?;
+
+    let id = request.get("id");
+
+    match method {
+      "initialize" => {
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "protocolVersion": STABLE_PROTOCOL_VERSION,
+                "capabilities": self.handler.get_capabilities(),
+                "serverInfo": self.handler.get_server_info()
+            }
+        });
+        Ok(Some(response))
+      }
+
+      "notifications/initialized" => {
+        // Initialization complete notification - no response needed
+        Ok(None)
+      }
+
+      SERVER_DISCOVER_METHOD => {
+        // W5.8-6 (RFC_MCP_PROTOCOL_MODERNIZATION.md Phase 3): additive
+        // per the Beta promise in docs/STABILITY.md ("new methods may
+        // be added in future minor releases; the existing four stay
+        // wire-stable") — the four methods above are untouched.
+        //
+        // `handle_request` is transport-agnostic and its signature is
+        // itself part of the frozen Beta contract, so this response
+        // can't vary by which transport actually called it. It reports
+        // every protocol version this server (as a whole, across both
+        // its stdio and Streamable HTTP surfaces) understands, rather
+        // than only the one reachable on the current connection.
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "supportedVersions": [MCP_PROTOCOL_VERSION, MCP_PROTOCOL_VERSION_2026_07_28],
+                "capabilities": self.handler.get_capabilities(),
+                "serverInfo": self.handler.get_server_info()
+            }
+        });
+        Ok(Some(response))
+      }
+
+      "tools/list" => {
+        let tools = self.handler.list_tools();
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "tools": tools
+            }
+        });
+        Ok(Some(response))
+      }
+
+      "tools/call" => {
+        let params = request["params"].clone();
+        let tool_call: ToolCall = serde_json::from_value(params)?;
+
+        match self.handler.call_tool(tool_call) {
+          Ok(result) => {
+            let response = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": result
+            });
+            Ok(Some(response))
+          }
+          Err(e) => {
+            let error_response = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": -32603,
+                    "message": format!("Tool execution failed: {}", e)
+                }
+            });
+            Ok(Some(error_response))
+          }
+        }
+      }
+
+      _ => {
+        let error_response = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": -32601,
+                "message": format!("Method not found: {}", method)
+            }
+        });
+        Ok(Some(error_response))
+      }
+    }
+  }
+}
+
+/// Example server handler for Yanshi workflows
+pub struct YanshiServerHandler {
+  tools: HashMap<String, ToolDefinition>,
+}
+
+impl YanshiServerHandler {
+  pub fn new() -> Self {
+    let mut tools = HashMap::new();
+
+    // Example: Workflow execution tool
+    tools.insert(
+      "run_workflow".to_string(),
+      ToolDefinition {
+        name: "run_workflow".to_string(),
+        description: "Execute an Yanshi workflow".to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "workflow_path": {
+                    "type": "string",
+                    "description": "Path to the workflow YAML file"
+                },
+                "inputs": {
+                    "type": "object",
+                    "description": "Input parameters for the workflow"
+                }
+            },
+            "required": ["workflow_path"]
+        }),
+      },
+    );
+
+    Self { tools }
+  }
+}
+
+impl Default for YanshiServerHandler {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+impl MCPServerHandler for YanshiServerHandler {
+  fn list_tools(&self) -> Vec<ToolDefinition> {
+    self.tools.values().cloned().collect()
+  }
+
+  fn call_tool(&self, tool_call: ToolCall) -> MCPResult<ToolResult> {
+    match tool_call.name.as_str() {
+      "run_workflow" => {
+        // This would integrate with the actual Yanshi workflow runner
+        let workflow_path = tool_call.parameters["workflow_path"]
+          .as_str()
+          .ok_or_else(|| {
+            MCPError::tool(
+              "Missing workflow_path parameter".to_string(),
+              Some("run_workflow".to_string()),
+            )
+          })?;
+
+        // Placeholder implementation
+        let result = ToolResult::success(vec![crate::tools::ToolContent::Text {
+          text: format!("Would execute workflow: {}", workflow_path),
+        }]);
+
+        Ok(result)
+      }
+      _ => Err(MCPError::tool(
+        format!("Unknown tool: {}", tool_call.name),
+        Some(tool_call.name.clone()),
+      )),
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[tokio::test]
+  async fn test_handler_creation() {
+    let handler = YanshiServerHandler::new();
+    let tools = handler.list_tools();
+    assert!(!tools.is_empty());
+    assert_eq!(tools[0].name, "run_workflow");
+  }
+}

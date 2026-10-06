@@ -4,7 +4,7 @@
 //! Output: markdown changelog grouped by Conventional Commits type,
 //! written to a destination file or stdout.
 //!
-//! Two AgentFlow nodes in a Flow:
+//! Two Yanshi nodes in a Flow:
 //!
 //! 1. `RunGitLogNode` — invokes `git log <range> ...` via std::process,
 //!    captures stdout. Pure Rust, no agent involved. Validates the
@@ -28,7 +28,7 @@
 //!
 //! ```bash
 //! cd examples/applications/changelog-writer
-//! export MOONSHOT_API_KEY=...     # or rely on ~/.agentflow/.env
+//! export MOONSHOT_API_KEY=...     # or rely on ~/.yanshi/.env
 //!
 //! cargo run --release -- \
 //!   --range v0.2.0..HEAD \
@@ -43,21 +43,21 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 
-use agentflow_core::async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult};
-use agentflow_core::error::AgentFlowError;
-use agentflow_core::events::ConsoleListener;
-use agentflow_core::flow::{Flow, GraphNode, NodeType};
-use agentflow_core::value::FlowValue;
-use agentflow_llm::AgentFlow as LlmInit;
+use yanshi_core::async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult};
+use yanshi_core::error::YanshiError;
+use yanshi_core::events::ConsoleListener;
+use yanshi_core::flow::{Flow, GraphNode, NodeType};
+use yanshi_core::value::FlowValue;
+use yanshi_llm::Yanshi as LlmInit;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde_json::Value;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-fn load_agentflow_dotenv() {
+fn load_yanshi_dotenv() {
   if let Some(home) = std::env::home_dir() {
-    let _ = dotenvy::from_path(home.join(".agentflow").join(".env"));
+    let _ = dotenvy::from_path(home.join(".yanshi").join(".env"));
   }
 }
 
@@ -73,7 +73,7 @@ impl AsyncNode for RunGitLogNode {
     let range = match inputs.get("range") {
       Some(FlowValue::Json(Value::String(s))) => s.clone(),
       _ => {
-        return Err(AgentFlowError::NodeInputError {
+        return Err(YanshiError::NodeInputError {
           message: "input `range` must be a JSON string (e.g. \"v0.2.0..HEAD\")".into(),
         });
       }
@@ -90,13 +90,13 @@ impl AsyncNode for RunGitLogNode {
         "--pretty=format:%h|||%s|||%b%n===COMMIT===",
       ])
       .output()
-      .map_err(|err| AgentFlowError::AsyncExecutionError {
+      .map_err(|err| YanshiError::AsyncExecutionError {
         message: format!("failed to spawn git: {err}"),
       })?;
 
     if !output.status.success() {
       let stderr = String::from_utf8_lossy(&output.stderr);
-      return Err(AgentFlowError::AsyncExecutionError {
+      return Err(YanshiError::AsyncExecutionError {
         message: format!("git log {range} failed (exit {}): {stderr}", output.status),
       });
     }
@@ -136,7 +136,7 @@ impl AsyncNode for ClassifyAndRenderNode {
     let raw = match inputs.get("raw") {
       Some(FlowValue::Json(Value::String(s))) => s.clone(),
       _ => {
-        return Err(AgentFlowError::NodeInputError {
+        return Err(YanshiError::NodeInputError {
           message: "input `raw` (git log output) must be a JSON string".into(),
         });
       }
@@ -147,7 +147,7 @@ impl AsyncNode for ClassifyAndRenderNode {
     };
 
     if raw.trim().is_empty() {
-      return Err(AgentFlowError::NodeInputError {
+      return Err(YanshiError::NodeInputError {
         message: format!("git log for range `{range}` returned no commits"),
       });
     }
@@ -158,7 +158,7 @@ impl AsyncNode for ClassifyAndRenderNode {
       .prompt(&prompt)
       .execute()
       .await
-      .map_err(|err| AgentFlowError::AsyncExecutionError {
+      .map_err(|err| YanshiError::AsyncExecutionError {
         message: format!("LLM call failed: {err}"),
       })?;
 
@@ -252,7 +252,7 @@ fn parse_args() -> Result<Args> {
 
 fn print_help() {
   println!(
-    "changelog-writer — A7 AgentFlow app (git log → markdown changelog)\n\
+    "changelog-writer — A7 Yanshi app (git log → markdown changelog)\n\
      \n\
      USAGE:\n  \
        changelog-writer --range <git-range> [--output <path>] [--model <name>]\n\
@@ -265,13 +265,13 @@ fn print_help() {
      \n\
      ENV:\n  \
        MOONSHOT_API_KEY     Required by the default model. Auto-loaded\n  \
-                            from ~/.agentflow/.env if present.\n"
+                            from ~/.yanshi/.env if present.\n"
   );
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-  load_agentflow_dotenv();
+  load_yanshi_dotenv();
   tracing_subscriber::fmt()
     .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
     .init();
@@ -283,7 +283,7 @@ async fn main() -> Result<()> {
   // ClassifyAndRenderNode resolves the model name.
   LlmInit::init()
     .await
-    .context("failed to initialise agentflow-llm (model registry / provider config)")?;
+    .context("failed to initialise yanshi-llm (model registry / provider config)")?;
 
   let flow = Flow::new(vec![
     GraphNode {

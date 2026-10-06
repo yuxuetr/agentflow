@@ -1,13 +1,13 @@
 # Workflow Schema
 
-本文档描述 `agentflow workflow validate` 当前执行的 CLI workflow schema 校验规则。
+本文档描述 `yanshi workflow validate` 当前执行的 CLI workflow schema 校验规则。
 
 ## 校验入口
 
 ```bash
-agentflow workflow validate path/to/workflow.yml
-agentflow workflow validate path/to/workflow.yml --format json
-agentflow workflow validate path/to/workflow.yml --strict
+yanshi workflow validate path/to/workflow.yml
+yanshi workflow validate path/to/workflow.yml --format json
+yanshi workflow validate path/to/workflow.yml --strict
 ```
 
 - 默认模式下，未知参数作为 warning 输出，用于兼容已有 YAML。

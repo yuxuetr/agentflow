@@ -1,0 +1,791 @@
+//! Integration tests for checkpoint recovery
+
+use async_trait::async_trait;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tempfile::TempDir;
+use yanshi_core::FlowExt;
+use yanshi_core::{
+  async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult},
+  checkpoint::{CheckpointConfig, CheckpointManager},
+  error::YanshiError,
+  flow::{Flow, GraphNode, NodeType},
+  value::FlowValue,
+};
+
+fn checkpoint_json_payload<'a>(
+  checkpoint: &'a yanshi_core::checkpoint::Checkpoint,
+  node_id: &str,
+  output_name: &str,
+) -> &'a serde_json::Value {
+  &checkpoint.state[node_id][output_name]["value"]
+}
+
+fn use_writable_home() {
+  let home = std::env::temp_dir().join(format!("yanshi-checkpoint-test-{}", uuid::Uuid::new_v4()));
+  std::fs::create_dir_all(&home).unwrap();
+  // SAFETY: each test sets HOME before constructing Yanshi state and does
+  // not concurrently mutate the process environment.
+  unsafe {
+    std::env::set_var("HOME", home);
+  }
+}
+
+/// Simple test node
+#[derive(Clone)]
+struct SimpleNode {
+  _id: String,
+  output_value: String,
+}
+
+#[derive(Clone)]
+struct AgentLikeNode;
+
+#[derive(Clone)]
+struct CountingAgentLikeNode {
+  calls: Arc<AtomicUsize>,
+}
+
+#[derive(Clone)]
+struct PartialResumeAgentLikeNode {
+  calls: Arc<AtomicUsize>,
+}
+
+#[derive(Clone)]
+struct RepeatedPartialResumeAgentLikeNode {
+  calls: Arc<AtomicUsize>,
+}
+
+#[derive(Clone)]
+struct FlakyNode {
+  calls: Arc<AtomicUsize>,
+}
+
+#[derive(Clone)]
+struct FileOutputNode {
+  path: std::path::PathBuf,
+}
+
+#[derive(Clone)]
+struct FileConsumerFailsOnce {
+  calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl AsyncNode for AgentLikeNode {
+  async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let mut outputs = HashMap::new();
+    outputs.insert(
+      "response".to_string(),
+      FlowValue::Json(serde_json::json!("done")),
+    );
+    outputs.insert(
+      "agent_result".to_string(),
+      FlowValue::Json(serde_json::json!({
+        "session_id": "session-1",
+        "answer": "done",
+        "stop_reason": {"reason": "final_answer"},
+        "steps": [
+          {"index": 0, "kind": {"type": "observe", "input": "hello"}},
+          {"index": 1, "kind": {"type": "final_answer", "answer": "done"}}
+        ],
+        "events": []
+      })),
+    );
+    Ok(outputs)
+  }
+}
+
+#[async_trait]
+impl AsyncNode for CountingAgentLikeNode {
+  async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let call_count = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+    let mut outputs = HashMap::new();
+    outputs.insert(
+      "response".to_string(),
+      FlowValue::Json(serde_json::json!("done")),
+    );
+    outputs.insert(
+      "agent_result".to_string(),
+      FlowValue::Json(serde_json::json!({
+        "session_id": "session-1",
+        "answer": "done",
+        "stop_reason": {"reason": "final_answer"},
+        "steps": [
+          {"index": 0, "kind": {"type": "observe", "input": "hello"}},
+          {"index": 1, "kind": {"type": "tool_call", "tool": "expensive_tool", "params": {"call_count": call_count}}},
+          {"index": 2, "kind": {"type": "tool_result", "tool": "expensive_tool", "content": "cached by checkpoint", "is_error": false}},
+          {"index": 3, "kind": {"type": "final_answer", "answer": "done"}}
+        ],
+        "events": []
+      })),
+    );
+    Ok(outputs)
+  }
+}
+
+#[async_trait]
+impl AsyncNode for PartialResumeAgentLikeNode {
+  async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let call_count = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+    let mut outputs = HashMap::new();
+
+    if call_count == 1 {
+      outputs.insert(
+        "response".to_string(),
+        FlowValue::Json(serde_json::json!("")),
+      );
+      outputs.insert(
+        "agent_result".to_string(),
+        FlowValue::Json(serde_json::json!({
+          "session_id": "session-partial",
+          "answer": null,
+          "stop_reason": {"reason": "cancelled", "message": "interrupted"},
+          "steps": [
+            {"index": 0, "kind": {"type": "observe", "input": "hello"}},
+            {"index": 1, "kind": {"type": "tool_call", "tool": "expensive_tool", "params": {"query": "hello"}}},
+            {"index": 2, "kind": {"type": "tool_result", "tool": "expensive_tool", "content": "cached observation", "is_error": false}}
+          ],
+          "events": []
+        })),
+      );
+      outputs.insert(
+        "agent_resume".to_string(),
+        FlowValue::Json(serde_json::json!({
+          "version": 1,
+          "resume_mode": "partial_run_supported",
+          "partial_run_resume_supported": true
+        })),
+      );
+      return Err(YanshiError::NodePartialExecutionFailed {
+        message: "interrupted after durable tool result".to_string(),
+        partial_outputs: outputs,
+      });
+    }
+
+    let prior = inputs
+      .get("agent_result")
+      .expect("checkpointed agent_result should be injected on resume");
+    match prior {
+      FlowValue::Json(value) => assert_eq!(value["session_id"], "session-partial"),
+      other => panic!("expected JSON prior agent_result, got {other:?}"),
+    }
+
+    outputs.insert(
+      "response".to_string(),
+      FlowValue::Json(serde_json::json!("done after resume")),
+    );
+    outputs.insert(
+      "agent_result".to_string(),
+      FlowValue::Json(serde_json::json!({
+        "session_id": "session-partial",
+        "answer": "done after resume",
+        "stop_reason": {"reason": "final_answer"},
+        "steps": [
+          {"index": 0, "kind": {"type": "observe", "input": "hello"}},
+          {"index": 1, "kind": {"type": "tool_call", "tool": "expensive_tool", "params": {"query": "hello"}}},
+          {"index": 2, "kind": {"type": "tool_result", "tool": "expensive_tool", "content": "cached observation", "is_error": false}},
+          {"index": 3, "kind": {"type": "final_answer", "answer": "done after resume"}}
+        ],
+        "events": []
+      })),
+    );
+    Ok(outputs)
+  }
+}
+
+#[async_trait]
+impl AsyncNode for RepeatedPartialResumeAgentLikeNode {
+  async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let call_count = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+
+    if call_count > 1 {
+      let prior = inputs
+        .get("agent_result")
+        .expect("checkpointed partial agent_result should be injected on every resume");
+      match prior {
+        FlowValue::Json(value) => assert_eq!(value["session_id"], "session-repeated-partial"),
+        other => panic!("expected JSON prior agent_result, got {other:?}"),
+      }
+    }
+
+    let mut outputs = HashMap::new();
+    outputs.insert(
+      "response".to_string(),
+      FlowValue::Json(serde_json::json!("")),
+    );
+    outputs.insert(
+      "agent_result".to_string(),
+      FlowValue::Json(serde_json::json!({
+        "session_id": "session-repeated-partial",
+        "answer": null,
+        "stop_reason": {"reason": "cancelled", "message": "interrupted"},
+        "steps": [
+          {"index": 0, "kind": {"type": "observe", "input": "hello"}},
+          {"index": 1, "kind": {"type": "tool_call", "tool": "expensive_tool", "params": {"attempt": call_count}}},
+          {"index": 2, "kind": {"type": "tool_result", "tool": "expensive_tool", "content": "cached observation", "is_error": false}}
+        ],
+        "events": []
+      })),
+    );
+    outputs.insert(
+      "agent_resume".to_string(),
+      FlowValue::Json(serde_json::json!({
+        "version": 1,
+        "resume_mode": "partial_run_supported",
+        "partial_run_resume_supported": true
+      })),
+    );
+
+    Err(YanshiError::NodePartialExecutionFailed {
+      message: "still interrupted after durable tool result".to_string(),
+      partial_outputs: outputs,
+    })
+  }
+}
+
+#[async_trait]
+impl AsyncNode for FlakyNode {
+  async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let call_count = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+    if call_count == 1 {
+      return Err(yanshi_core::error::YanshiError::NodeExecutionFailed {
+        message: "transient downstream failure".to_string(),
+      });
+    }
+
+    let mut outputs = HashMap::new();
+    outputs.insert(
+      "result".to_string(),
+      FlowValue::Json(serde_json::json!("recovered")),
+    );
+    Ok(outputs)
+  }
+}
+
+#[async_trait]
+impl AsyncNode for FileOutputNode {
+  async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let mut outputs = HashMap::new();
+    outputs.insert(
+      "asset".to_string(),
+      FlowValue::File {
+        path: self.path.clone(),
+        mime_type: Some("text/plain".to_string()),
+      },
+    );
+    Ok(outputs)
+  }
+}
+
+#[async_trait]
+impl AsyncNode for FileConsumerFailsOnce {
+  async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let call_count = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+    let asset = inputs
+      .get("asset")
+      .expect("checkpointed file asset should be mapped into consumer");
+
+    match asset {
+      FlowValue::File { path, mime_type } => {
+        assert_eq!(
+          path.file_name().and_then(|name| name.to_str()),
+          Some("asset.txt")
+        );
+        assert_eq!(mime_type.as_deref(), Some("text/plain"));
+      }
+      other => panic!("expected FlowValue::File after checkpoint restore, got {other:?}"),
+    }
+
+    if call_count == 1 {
+      return Err(yanshi_core::error::YanshiError::NodeExecutionFailed {
+        message: "force resume after checkpoint".to_string(),
+      });
+    }
+
+    let mut outputs = HashMap::new();
+    outputs.insert("ok".to_string(), FlowValue::Json(serde_json::json!(true)));
+    Ok(outputs)
+  }
+}
+
+impl SimpleNode {
+  fn new(id: &str, output_value: &str) -> Self {
+    Self {
+      _id: id.to_string(),
+      output_value: output_value.to_string(),
+    }
+  }
+}
+
+#[async_trait]
+impl AsyncNode for SimpleNode {
+  async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    let mut outputs = HashMap::new();
+    outputs.insert(
+      "result".to_string(),
+      FlowValue::Json(serde_json::json!(self.output_value)),
+    );
+    Ok(outputs)
+  }
+}
+
+#[tokio::test]
+async fn test_checkpointing_enabled() {
+  use_writable_home();
+  let temp_dir = TempDir::new().unwrap();
+  let config = CheckpointConfig::default()
+    .with_checkpoint_dir(temp_dir.path())
+    .with_auto_cleanup(false);
+
+  let nodes = vec![GraphNode {
+    id: "node1".to_string(),
+    node_type: NodeType::Standard(Arc::new(SimpleNode::new("node1", "test_output"))),
+    dependencies: vec![],
+    input_mapping: None,
+    run_if: None,
+    initial_inputs: HashMap::new(),
+  }];
+
+  let flow = Flow::new(nodes).with_checkpointing(config).unwrap();
+  let result = flow.run().await;
+
+  assert!(result.is_ok());
+  let state = result.unwrap();
+  assert_eq!(state.len(), 1);
+  assert!(state.contains_key("node1"));
+}
+
+#[tokio::test]
+async fn test_checkpoint_saves_state() {
+  use_writable_home();
+  let temp_dir = TempDir::new().unwrap();
+  let config = CheckpointConfig::default()
+    .with_checkpoint_dir(temp_dir.path())
+    .with_auto_cleanup(false);
+
+  let nodes = vec![
+    GraphNode {
+      id: "node1".to_string(),
+      node_type: NodeType::Standard(Arc::new(SimpleNode::new("node1", "output1"))),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    },
+    GraphNode {
+      id: "node2".to_string(),
+      node_type: NodeType::Standard(Arc::new(SimpleNode::new("node2", "output2"))),
+      dependencies: vec!["node1".to_string()],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    },
+  ];
+
+  let flow = Flow::new(nodes).with_checkpointing(config).unwrap();
+  let result = flow.run().await;
+
+  assert!(result.is_ok());
+  let state = result.unwrap();
+  assert_eq!(state.len(), 2);
+
+  // Verify checkpoint directory was created
+  assert!(temp_dir.path().exists());
+
+  // Verify checkpoint files exist (they will have UUID-based directory names)
+  let entries: Vec<_> = std::fs::read_dir(temp_dir.path())
+    .unwrap()
+    .filter_map(|e| e.ok())
+    .collect();
+
+  // At least one workflow directory should exist
+  assert!(!entries.is_empty(), "No checkpoint directories created");
+}
+
+#[tokio::test]
+async fn test_checkpoint_resume_preserves_file_flowvalue() {
+  use_writable_home();
+  let temp_dir = TempDir::new().unwrap();
+  let asset_path = temp_dir.path().join("asset.txt");
+  std::fs::write(&asset_path, "checkpoint asset").unwrap();
+
+  let config = CheckpointConfig::default()
+    .with_checkpoint_dir(temp_dir.path().join("checkpoints"))
+    .with_auto_cleanup(false);
+  let consumer_calls = Arc::new(AtomicUsize::new(0));
+
+  let nodes = vec![
+    GraphNode {
+      id: "producer".to_string(),
+      node_type: NodeType::Standard(Arc::new(FileOutputNode { path: asset_path })),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    },
+    GraphNode {
+      id: "consumer".to_string(),
+      node_type: NodeType::Standard(Arc::new(FileConsumerFailsOnce {
+        calls: consumer_calls.clone(),
+      })),
+      dependencies: vec!["producer".to_string()],
+      input_mapping: Some(HashMap::from([(
+        "asset".to_string(),
+        ("producer".to_string(), "asset".to_string()),
+      )])),
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    },
+  ];
+
+  let flow = Flow::new(nodes).with_checkpointing(config).unwrap();
+  let first_run = flow.run().await.unwrap();
+  assert!(first_run["consumer"].is_err());
+  assert_eq!(consumer_calls.load(Ordering::SeqCst), 1);
+
+  let workflow_id = std::fs::read_dir(temp_dir.path().join("checkpoints"))
+    .unwrap()
+    .filter_map(|entry| entry.ok())
+    .find(|entry| entry.path().is_dir())
+    .expect("workflow checkpoint directory")
+    .file_name()
+    .to_string_lossy()
+    .into_owned();
+
+  let resumed = flow.resume(&workflow_id).await.unwrap();
+  assert_eq!(consumer_calls.load(Ordering::SeqCst), 2);
+  assert_eq!(
+    resumed["consumer"].as_ref().unwrap()["ok"],
+    FlowValue::Json(serde_json::json!(true))
+  );
+}
+
+#[tokio::test]
+async fn test_checkpoint_preserves_agent_node_step_history() {
+  use_writable_home();
+  let temp_dir = TempDir::new().unwrap();
+  let config = CheckpointConfig::default()
+    .with_checkpoint_dir(temp_dir.path())
+    .with_auto_cleanup(false);
+  let manager = CheckpointManager::new(config.clone()).unwrap();
+
+  let nodes = vec![GraphNode {
+    id: "agent".to_string(),
+    node_type: NodeType::Standard(Arc::new(AgentLikeNode)),
+    dependencies: vec![],
+    input_mapping: None,
+    run_if: None,
+    initial_inputs: HashMap::new(),
+  }];
+
+  let flow = Flow::new(nodes).with_checkpointing(config).unwrap();
+  let result = flow.run().await.unwrap();
+  assert!(result.contains_key("agent"));
+
+  let workflow_dir = std::fs::read_dir(temp_dir.path())
+    .unwrap()
+    .filter_map(|entry| entry.ok())
+    .find(|entry| entry.path().is_dir())
+    .expect("workflow checkpoint directory");
+  let workflow_id = workflow_dir.file_name().to_string_lossy().into_owned();
+  let checkpoint = manager
+    .load_latest_checkpoint(&workflow_id)
+    .await
+    .unwrap()
+    .expect("latest checkpoint");
+
+  let agent_result = checkpoint_json_payload(&checkpoint, "agent", "agent_result");
+  assert_eq!(agent_result["session_id"], "session-1");
+  assert_eq!(agent_result["steps"][0]["kind"]["type"], "observe");
+  assert_eq!(agent_result["steps"][1]["kind"]["type"], "final_answer");
+}
+
+#[tokio::test]
+async fn test_resume_continues_after_agent_node_without_reexecuting_it() {
+  use_writable_home();
+  let temp_dir = TempDir::new().unwrap();
+  let config = CheckpointConfig::default()
+    .with_checkpoint_dir(temp_dir.path())
+    .with_auto_cleanup(false);
+  let manager = CheckpointManager::new(config.clone()).unwrap();
+  let agent_calls = Arc::new(AtomicUsize::new(0));
+  let flaky_calls = Arc::new(AtomicUsize::new(0));
+
+  let nodes = vec![
+    GraphNode {
+      id: "agent".to_string(),
+      node_type: NodeType::Standard(Arc::new(CountingAgentLikeNode {
+        calls: agent_calls.clone(),
+      })),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    },
+    GraphNode {
+      id: "downstream".to_string(),
+      node_type: NodeType::Standard(Arc::new(FlakyNode {
+        calls: flaky_calls.clone(),
+      })),
+      dependencies: vec!["agent".to_string()],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    },
+  ];
+
+  let flow = Flow::new(nodes).with_checkpointing(config).unwrap();
+  let first_run = flow.run().await.unwrap();
+  assert!(first_run["downstream"].is_err());
+  assert_eq!(agent_calls.load(Ordering::SeqCst), 1);
+  assert_eq!(flaky_calls.load(Ordering::SeqCst), 1);
+
+  let workflow_dir = std::fs::read_dir(temp_dir.path())
+    .unwrap()
+    .filter_map(|entry| entry.ok())
+    .find(|entry| entry.path().is_dir())
+    .expect("workflow checkpoint directory");
+  let workflow_id = workflow_dir.file_name().to_string_lossy().into_owned();
+  let failed_checkpoint = manager
+    .load_latest_checkpoint(&workflow_id)
+    .await
+    .unwrap()
+    .expect("latest checkpoint");
+  assert_eq!(failed_checkpoint.last_completed_node, "agent");
+  assert!(failed_checkpoint.state.contains_key("agent"));
+  assert!(!failed_checkpoint.state.contains_key("downstream"));
+
+  let resumed = flow.resume(&workflow_id).await.unwrap();
+  assert_eq!(agent_calls.load(Ordering::SeqCst), 1);
+  assert_eq!(flaky_calls.load(Ordering::SeqCst), 2);
+  assert_eq!(
+    resumed["downstream"].as_ref().unwrap()["result"],
+    FlowValue::Json(serde_json::json!("recovered"))
+  );
+
+  let agent_result = match &resumed["agent"].as_ref().unwrap()["agent_result"] {
+    FlowValue::Json(value) => value,
+    other => panic!("expected JSON agent_result, got {other:?}"),
+  };
+  assert_eq!(agent_result["steps"][1]["kind"]["type"], "tool_call");
+  assert_eq!(agent_result["steps"][2]["kind"]["type"], "tool_result");
+}
+
+#[tokio::test]
+async fn test_resume_reexecutes_failed_agent_node_with_checkpointed_partial_trace() {
+  use_writable_home();
+  let temp_dir = TempDir::new().unwrap();
+  let config = CheckpointConfig::default()
+    .with_checkpoint_dir(temp_dir.path())
+    .with_auto_cleanup(false);
+  let manager = CheckpointManager::new(config.clone()).unwrap();
+  let agent_calls = Arc::new(AtomicUsize::new(0));
+
+  let nodes = vec![GraphNode {
+    id: "agent".to_string(),
+    node_type: NodeType::Standard(Arc::new(PartialResumeAgentLikeNode {
+      calls: agent_calls.clone(),
+    })),
+    dependencies: vec![],
+    input_mapping: None,
+    run_if: None,
+    initial_inputs: HashMap::new(),
+  }];
+
+  let flow = Flow::new(nodes).with_checkpointing(config).unwrap();
+  let first_run = flow.run().await.unwrap();
+  assert!(first_run["agent"].is_err());
+  assert_eq!(agent_calls.load(Ordering::SeqCst), 1);
+
+  let workflow_dir = std::fs::read_dir(temp_dir.path())
+    .unwrap()
+    .filter_map(|entry| entry.ok())
+    .find(|entry| entry.path().is_dir())
+    .expect("workflow checkpoint directory");
+  let workflow_id = workflow_dir.file_name().to_string_lossy().into_owned();
+  let failed_checkpoint = manager
+    .load_latest_checkpoint(&workflow_id)
+    .await
+    .unwrap()
+    .expect("latest checkpoint");
+
+  assert_eq!(failed_checkpoint.last_completed_node, "");
+  assert!(failed_checkpoint.state.contains_key("agent"));
+  assert_eq!(
+    checkpoint_json_payload(&failed_checkpoint, "agent", "agent_result")["steps"][2]["kind"]["type"],
+    "tool_result"
+  );
+  assert_eq!(
+    checkpoint_json_payload(&failed_checkpoint, "agent", "agent_resume")["resume_mode"],
+    "partial_run_supported"
+  );
+
+  let resumed = flow.resume(&workflow_id).await.unwrap();
+  assert_eq!(agent_calls.load(Ordering::SeqCst), 2);
+  assert_eq!(
+    resumed["agent"].as_ref().unwrap()["response"],
+    FlowValue::Json(serde_json::json!("done after resume"))
+  );
+}
+
+#[tokio::test]
+async fn test_repeated_partial_resume_keeps_checkpoint_at_last_completed_node() {
+  use_writable_home();
+  let temp_dir = TempDir::new().unwrap();
+  let config = CheckpointConfig::default()
+    .with_checkpoint_dir(temp_dir.path())
+    .with_auto_cleanup(false);
+  let manager = CheckpointManager::new(config.clone()).unwrap();
+  let agent_calls = Arc::new(AtomicUsize::new(0));
+
+  let nodes = vec![
+    GraphNode {
+      id: "prep".to_string(),
+      node_type: NodeType::Standard(Arc::new(SimpleNode::new("prep", "ready"))),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    },
+    GraphNode {
+      id: "agent".to_string(),
+      node_type: NodeType::Standard(Arc::new(RepeatedPartialResumeAgentLikeNode {
+        calls: agent_calls.clone(),
+      })),
+      dependencies: vec!["prep".to_string()],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    },
+  ];
+
+  let flow = Flow::new(nodes).with_checkpointing(config).unwrap();
+  let first_run = flow.run().await.unwrap();
+  assert!(first_run["agent"].is_err());
+  assert_eq!(agent_calls.load(Ordering::SeqCst), 1);
+
+  let workflow_dir = std::fs::read_dir(temp_dir.path())
+    .unwrap()
+    .filter_map(|entry| entry.ok())
+    .find(|entry| entry.path().is_dir())
+    .expect("workflow checkpoint directory");
+  let workflow_id = workflow_dir.file_name().to_string_lossy().into_owned();
+
+  let first_checkpoint = manager
+    .load_latest_checkpoint(&workflow_id)
+    .await
+    .unwrap()
+    .expect("latest checkpoint");
+  assert_eq!(first_checkpoint.last_completed_node, "prep");
+  assert!(first_checkpoint.state.contains_key("agent"));
+
+  let second_run = flow.resume(&workflow_id).await.unwrap();
+  assert!(second_run["agent"].is_err());
+  assert_eq!(agent_calls.load(Ordering::SeqCst), 2);
+
+  let second_checkpoint = manager
+    .load_latest_checkpoint(&workflow_id)
+    .await
+    .unwrap()
+    .expect("latest checkpoint after second failure");
+  assert_eq!(second_checkpoint.last_completed_node, "prep");
+  assert_eq!(
+    checkpoint_json_payload(&second_checkpoint, "agent", "agent_resume")["resume_mode"],
+    "partial_run_supported"
+  );
+
+  let third_run = flow.resume(&workflow_id).await.unwrap();
+  assert!(third_run["agent"].is_err());
+  assert_eq!(agent_calls.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn test_default_checkpointing() {
+  use_writable_home();
+  let nodes = vec![GraphNode {
+    id: "node1".to_string(),
+    node_type: NodeType::Standard(Arc::new(SimpleNode::new("node1", "test"))),
+    dependencies: vec![],
+    input_mapping: None,
+    run_if: None,
+    initial_inputs: HashMap::new(),
+  }];
+
+  let flow = Flow::new(nodes).with_default_checkpointing();
+  assert!(flow.is_ok(), "Default checkpointing should succeed");
+
+  let result = flow.unwrap().run().await;
+  assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_checkpoint_after_each_node() {
+  use_writable_home();
+  let temp_dir = TempDir::new().unwrap();
+  let config = CheckpointConfig::default()
+    .with_checkpoint_dir(temp_dir.path())
+    .with_auto_cleanup(false);
+
+  // Create a 3-node workflow
+  let nodes = vec![
+    GraphNode {
+      id: "step1".to_string(),
+      node_type: NodeType::Standard(Arc::new(SimpleNode::new("step1", "first"))),
+      dependencies: vec![],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    },
+    GraphNode {
+      id: "step2".to_string(),
+      node_type: NodeType::Standard(Arc::new(SimpleNode::new("step2", "second"))),
+      dependencies: vec!["step1".to_string()],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    },
+    GraphNode {
+      id: "step3".to_string(),
+      node_type: NodeType::Standard(Arc::new(SimpleNode::new("step3", "third"))),
+      dependencies: vec!["step2".to_string()],
+      input_mapping: None,
+      run_if: None,
+      initial_inputs: HashMap::new(),
+    },
+  ];
+
+  let flow = Flow::new(nodes).with_checkpointing(config).unwrap();
+  let result = flow.run().await;
+
+  assert!(result.is_ok());
+
+  // Verify all nodes completed
+  let state = result.unwrap();
+  assert_eq!(state.len(), 3);
+  assert!(state.contains_key("step1"));
+  assert!(state.contains_key("step2"));
+  assert!(state.contains_key("step3"));
+}
+
+#[tokio::test]
+async fn test_workflow_without_checkpointing() {
+  use_writable_home();
+  // Ensure normal workflows still work without checkpointing
+  let nodes = vec![GraphNode {
+    id: "node1".to_string(),
+    node_type: NodeType::Standard(Arc::new(SimpleNode::new("node1", "test"))),
+    dependencies: vec![],
+    input_mapping: None,
+    run_if: None,
+    initial_inputs: HashMap::new(),
+  }];
+
+  let flow = Flow::new(nodes);
+  let result = flow.run().await;
+
+  assert!(result.is_ok());
+  let state = result.unwrap();
+  assert_eq!(state.len(), 1);
+}

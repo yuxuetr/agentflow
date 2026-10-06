@@ -1,7 +1,7 @@
 # Harness Phase H6 — Promotion Criteria
 
 Status: **Decision document for P10.10.1**
-Owner: AgentFlow core
+Owner: Yanshi core
 Last updated: 2026-05-20
 Closes: P10.10.1 (Medium — v1.x)
 
@@ -44,7 +44,7 @@ names; this table reconciles them.
 
 ## Item 1 — Slash-command ecosystem expansion
 
-**What it would mean.** Today `agentflow harness` runs sessions by
+**What it would mean.** Today `yanshi harness` runs sessions by
 flag (`--user-input`, `--workspace-root`, etc.). A slash-command
 ecosystem would let users type `/file path/to/x.rs` or `/recent` or
 `/skill some-skill` inside a session prompt and have the runtime
@@ -67,7 +67,7 @@ the CLI; the runtime contract doesn't need to change.
   interactive prompt at least twice in a two-week window.
 - An external contributor opens a PR adding a single `/cmd` and
   asks for the wider model.
-- The `agentflow harness chat` UX gets blocked on
+- The `yanshi harness chat` UX gets blocked on
   "the prompt template can't reference X" enough times to merit
   a structured fix.
 
@@ -76,7 +76,7 @@ the CLI; the runtime contract doesn't need to change.
 1. Tokenizer: a leading `/` prefix on a line, parsed into
    `Command + args`. Whitespace handling.
 2. Registry shape: a `HashMap<&str, Box<dyn SlashHandler>>`
-   in `agentflow-harness` (additive, no API break).
+   in `yanshi-harness` (additive, no API break).
 3. First three commands to ship (recommendation: `/file`,
    `/skill`, `/recent`).
 4. Whether built-in commands can be disabled by config.
@@ -90,8 +90,8 @@ docs + tests.
 
 ## Item 2 — TUI product shell
 
-**What it would mean.** A separate `agentflow-tui` (or
-`agentflow tui`) surface — a full-screen `ratatui` app that runs
+**What it would mean.** A separate `yanshi-tui` (or
+`yanshi tui`) surface — a full-screen `ratatui` app that runs
 Harness sessions interactively with panes for the live event
 stream, the workspace tree, the approval queue, etc.
 
@@ -100,7 +100,7 @@ stream, the workspace tree, the approval queue, etc.
 > UI-first product shell that freezes the protocol before
 > stream-JSON envelopes stabilize.
 
-**Why we haven't done it.** The Web UI (`agentflow-ui`,
+**Why we haven't done it.** The Web UI (`yanshi-ui`,
 debugger-focused per P10.17.1) covers the visual debugger
 use case; the CLI + JSONL persistence covers the headless
 case; and the Harness event envelope is still Beta (per
@@ -115,13 +115,13 @@ the consumer side of an envelope that's still moving.
   change additively.
 - Three operators independently ask for "the Web UI but
   inside SSH" — i.e. the headless-environment case
-  (`agentflow harness replay` per P10.10.2 already covers
+  (`yanshi harness replay` per P10.10.2 already covers
   most of this without a full TUI).
 
 **Scope of the RFC.** ~2 pages. Decide:
 
-1. Where it lives (`agentflow-tui` crate vs. `agentflow tui`
-   subcommand vs. `agentflow harness watch` in the CLI).
+1. Where it lives (`yanshi-tui` crate vs. `yanshi tui`
+   subcommand vs. `yanshi harness watch` in the CLI).
 2. Wire-shape contract: must consume `HarnessEvent` over SSE
    or JSONL identically to the Web UI (per the
    "UI is a client of the protocol" invariant in
@@ -130,7 +130,7 @@ the consumer side of an envelope that's still moving.
    on day one).
 4. Keybindings spec.
 5. **Justify** against the existing
-   `agentflow harness replay --speed 2x` (P10.10.2)
+   `yanshi harness replay --speed 2x` (P10.10.2)
    non-interactive replay, which already covers most of the
    "watch a long-running session unfold" use case.
 
@@ -144,17 +144,17 @@ re-opening of that decision in the RFC.
 
 **What it would mean.** A tool that reads OpenHarness'
 configuration files (its YAML / TOML format) and emits an
-equivalent `agentflow harness` config so operators migrating
+equivalent `yanshi harness` config so operators migrating
 *from* OpenHarness don't rewrite by hand.
 
 **Why we'd want it.** Lowers the bar for an OpenHarness
-operator evaluating AgentFlow.
+operator evaluating Yanshi.
 
 **Why we haven't done it.** Zero migration requests from
 OpenHarness users to date. OpenHarness' config is a moving
 target (it's pre-1.0 itself), so an importer written today
 would chase its schema changes. And the surface overlap
-between OpenHarness config and AgentFlow's Skill / Harness
+between OpenHarness config and Yanshi's Skill / Harness
 contract is partial — a 1:1 import is impossible without
 loss.
 
@@ -172,11 +172,11 @@ loss.
 1. Source format snapshot — pin a specific OpenHarness
    version as the import target.
 2. Coverage: which OpenHarness concepts map to which
-   AgentFlow concepts; which don't map (document the gaps
+   Yanshi concepts; which don't map (document the gaps
    explicitly).
 3. Output: emit a `skill.toml` + a `harness run` flag set, or
    a self-contained skill that wraps the imported config?
-4. Tool surface: standalone binary, `agentflow harness import`
+4. Tool surface: standalone binary, `yanshi harness import`
    subcommand, or one-off Python script?
 
 **Estimated scope.** ~1-2 person-weeks once a stable
@@ -187,14 +187,14 @@ OpenHarness schema exists.
 ## Item 4 — Plugin compatibility adapters
 
 **What it would mean.** A shim layer so OpenHarness plugins
-can run inside AgentFlow's subprocess JSON-RPC plugin runtime
+can run inside Yanshi's subprocess JSON-RPC plugin runtime
 without modification.
 
 **Why we'd want it.** Lets us ship the existing OpenHarness
 plugin ecosystem (if one materializes) as drop-in extensions.
 
 **Why we haven't done it.** OpenHarness plugin format isn't
-1.0; the AgentFlow plugin runtime (subprocess JSON-RPC, stable
+1.0; the Yanshi plugin runtime (subprocess JSON-RPC, stable
 per `docs/PLUGIN_DESIGN.md` §5) is already polyglot — anyone
 can write a plugin in any language. A compatibility adapter
 solves a problem nobody has yet, and the WASM-plugin-runtime
@@ -204,7 +204,7 @@ the heavyweight plugin work to v2.
 **Concrete demand signal** (any one):
 
 - A non-trivial OpenHarness plugin (>2 of them, or one used
-  by ≥ 2 organizations) gets requested to run in AgentFlow.
+  by ≥ 2 organizations) gets requested to run in Yanshi.
 - OpenHarness plugin format reaches 1.0 with a published
   conformance suite.
 - An OpenHarness contributor opens a PR adding the adapter
@@ -215,13 +215,13 @@ the heavyweight plugin work to v2.
 1. Which OpenHarness plugin contract is being adapted (config
    format, JSON-RPC method names, lifecycle semantics).
 2. Translation table: each OpenHarness host call ↔ each
-   AgentFlow `agentflow-tools` / `agentflow-mcp` call.
+   Yanshi `yanshi-tools` / `yanshi-mcp` call.
 3. Whether the adapter is a separate binary that operators
-   point AgentFlow at, or an in-process layer in
-   `agentflow-tools`.
+   point Yanshi at, or an in-process layer in
+   `yanshi-tools`.
 4. Acceptance criteria: a named OpenHarness plugin runs
-   end-to-end through `agentflow workflow run` against an
-   AgentFlow-managed sandbox.
+   end-to-end through `yanshi workflow run` against an
+   Yanshi-managed sandbox.
 
 **Estimated scope.** ~3-4 person-weeks if OpenHarness plugin
 format is stable; open-ended otherwise.
@@ -243,8 +243,8 @@ separate API key needed. This is the
 auth model for their subscription tier (Anthropic's Claude.ai
 session cookie ≠ Anthropic's API key; same for OpenAI Plus vs.
 OpenAI API). Reverse-engineering session cookies is fragile —
-the provider can break it any release. The AgentFlow LLM
-provider abstraction (`agentflow-llm`) is API-only by design
+the provider can break it any release. The Yanshi LLM
+provider abstraction (`yanshi-llm`) is API-only by design
 because that's the contract providers actually maintain.
 
 **Concrete demand signal** (must include both):
@@ -261,7 +261,7 @@ because that's the contract providers actually maintain.
 2. Auth flow: OAuth device-code? PKCE? Session-cookie pass-
    through? — must use the provider's documented
    subscription-API surface, not scraped cookies.
-3. Where the bridge lives: a new `agentflow-llm` provider
+3. Where the bridge lives: a new `yanshi-llm` provider
    variant per subscription kind, or a wrapper that adapts
    subscription auth into the existing API providers.
 4. Threat model: what does the bridge expose to a malicious
@@ -315,7 +315,7 @@ won't drift into the roadmap without a per-item review.
 - `docs/ROADMAP_v2.md` Theme F (Harness expansion).
 - `docs/STABILITY.md` — the Beta tier for `HarnessEvent` that
   any UI/TUI consumer must respect.
-- P10.10.2 (closed) — `agentflow harness replay --speed 2x`
+- P10.10.2 (closed) — `yanshi harness replay --speed 2x`
   covers the non-interactive watch-a-session-unfold case.
 - P10.17.1 (closed) — Web UI debugger-focused positioning
   decision; the TUI promotion would need to justify itself

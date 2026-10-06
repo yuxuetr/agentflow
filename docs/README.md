@@ -1,4 +1,4 @@
-# AgentFlow Docs
+# Yanshi Docs
 
 Last updated: 2026-05-09
 
@@ -8,7 +8,7 @@ have been removed from the active docs tree so this directory stays focused on
 working references.
 
 The curated manual built from this directory is published at
-<https://yuxuetr.github.io/agentflow/> (table of contents:
+<https://yuxuetr.github.io/yanshi/> (table of contents:
 [SUMMARY.md](SUMMARY.md); build locally with `mdbook build site`).
 
 ## Start Here

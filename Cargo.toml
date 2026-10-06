@@ -1,32 +1,32 @@
 [workspace]
 members = [
-  "agentflow-value",
-  "agentflow-graph",
-  "agentflow-store-spi",
-  "agentflow-agent-spi",
-  "agentflow-async-util",
-  "agentflow-core",
-  "agentflow-nodes",
-  "agentflow-nodes-ai",
-  "agentflow-config",
-  "agentflow-llm",
-  "agentflow-cli",
-  "agentflow-mcp",
-  "agentflow-rag",
-  "agentflow-agents",
-  "agentflow-tracing",
-  "agentflow-tool",
-  "agentflow-tools",
-  "agentflow-tools-ai",
-  "agentflow-memory",
-  "agentflow-skills",
-  "agentflow-db",
-  "agentflow-server",
-  "agentflow-worker",
-  "agentflow-worker-proto",
-  "agentflow-harness",
+  "yanshi-value",
+  "yanshi-graph",
+  "yanshi-store-spi",
+  "yanshi-agent-spi",
+  "yanshi-async-util",
+  "yanshi-core",
+  "yanshi-nodes",
+  "yanshi-nodes-ai",
+  "yanshi-config",
+  "yanshi-llm",
+  "yanshi-cli",
+  "yanshi-mcp",
+  "yanshi-rag",
+  "yanshi-agents",
+  "yanshi-tracing",
+  "yanshi-tool",
+  "yanshi-tools",
+  "yanshi-tools-ai",
+  "yanshi-memory",
+  "yanshi-skills",
+  "yanshi-db",
+  "yanshi-server",
+  "yanshi-worker",
+  "yanshi-worker-proto",
+  "yanshi-harness",
   "xtask",
-#   "agentflow-agents/agents/paper_assistant",
+#   "yanshi-agents/agents/paper_assistant",
 ]
 resolver = "2"
 
@@ -44,9 +44,9 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "MIT"
-authors = ["yuxuetr", "AgentFlow Contributors"]
-repository = "https://github.com/yuxuetr/agentflow"
-homepage = "https://github.com/yuxuetr/agentflow"
+authors = ["yuxuetr", "Yanshi Contributors"]
+repository = "https://github.com/yuxuetr/yanshi"
+homepage = "https://github.com/yuxuetr/yanshi"
 
 # Shared dependency versions for a handful of workspace-wide deps that had
 # drifted (version splits, inconsistent TLS backends). Every consuming

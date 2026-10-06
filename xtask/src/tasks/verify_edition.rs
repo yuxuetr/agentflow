@@ -175,7 +175,7 @@ mod tests {
   fn resolves_workspace_inherited_edition() {
     // Members that declare `edition.workspace = true` should pick up the
     // edition from `[workspace.package].edition` rather than being treated as
-    // missing. This is the form every agentflow-* crate uses in production.
+    // missing. This is the form every yanshi-* crate uses in production.
     let root = tempdir();
     let root_manifest = "[workspace]\nmembers = [\"inheritor\"]\nresolver = \"2\"\n\n\
        [workspace.package]\nedition = \"2024\"\n";

@@ -3,7 +3,7 @@ import json
 import sys
 
 
-PLUGIN_NAME = "agentflow-echo-plugin"
+PLUGIN_NAME = "yanshi-echo-plugin"
 PLUGIN_VERSION = "1.0.0"
 NODES = [
   {

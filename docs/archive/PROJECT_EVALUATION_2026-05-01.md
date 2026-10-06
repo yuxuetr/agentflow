@@ -1,4 +1,4 @@
-# AgentFlow 项目深度评估报告
+# Yanshi 项目深度评估报告
 
 > Historical reference: this report captured the project state on
 > 2026-05-01 and informed the P0-P4 task queue. For the maintained current
@@ -8,7 +8,7 @@
 > historical analysis. Several findings below are no longer current:
 > provider-native tool calling is documented in `docs/LLM_PROVIDERS_MATRIX.md`;
 > multi-agent handoff/blackboard/debate supervisors are implemented and
-> documented in `docs/MULTI_AGENT.md`; `agentflow-server` / `agentflow-db` now
+> documented in `docs/MULTI_AGENT.md`; `yanshi-server` / `yanshi-db` now
 > have run APIs, event history, SSE, cancellation, migrations, and repositories;
 > RAG eval is shipped and documented in `docs/RAG_EVAL.md`; OS sandbox backends
 > and fallback visibility are documented in `docs/TOOL_PERMISSIONS.md`.
@@ -22,7 +22,7 @@
 
 ## 0. TL;DR
 
-AgentFlow 已经从单一 DAG 引擎演进为 **"DAG 工作流 + agent-native runtime + 工具/Skill/MCP/Memory/RAG/Tracing 支撑层"** 的模块化 Rust 框架。两条主路径（确定性 DAG、自主智能体循环）都有可工作实现并能在同一 CLI、同一 ToolRegistry、同一 Trace 体系下混合编排（`AgentNode` × `WorkflowTool`），具备框架级骨架。
+Yanshi 已经从单一 DAG 引擎演进为 **"DAG 工作流 + agent-native runtime + 工具/Skill/MCP/Memory/RAG/Tracing 支撑层"** 的模块化 Rust 框架。两条主路径（确定性 DAG、自主智能体循环）都有可工作实现并能在同一 CLI、同一 ToolRegistry、同一 Trace 体系下混合编排（`AgentNode` × `WorkflowTool`），具备框架级骨架。
 
 | 维度 | 评级 | 一句话判断 |
 | --- | --- | --- |
@@ -31,7 +31,7 @@ AgentFlow 已经从单一 DAG 引擎演进为 **"DAG 工作流 + agent-native ru
 | Agent-native SDK 成熟度 | B+ | ReAct + Plan-Execute + Reflection + Memory + 工具 + 取消/预算约束都已落实 |
 | Config-first（YAML/CLI）成熟度 | B | `agent`/`skill_agent` 节点、`workflow run` flags、`skill init/run/test`、trace replay 都已落地，但 schema 校验和错误经验仍需收紧 |
 | 生产可观测性 | B+ | OTel exporter、Trace 持久化、replay、TUI、redaction 链路完整 |
-| 服务端平台化 | C- | Historical 2026-05-01 state: `agentflow-server` / `agentflow-db` were scaffolds. Current state has run APIs, event history, SSE, cancellation, DB migrations, and repositories; see `docs/CURRENT_STATUS.md`. |
+| 服务端平台化 | C- | Historical 2026-05-01 state: `yanshi-server` / `yanshi-db` were scaffolds. Current state has run APIs, event history, SSE, cancellation, DB migrations, and repositories; see `docs/CURRENT_STATUS.md`. |
 | 综合 | **B+** | 框架级骨架已具备；下一阶段重点是平台化（server/db）、表达式/调度精化、工具调用与原生 function-calling 收敛 |
 
 **项目可以同时支持 DAG 传统智能体与 agent-native 自主智能体**，并已具备两者的混合编排，结论与项目目标一致。
@@ -44,20 +44,20 @@ AgentFlow 已经从单一 DAG 引擎演进为 **"DAG 工作流 + agent-native ru
 
 | 层 | Crate | 角色 | 成熟度 | LOC | 测试数 |
 | --- | --- | --- | --- | --- | --- |
-| **执行内核** | `agentflow-core` | DAG 执行内核、节点抽象、FlowValue、checkpoint、retry、timeout、健康检查、事件 | ⭐⭐⭐ | ~9.3K | 58 |
-| **能力适配** | `agentflow-nodes` | 内置节点库（LLM/HTTP/File/Template/Map/While/RAG/MCP/多模态等 16+ 类型）| ⭐⭐⭐ | ~5.1K | 15 |
-| **能力适配** | `agentflow-llm` | 多供应商 LLM 客户端、流式、多模态、模型注册/发现 | ⭐⭐⭐ | ~8.5K | 39 |
-| **能力适配** | `agentflow-tools` | 统一 Tool trait、注册表、sandbox、内置 file/http/shell 工具 | ⭐⭐ | ~1.7K | 6 |
-| **能力适配** | `agentflow-mcp` | MCP client/server/transport/protocol，stdio 优先 | ⭐⭐⭐ | ~6.3K | 87 |
-| **能力适配** | `agentflow-rag` | 文档解析、embedding、Qdrant、检索、rerank | ⭐⭐ | ~6.8K | 79 |
-| **能力适配** | `agentflow-memory` | Session/SQLite/Semantic memory | ⭐⭐ | ~1.4K | 6 |
-| **智能体/编排** | `agentflow-agents` | ReAct、Plan-Execute、Supervisor、AgentNode、WorkflowTool、Reflection | ⭐⭐⭐ | ~5.9K | 38 |
-| **智能体/编排** | `agentflow-skills` | SKILL.md/skill.toml 解析、Marketplace、SkillBuilder、MCP adapter | ⭐⭐⭐ | ~3.4K | 39 |
-| **智能体/编排** | `agentflow-cli` | 统一命令入口（workflow/skill/llm/image/audio/mcp/trace/rag/config）| ⭐⭐⭐ | ~6.3K | 5+ |
-| **运维/产品化** | `agentflow-tracing` | Trace 采集、redaction、replay、TUI、OTel、SQLite/Postgres 持久化 | ⭐⭐⭐ | ~4.2K | 22 |
-| **运维/产品化** | `agentflow-viz` | DAG → Mermaid/DOT/JSON 可视化 | ⭐⭐ | ~1.8K | 26 |
-| **运维/产品化** | `agentflow-server` | Historical 2026-05-01 state: Axum health/live/ready scaffold. Current state: run APIs, event history, SSE, cancellation, skills routes, embedded Web UI. | Historical ⭐ scaffold | Historical 130 | Historical 0 |
-| **运维/产品化** | `agentflow-db` | Historical 2026-05-01 state: PostgreSQL pool scaffold. Current state: migrations and repositories for run/step/event/artifact/skill/MCP session storage. | Historical ⭐ scaffold | Historical 48 | Historical 0 |
+| **执行内核** | `yanshi-core` | DAG 执行内核、节点抽象、FlowValue、checkpoint、retry、timeout、健康检查、事件 | ⭐⭐⭐ | ~9.3K | 58 |
+| **能力适配** | `yanshi-nodes` | 内置节点库（LLM/HTTP/File/Template/Map/While/RAG/MCP/多模态等 16+ 类型）| ⭐⭐⭐ | ~5.1K | 15 |
+| **能力适配** | `yanshi-llm` | 多供应商 LLM 客户端、流式、多模态、模型注册/发现 | ⭐⭐⭐ | ~8.5K | 39 |
+| **能力适配** | `yanshi-tools` | 统一 Tool trait、注册表、sandbox、内置 file/http/shell 工具 | ⭐⭐ | ~1.7K | 6 |
+| **能力适配** | `yanshi-mcp` | MCP client/server/transport/protocol，stdio 优先 | ⭐⭐⭐ | ~6.3K | 87 |
+| **能力适配** | `yanshi-rag` | 文档解析、embedding、Qdrant、检索、rerank | ⭐⭐ | ~6.8K | 79 |
+| **能力适配** | `yanshi-memory` | Session/SQLite/Semantic memory | ⭐⭐ | ~1.4K | 6 |
+| **智能体/编排** | `yanshi-agents` | ReAct、Plan-Execute、Supervisor、AgentNode、WorkflowTool、Reflection | ⭐⭐⭐ | ~5.9K | 38 |
+| **智能体/编排** | `yanshi-skills` | SKILL.md/skill.toml 解析、Marketplace、SkillBuilder、MCP adapter | ⭐⭐⭐ | ~3.4K | 39 |
+| **智能体/编排** | `yanshi-cli` | 统一命令入口（workflow/skill/llm/image/audio/mcp/trace/rag/config）| ⭐⭐⭐ | ~6.3K | 5+ |
+| **运维/产品化** | `yanshi-tracing` | Trace 采集、redaction、replay、TUI、OTel、SQLite/Postgres 持久化 | ⭐⭐⭐ | ~4.2K | 22 |
+| **运维/产品化** | `yanshi-viz` | DAG → Mermaid/DOT/JSON 可视化 | ⭐⭐ | ~1.8K | 26 |
+| **运维/产品化** | `yanshi-server` | Historical 2026-05-01 state: Axum health/live/ready scaffold. Current state: run APIs, event history, SSE, cancellation, skills routes, embedded Web UI. | Historical ⭐ scaffold | Historical 130 | Historical 0 |
+| **运维/产品化** | `yanshi-db` | Historical 2026-05-01 state: PostgreSQL pool scaffold. Current state: migrations and repositories for run/step/event/artifact/skill/MCP session storage. | Historical ⭐ scaffold | Historical 48 | Historical 0 |
 
 > CLAUDE.md 里描述的"3 个核心 crate"早已不是现状；下次更新时建议改为 14+2 crate 的真实分层。
 
@@ -77,7 +77,7 @@ AgentFlow 已经从单一 DAG 引擎演进为 **"DAG 工作流 + agent-native ru
 
 - **L1 是唯一执行核**：`Flow::execute_*` 拥有节点状态池、拓扑、并发、checkpoint、事件
 - **L2 全部以 `AsyncNode` 或工具/客户端形态被 L3 使用**，L1 不直接依赖任何外部能力
-- **L3 是双轨入口**：`agentflow-agents` 承载 agent-native，`agentflow-nodes` + `agentflow-cli` 承载 DAG，二者通过 `AgentNode`/`WorkflowTool` 互通
+- **L3 是双轨入口**：`yanshi-agents` 承载 agent-native，`yanshi-nodes` + `yanshi-cli` 承载 DAG，二者通过 `AgentNode`/`WorkflowTool` 互通
 - **L4 是横切面**：`tracing` 通过 `EventListener` 非侵入接入 L1，`server`/`db` 暴露平台化 API（仍待补齐）
 
 ---
@@ -86,7 +86,7 @@ AgentFlow 已经从单一 DAG 引擎演进为 **"DAG 工作流 + agent-native ru
 
 ### 2.1 DAG 执行模型（成熟）
 
-**核心抽象（`agentflow-core/src/flow.rs:534`、`scheduler.rs`）：**
+**核心抽象（`yanshi-core/src/flow.rs:534`、`scheduler.rs`）：**
 
 ```rust
 pub enum NodeType {
@@ -121,13 +121,13 @@ pub struct FlowExecutionConfig { mode, max_concurrency, fail_fast, continue_on_s
 | --- | --- | --- |
 | 表达式引擎弱 | `run_if` / `while.condition` 是字符串路径或简单比较 | 复杂分支只能借助 LLM/Template 节点，工程化分支决策不便 |
 | FlowValue 序列化损耗 | `state_after_N.json` 对 `FlowValue::File`/`Url` 在 checkpoint 恢复时 round-trip 不完整（路线图 N7 已记入) | 失败重启后类型可能退化为 Json 字符串 |
-| `run_dir` 默认依赖 home 目录 | 已通过 `--run-dir` / `AGENTFLOW_RUN_DIR` 缓解 | 多租户服务端嵌入仍需要程序化 API |
+| `run_dir` 默认依赖 home 目录 | 已通过 `--run-dir` / `YANSHI_RUN_DIR` 缓解 | 多租户服务端嵌入仍需要程序化 API |
 | 子 Flow 失败语义 | `execute_concurrently` 对单节点失败默认 fail-fast；Map 子 Flow 失败可选继续 | 缺少"失败重试到 N 次再放弃"的细粒度策略组合 |
 | 节点依赖隐式自动推导 | 必须显式声明 `dependencies` | 表达力可控但模板写起来啰嗦；可考虑"输入引用即依赖"自动推导 |
 
 ### 2.2 Agent-native Runtime 机制（接近 production-ready）
 
-**核心抽象（`agentflow-agents/src/runtime.rs`）：**
+**核心抽象（`yanshi-agents/src/runtime.rs`）：**
 
 ```rust
 pub struct AgentContext {
@@ -175,7 +175,7 @@ pub trait AgentRuntime {
 
 ### 2.3 工具与权限模型（方向正确，强制力中等）
 
-**抽象（`agentflow-tools/src/tool.rs`、`policy.rs`、`sandbox.rs`）：**
+**抽象（`yanshi-tools/src/tool.rs`、`policy.rs`、`sandbox.rs`）：**
 
 - 统一 `Tool` trait + JSON Schema 参数 + `ToolOutput { ToolOutputPart::{ Text | Image | Resource } }`
 - `ToolMetadata` 携带 `source: ToolSource::{ Builtin | Script | Mcp | Workflow }`、permissions、原始 server/tool 名
@@ -201,7 +201,7 @@ pub trait AgentRuntime {
 
 ### 2.4 LLM 抽象（成熟，工具调用待统一）
 
-`AgentFlow::model("gpt-4o").prompt(...).execute()` 流式 Builder 已稳定：
+`Yanshi::model("gpt-4o").prompt(...).execute()` 流式 Builder 已稳定：
 
 - 6 个 provider：OpenAI / Anthropic / Google / StepFun / Moonshot / Mock
 - 多模态 `MultimodalMessage`（文本 + image url/base64）
@@ -221,18 +221,18 @@ authoritative source for provider behavior instead of this historical section.
 - Marketplace 雏形 + 本地 `skills.index.toml` 已经能跑，CLI 有 `skill install/list/inspect/list-tools/run/chat/test/validate`
 - 与 `agent`/`skill_agent` YAML 节点打通，使得 DAG 中可以直接声明一个由某个 Skill 驱动的 agent 节点
 
-**机制级建议：** Skill 的 `security` 部分目前主要影响 sandbox 与允许的工具集合，但**与 `agentflow-tools::ToolPolicy` 的合并优先级**（Skill 声明 vs CLI flag vs 全局 policy）需要在 docs 中固化为一份决策表，避免运行时"哪条规则赢了"不直观。
+**机制级建议：** Skill 的 `security` 部分目前主要影响 sandbox 与允许的工具集合，但**与 `yanshi-tools::ToolPolicy` 的合并优先级**（Skill 声明 vs CLI flag vs 全局 policy）需要在 docs 中固化为一份决策表，避免运行时"哪条规则赢了"不直观。
 
 ### 2.6 Tracing/Recovery（链路完整）
 
 - `Collector` + `EventListener` 非侵入采集 workflow/agent/tool/MCP 事件
 - 持久化：JSONL（默认）或 SQLite/Postgres（feature gate）
-- `agentflow trace replay <run_id>` + TUI timeline
+- `yanshi trace replay <run_id>` + TUI timeline
 - OpenTelemetry exporter 把同一 trace 输出到 OTLP
 - Redaction 默认遮蔽 API key / env secret / 工具参数中的敏感字段
-- `AGENTFLOW_TRACE_DIR` / `AGENTFLOW_RUN_DIR` 让嵌入式与 CI 不再依赖 home 目录
+- `YANSHI_TRACE_DIR` / `YANSHI_RUN_DIR` 让嵌入式与 CI 不再依赖 home 目录
 
-**待办：** 跨 DAG / Agent / Tool 的 `run_id` / `trace_id` / `parent_span_id` 传播链路已覆盖主要路径，但 LLM provider 调用层（`agentflow-llm`）尚未把当前 span 上下文统一注入到 HTTP headers 或日志，OTel 端到端串联在 LLM 这一跳容易断。
+**待办：** 跨 DAG / Agent / Tool 的 `run_id` / `trace_id` / `parent_span_id` 传播链路已覆盖主要路径，但 LLM provider 调用层（`yanshi-llm`）尚未把当前 span 上下文统一注入到 HTTP headers 或日志，OTel 端到端串联在 LLM 这一跳容易断。
 
 ---
 
@@ -280,7 +280,7 @@ authoritative source for provider behavior instead of this historical section.
 DAG --[node]--> AgentNode --[loop]--> Tool --[invoke]--> WorkflowTool --[child DAG]--> ...
 ```
 
-`AgentNode`（`agentflow-agents/src/nodes/agent_node.rs`）让 ReAct 嵌入 DAG 一节点；`WorkflowTool`（`agentflow-agents/src/tools/workflow_tool.rs`）让 DAG 暴露给 agent 调用，受 timeout 约束并接入 trace。`AgentNodeResumeContract` 给出 partial resume 合约。
+`AgentNode`（`yanshi-agents/src/nodes/agent_node.rs`）让 ReAct 嵌入 DAG 一节点；`WorkflowTool`（`yanshi-agents/src/tools/workflow_tool.rs`）让 DAG 暴露给 agent 调用，受 timeout 约束并接入 trace。`AgentNodeResumeContract` 给出 partial resume 合约。
 
 **唯一仍需持续打磨：** AgentNode partial 失败后的 checkpoint 与 idempotent tool 自动重放策略（已记入 N7 路线图）。
 
@@ -288,79 +288,79 @@ DAG --[node]--> AgentNode --[loop]--> Tool --[invoke]--> WorkflowTool --[child D
 
 ## 4. 模块逐项评估
 
-### 4.1 agentflow-core ⭐⭐⭐
+### 4.1 yanshi-core ⭐⭐⭐
 
 - **职责**：DAG 执行内核、AsyncNode 抽象、FlowValue、scheduler、checkpoint、retry、timeout、resource、health、events
 - **完备性**：高
 - **不足**：表达式引擎过弱；FlowValue::File/Url checkpoint roundtrip；run_dir 默认依赖 home
 
-### 4.2 agentflow-nodes ⭐⭐⭐
+### 4.2 yanshi-nodes ⭐⭐⭐
 
 - **职责**：内置节点库（LLM/HTTP/File/Template/Map/While/Conditional/Batch/RAG/MCP/Arxiv/MarkMap/ASR/TTS/Text-to-image/Image-to-image/Image-edit/Image-understand）
 - **完备性**：覆盖面广，feature gate 管理可选能力
 - **不足**：节点参数 schema 不统一；缺少节点级 mock 框架，离线测试隔离弱；错误码标准化未完成
 
-### 4.3 agentflow-llm ⭐⭐⭐
+### 4.3 yanshi-llm ⭐⭐⭐
 
 - **职责**：多 provider LLM 抽象 + 多模态 + 流式 + 模型注册/发现/校验
 - **完备性**：高
 - **Historical 不足**：tool calling 未一等公民化；配置默认依赖用户目录，多租户服务端注入仍粗放；token 计数粗粒度。Current override: provider-native / compatible fallback tool calling is documented in `docs/LLM_PROVIDERS_MATRIX.md`.
 
-### 4.4 agentflow-agents ⭐⭐⭐
+### 4.4 yanshi-agents ⭐⭐⭐
 
 - **职责**：agent-native runtime（ReAct/Plan-Execute/Reflection/Supervisor）+ AgentNode + WorkflowTool + 公共工具（PDF/批处理）
 - **完备性**：高
 - **Historical 不足**：`AgentRuntime` trait 与具体 agent 公共 API 双轨；多智能体协作仅雏形；resume 严格但保守。Current override: handoff / blackboard / debate supervisors are implemented and documented in `docs/MULTI_AGENT.md`; resume visibility remains active work.
 
-### 4.5 agentflow-tools ⭐⭐
+### 4.5 yanshi-tools ⭐⭐
 
 - **职责**：Tool trait + Registry + Sandbox + Policy + 内置工具
 - **完备性**：方向正确
 - **Historical 不足**：权限以声明/过滤为主，缺进程级强 enforcement；缺工具幂等性元数据；缺统一审计 schema 与 tracing 强绑定。Current override: OS sandbox backends, fallback visibility, capability decisions, and `ToolIdempotency` exist; profile defaults and broader enforcement remain active work.
 
-### 4.6 agentflow-mcp ⭐⭐⭐
+### 4.6 yanshi-mcp ⭐⭐⭐
 
 - **职责**：MCP client / server / transport / protocol，stdio 优先
 - **完备性**：client 完整可用，retry/timeout/重连测试齐
 - **不足**：`client_old` 历史包袱仍在；server 标 experimental；与 Skills/Tools/Nodes 的权限继承尚未跨模块统一
 
-### 4.7 agentflow-skills ⭐⭐⭐
+### 4.7 yanshi-skills ⭐⭐⭐
 
 - **职责**：SKILL.md/skill.toml 解析、SkillLoader、SkillBuilder、Marketplace、MCP tool adapter、本地 registry
 - **完备性**：高
-- **不足**：Skill `security` 与 `agentflow-tools::ToolPolicy`、CLI flag 三方决策优先级缺权威表
+- **不足**：Skill `security` 与 `yanshi-tools::ToolPolicy`、CLI flag 三方决策优先级缺权威表
 
-### 4.8 agentflow-memory ⭐⭐
+### 4.8 yanshi-memory ⭐⭐
 
 - **职责**：MemoryStore 抽象 + Session/Sqlite/Semantic 三个实现
 - **完备性**：基础够用
 - **不足**：长期记忆 schema、隐私/清理策略、检索质量评估、跨 session 关联策略均较初级
 
-### 4.9 agentflow-rag ⭐⭐
+### 4.9 yanshi-rag ⭐⭐
 
 - **职责**：document → chunk → embed → vectorstore → retrieval → rerank
 - **完备性**：模块全
 - **不足**：版本仍 0.3.0-alpha；缺端到端召回/精排评测 harness；index 配置模板过于轻量；与 MemoryStore.semantic 的边界稍模糊
 
-### 4.10 agentflow-cli ⭐⭐⭐
+### 4.10 yanshi-cli ⭐⭐⭐
 
 - **职责**：所有功能的统一入口，覆盖 workflow / config / llm / image / audio / mcp / skill / trace / rag
 - **完备性**：N6 闭环完成后，`workflow run` flags、`agent`/`skill_agent` 节点、trace replay 已串通
 - **不足**：YAML 节点参数错误对人类读者仍偏技术化；机器可读 JSON 与人类可读输出共存的 contract 文档未集中化
 
-### 4.11 agentflow-tracing ⭐⭐⭐
+### 4.11 yanshi-tracing ⭐⭐⭐
 
 - **职责**：采集 / 持久化 / replay / TUI / OTel / redaction / schema
 - **完备性**：高
 - **不足**：LLM provider 调用层尚未承担 OTel context 注入，跨 LLM hop 易断；TUI 仍是基础 timeline，复杂 hybrid 视图未做
 
-### 4.12 agentflow-viz ⭐⭐
+### 4.12 yanshi-viz ⭐⭐
 
 - **职责**：YAML → VisualGraph → Mermaid/DOT/JSON
 - **完备性**：静态可视化够用
 - **不足**：未与 trace 实时状态、checkpoint 进度联动，无法在调试 UI 中看到"当前 DAG 跑到哪个节点"
 
-### 4.13 agentflow-server ⭐ scaffold (historical)
+### 4.13 yanshi-server ⭐ scaffold (historical)
 
 - **职责**：Axum 网关
 - **Historical 2026-05-01 现状**：130 行，仅 health/live/ready；无 run / agent / skill / trace 管理 API
@@ -370,7 +370,7 @@ DAG --[node]--> AgentNode --[loop]--> Tool --[invoke]--> WorkflowTool --[child D
   (security profiles, CORS/request limits, retention, tenant boundaries), not
   initial scaffold completion.
 
-### 4.14 agentflow-db ⭐ scaffold (historical)
+### 4.14 yanshi-db ⭐ scaffold (historical)
 
 - **职责**：Postgres 连接管理
 - **Historical 2026-05-01 现状**：48 行，仅 pool 初始化；无 schema / migration / repository 层
@@ -381,8 +381,8 @@ DAG --[node]--> AgentNode --[loop]--> Tool --[invoke]--> WorkflowTool --[child D
 
 ### 4.15 跨 workspace 一致性
 
-- `agentflow-server`、`agentflow-db` 使用 Rust **2024 edition**，其他 crate 多为 **2021**——风格未统一
-- `agentflow-rag` 处于 0.3.0-alpha，`agentflow-mcp` 处于 0.1.0-alpha，应在下一次发布周期里把版本/稳定性策略写入 README
+- `yanshi-server`、`yanshi-db` 使用 Rust **2024 edition**，其他 crate 多为 **2021**——风格未统一
+- `yanshi-rag` 处于 0.3.0-alpha，`yanshi-mcp` 处于 0.1.0-alpha，应在下一次发布周期里把版本/稳定性策略写入 README
 
 ---
 
@@ -392,11 +392,11 @@ DAG --[node]--> AgentNode --[loop]--> Tool --[invoke]--> WorkflowTool --[child D
 | --- | --- | --- | --- |
 | R1 | FlowValue::File/Url checkpoint roundtrip 损失类型 | 中 | 含多模态/文件输出的工作流失败重启 |
 | R2 | Historical: LLM 工具调用走 prompt 解析，跨 provider 稳健性差. Current: provider-native/fallback matrix exists; keep adding provider consistency tests. | 中 | 切换 provider 时的工具调用一致性 |
-| R3 | Historical: `agentflow-server` / `agentflow-db` 仍是骨架. Current: base APIs and DB repositories exist; risk moved to production hardening. | 高（产品化）| 认证、租户边界、retention、备份恢复 |
+| R3 | Historical: `yanshi-server` / `yanshi-db` 仍是骨架. Current: base APIs and DB repositories exist; risk moved to production hardening. | 高（产品化）| 认证、租户边界、retention、备份恢复 |
 | R4 | Historical: 多智能体协作仅雏形. Current: handoff / blackboard / debate implemented. | 中 | 更复杂协作策略和质量评估 |
 | R5 | Historical: 权限是过滤型，缺进程级 jail. Current: OS sandbox backends and fallback visibility exist; risk moved to profile defaults and full enforcement coverage. | 中 | shell/script/plugin tool 在不可信环境运行 |
 | R6 | OTel context 跨 LLM hop 断裂 | 低 | 端到端 distributed tracing |
-| R7 | Historical: RAG 缺评测 harness. Current: `agentflow-rag::eval` and `agentflow rag eval` are shipped; risk moved to CI baselines and regression datasets. | 中 | 知识库迭代/调参缺反馈回路 |
+| R7 | Historical: RAG 缺评测 harness. Current: `yanshi-rag::eval` and `yanshi rag eval` are shipped; risk moved to CI baselines and regression datasets. | 中 | 知识库迭代/调参缺反馈回路 |
 | R8 | YAML schema 错误经验 | 低 | 用户编写复杂 workflow 时 |
 | R9 | workspace edition 不统一 | 低 | 升级 Rust 工具链时 |
 
@@ -408,13 +408,13 @@ DAG --[node]--> AgentNode --[loop]--> Tool --[invoke]--> WorkflowTool --[child D
 
 ### 6.1 P0（建议下一次发布前必做）
 
-1. **平台化最小骨架**——把 `agentflow-server` 推到可用（historical recommendation; core skeleton now implemented）：
+1. **平台化最小骨架**——把 `yanshi-server` 推到可用（historical recommendation; core skeleton now implemented）：
    - 提供 `POST /v1/runs`、`GET /v1/runs/{id}`、`GET /v1/runs/{id}/events`（SSE）、`POST /v1/skills/{name}:run`
-   - `agentflow-db` 落实 run/step/event/artifact 4 张表的 schema + migration（refinery 或 sqlx::migrate）
-   - 与 `agentflow-tracing` 的 Postgres 后端复用同一 schema，避免双写
+   - `yanshi-db` 落实 run/step/event/artifact 4 张表的 schema + migration（refinery 或 sqlx::migrate）
+   - 与 `yanshi-tracing` 的 Postgres 后端复用同一 schema，避免双写
 
 2. **LLM 原生 tool calling 一等公民化（historical recommendation; see current provider matrix）**：
-   - 在 `agentflow-llm` 抽象层把 `tool_calls` / `tool_choice` 加入请求/响应类型
+   - 在 `yanshi-llm` 抽象层把 `tool_calls` / `tool_choice` 加入请求/响应类型
    - 在 `ReActAgent` 与 `PlanExecuteAgent` 中替换 prompt 解析路径为：
      - 优先走 provider 原生（OpenAI tools、Anthropic tool_use、Google function declarations）
      - 不支持的 provider 自动降级到 prompt 解析路径
@@ -431,7 +431,7 @@ DAG --[node]--> AgentNode --[loop]--> Tool --[invoke]--> WorkflowTool --[child D
 ### 6.2 P1（v1.0 候选阶段）
 
 5. **多智能体协作范式（historical recommendation; handoff/blackboard/debate now implemented）**：
-   - 在 `agentflow-agents/supervisor` 沉淀三种范式：handoff（角色切换）、blackboard（共享白板）、debate（多 agent 投票/批判）
+   - 在 `yanshi-agents/supervisor` 沉淀三种范式：handoff（角色切换）、blackboard（共享白板）、debate（多 agent 投票/批判）
    - 给出权威示例：研究 + 写作 + 评审三 agent 协作
 
 6. **工具沙箱强化（partially implemented; active work is policy/profile hardening）**：
@@ -440,29 +440,29 @@ DAG --[node]--> AgentNode --[loop]--> Tool --[invoke]--> WorkflowTool --[child D
    - 在 trace 中固化 capability 决策事件
 
 7. **OTel 端到端连续性**：
-   - `agentflow-llm` 客户端在 HTTP 请求里注入 `traceparent` header（即使 LLM 提供商不解析，本地 hop 也能被 OTel 拼起来）
+   - `yanshi-llm` 客户端在 HTTP 请求里注入 `traceparent` header（即使 LLM 提供商不解析，本地 hop 也能被 OTel 拼起来）
    - 统一 `WorkflowRunId / AgentSessionId / ToolCallId` 的属性命名
 
 8. **RAG 评测 harness（historical recommendation; shipped, active work is CI baselines）**：
-   - `agentflow-rag/eval/`：标注集 + Recall@K / MRR / nDCG 指标 + 对比 baseline
-   - CLI 子命令 `agentflow rag eval <dataset>`
+   - `yanshi-rag/eval/`：标注集 + Recall@K / MRR / nDCG 指标 + 对比 baseline
+   - CLI 子命令 `yanshi rag eval <dataset>`
 
 9. **Skill 权限决策表**：
    - `docs/SKILL_PERMISSIONS.md` 把 SkillSecurity vs ToolPolicy vs CLI flag 的合并算法写成正式表
-   - `agentflow skill inspect --explain-permissions` 展示一次实际运行的最终决策路径
+   - `yanshi skill inspect --explain-permissions` 展示一次实际运行的最终决策路径
 
 ### 6.3 P2（中期演进）
 
 10. **Plugin / Custom Node 体系**：
-    - 现在 `agentflow-nodes` 是固定集合；引入 `dyn AsyncNode` 的动态加载（dlopen/abi_stable）或 WASM（wasmtime/wasmer），让第三方节点不修改主仓库即可分发
+    - 现在 `yanshi-nodes` 是固定集合；引入 `dyn AsyncNode` 的动态加载（dlopen/abi_stable）或 WASM（wasmtime/wasmer），让第三方节点不修改主仓库即可分发
     - Skill marketplace 可承担一部分分发能力
 
 11. **分布式调度**：
     - `Flow::execute_concurrently` 是单进程并发；引入 worker 抽象（gRPC/NATS/Redis Streams 任选其一），让大型 DAG 可分布式执行
-    - 关键决策：是否把 `agentflow-server` 进化为 control plane
+    - 关键决策：是否把 `yanshi-server` 进化为 control plane
 
 12. **Web UI / 调试器**：
-    - 在 `agentflow-viz` 之上叠加 React/Svelte SPA，连接 `agentflow-server` SSE，看 DAG 实时跑
+    - 在 `yanshi-viz` 之上叠加 React/Svelte SPA，连接 `yanshi-server` SSE，看 DAG 实时跑
     - TUI 已经够用，但混合 (DAG × Agent × Tool) 视图不易在终端表达
 
 13. **Agent SDK 文档化**：
@@ -472,7 +472,7 @@ DAG --[node]--> AgentNode --[loop]--> Tool --[invoke]--> WorkflowTool --[child D
 ### 6.4 文档与一致性维护
 
 14. **更新 CLAUDE.md**：把"3 crate"改为"14+2 crate"四层结构；把 N6/N7 已完成项整理进"已完成"，避免老旧描述误导
-15. **统一 workspace edition**：把 `agentflow-server` / `agentflow-db` 回退或把其他 crate 升到 2024
+15. **统一 workspace edition**：把 `yanshi-server` / `yanshi-db` 回退或把其他 crate 升到 2024
 16. **README 与 docs/README 单一来源**：当前 docs/ 32+ 文件信息密度高，需要一个 doc map 或 SUMMARY
 
 ---
@@ -489,13 +489,13 @@ DAG --[node]--> AgentNode --[loop]--> Tool --[invoke]--> WorkflowTool --[child D
 
 ## 8. 最终结论
 
-AgentFlow 的核心命题——**同时支持 DAG 工作流和 agent-native 自主智能体，并允许两者在同一执行上下文里混合编排**——已经在代码层面成立，并具备产品化雏形：
+Yanshi 的核心命题——**同时支持 DAG 工作流和 agent-native 自主智能体，并允许两者在同一执行上下文里混合编排**——已经在代码层面成立，并具备产品化雏形：
 
 - DAG 内核成熟到可生产
 - Agent-native runtime 在 ReAct/Plan-Execute/Reflection/Memory/Tools/MCP 这些核心能力上完整
 - Skills + CLI + Trace 让"非 Rust 用户用 YAML 配置即可跑混合智能体"这条路径已经可走
 
-下一阶段的关键升级方向是 **(a) 平台化（server/db）真正落地、(b) LLM 原生 tool calling 一等公民、(c) 表达式与 checkpoint 一致性、(d) 多智能体协作范式与工具沙箱强化**——做完这四件事，AgentFlow 就能从"框架级骨架"过渡到"框架级 v1.0 候选"。
+下一阶段的关键升级方向是 **(a) 平台化（server/db）真正落地、(b) LLM 原生 tool calling 一等公民、(c) 表达式与 checkpoint 一致性、(d) 多智能体协作范式与工具沙箱强化**——做完这四件事，Yanshi 就能从"框架级骨架"过渡到"框架级 v1.0 候选"。
 
 > 评估签名：HEAD `41ed3f8` (2026-05-01)
-> 主要参考：`agentflow-core/src/{flow,scheduler,value}.rs`、`agentflow-agents/src/{runtime,react/agent,plan_execute,reflection}.rs`、`agentflow-cli/src/{config/schema,executor/factory}.rs`、`docs/`、`RoadMap.md`、`CLAUDE.md`
+> 主要参考：`yanshi-core/src/{flow,scheduler,value}.rs`、`yanshi-agents/src/{runtime,react/agent,plan_execute,reflection}.rs`、`yanshi-cli/src/{config/schema,executor/factory}.rs`、`docs/`、`RoadMap.md`、`CLAUDE.md`

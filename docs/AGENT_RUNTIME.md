@@ -1,15 +1,15 @@
 # Agent Runtime
 
-Agent Runtime is the agent-native execution boundary in AgentFlow. It sits next
+Agent Runtime is the agent-native execution boundary in Yanshi. It sits next
 to the existing DAG `Flow` runtime and reuses the same lower-level capabilities:
 tools, skills, memory, model calls, and tracing.
 
 ## Runtime Boundary
 
-`agentflow-core::Flow` remains the deterministic DAG runtime. It owns node
+`yanshi-core::Flow` remains the deterministic DAG runtime. It owns node
 ordering, workflow state, retries, checkpoints, and node-level recovery.
 
-`agentflow-agents::AgentRuntime` owns autonomous loop execution. It records
+`yanshi-agents::AgentRuntime` owns autonomous loop execution. It records
 observations, plans, tool calls, tool results, reflections, final answers, and
 agent stop reasons.
 
@@ -62,7 +62,7 @@ Runtime guards cover max steps, max tool calls, global timeout, token budget,
 stop conditions, and (T1.1) a USD cost budget (`RuntimeLimits::cost_limit_usd`
 / `ReActConfig::cost_limit_usd`, checked at the top of each turn against
 cumulative spend estimated from `ReActConfig::pricing_table` —
-`agentflow-agents::eval::pricing::PricingTable`, the same table the eval
+`yanshi-agents::eval::pricing::PricingTable`, the same table the eval
 harness uses. The table defaults to all-zero prices, so the guard is inert
 until configured with real per-model rates). `PlanExecuteAgent` enforces the
 same cost budget around its single planner call via the matching
@@ -139,22 +139,22 @@ would need a genuine incremental JSON parser, which is out of scope here.
 every stored trace or checkpoint forever would bloat them for a signal
 whose entire value is being observed live; only a `live_sink` attached via
 `AgentContext::with_event_sink(...)` ever sees it.
-`collect_streaming_response` (`agentflow-llm`) reconstructs the same
+`collect_streaming_response` (`yanshi-llm`) reconstructs the same
 `LLMResponse` shape `execute_full` used to hand back (content
 concatenation, `tool_calls` reassembled from `tool_call_deltas` grouped by
 index, best-effort `stop_reason`/`usage`), so tool-call dispatch, JSON
 parsing, and usage/cost accounting downstream of the call are unchanged.
-`agentflow-harness`'s `HarnessAgentEventBridge` translates the live stream
+`yanshi-harness`'s `HarnessAgentEventBridge` translates the live stream
 into the `token_delta` `HarnessEvent` kind (see `docs/HARNESS_MODE.md`);
-`agentflow harness chat` / `run --output text` and the Web UI render it as
+`yanshi harness chat` / `run --output text` and the Web UI render it as
 an in-place typing indicator.
 
 **Agent-loop-level persistent checkpoint (V2.4).** Distinct from the
-DAG-level `Flow` checkpoint (`agentflow-core`), which treats an embedded
+DAG-level `Flow` checkpoint (`yanshi-core`), which treats an embedded
 agent run as one opaque, all-or-nothing unit — and distinct from
 `resume_with_context`'s post-hoc unresolved-tool-call replay, which
 restores conversation memory and starts an entirely fresh loop. The
-contract (`agentflow_agent_spi::checkpoint::AgentLoopCheckpoint` +
+contract (`yanshi_agent_spi::checkpoint::AgentLoopCheckpoint` +
 `AgentLoopCheckpointer`) captures a snapshot of in-flight loop progress —
 recorded `steps`/`events`, step/iteration counters, tool-call history,
 verification/schema-retry counters (ReAct), or the frozen plan +
@@ -176,20 +176,20 @@ frozen into the checkpoint — and just resumes tool execution at
 `plan_position`. (The `answer` parameter is V2.3 — see below; it is
 `None` for every checkpoint that isn't paused on a question.)
 `should_clear_checkpoint` (shared by both runtimes,
-`agentflow-agents::checkpoint`) is an exhaustive match over
+`yanshi-agents::checkpoint`) is an exhaustive match over
 `AgentStopReason`: checkpoints clear on genuine completion
 (`FinalAnswer`/`StopCondition`/`Error`) and survive every other stop
 reason, including the case this feature targets — the process dies with
 no stop reason produced at all, so the last-written checkpoint simply
 sits on disk untouched.
 
-`agentflow-agents::FileLoopCheckpointer` is the concrete file-based
+`yanshi-agents::FileLoopCheckpointer` is the concrete file-based
 implementation (atomic write-then-rename, one JSON file per session,
-sibling to `agentflow_harness::default_session_dir`'s convention).
-`agentflow-harness`'s `HarnessRunOptions::with_loop_checkpointer(...)`
-forwards a checkpointer into the inner agent's context; `agentflow
+sibling to `yanshi_harness::default_session_dir`'s convention).
+`yanshi-harness`'s `HarnessRunOptions::with_loop_checkpointer(...)`
+forwards a checkpointer into the inner agent's context; `yanshi
 harness run` attaches one by default whenever a run-dir is available.
-`agentflow harness resume-loop <session_id>` (distinct from `resume`,
+`yanshi harness resume-loop <session_id>` (distinct from `resume`,
 which only re-prints the persisted JSONL event log) rebuilds the agent
 and calls `resume_from_loop_checkpoint` to genuinely continue execution
 — a minimal CLI surface; full `HarnessRuntime`-level resume wiring
@@ -200,7 +200,7 @@ resume_from_interrupt`, part of V2.3 below.
 checkpoint machinery above: the agent asks the user a question mid-run,
 the loop pauses (`AgentStopReason::AwaitingInput { question }`), and
 once the user replies the run resumes carrying their answer — distinct
-from the approval mechanism (`agentflow-harness`'s hook pipeline), which
+from the approval mechanism (`yanshi-harness`'s hook pipeline), which
 gates whether one specific tool call proceeds rather than pausing the
 whole loop for an open-ended answer. `ReActAgent` exposes this as an
 always-registered synthetic tool, `ASK_USER_TOOL_NAME = "ask_user"`
@@ -232,14 +232,14 @@ the harness-layer entry point (does not re-run `HarnessRuntime::run`
 wholesale — no fresh `session_started`, no context-provider
 re-assembly — just reattaches the live event bridge, stamps
 `interrupt_answered`, and dispatches through `AgentRuntime::
-resume_from_loop_checkpoint`). `agentflow-db`'s `DbLoopCheckpointer`
+resume_from_loop_checkpoint`). `yanshi-db`'s `DbLoopCheckpointer`
 is the server-side `AgentLoopCheckpointer`, attached to every
 `LiveHarnessExecutor` session by default; `POST /v1/harness/sessions/
-{id}/interrupt/answer` is the HTTP entry point. `agentflow harness
+{id}/interrupt/answer` is the HTTP entry point. `yanshi harness
 resume-loop` gained `--runtime react|plan_execute` (a checkpoint is
 only resumable by the runtime kind that produced it) and `--answer
 <text>` (falls back to an interactive stdin prompt when omitted and the
-checkpoint is paused); `agentflow harness run`/`chat` handle
+checkpoint is paused); `yanshi harness run`/`chat` handle
 `AwaitingInput` inline (TTY-gated prompt for `run`, next-REPL-line for
 `chat`). See `docs/HARNESS_MODE.md`'s "Interrupt protocol (V2.3)"
 section for the wire-level contract.
@@ -267,11 +267,11 @@ omitted messages, kept messages, token budget, and omitted token estimate, so it
 can implement rule-based summaries, LLM-generated summaries, or persistent
 summary storage without changing the ReAct loop.
 
-`agentflow skill run --trace` prints the structured `AgentRunResult` JSON for a
+`yanshi skill run --trace` prints the structured `AgentRunResult` JSON for a
 Skill execution, including tool calls to MCP-backed tools and the resulting
 AgentRuntime steps/events.
 
-`agentflow-agents/tests/agent_runtime_golden.rs` locks the serialized
+`yanshi-agents/tests/agent_runtime_golden.rs` locks the serialized
 `AgentRunResult` contract with a golden JSON fixture. The test runs a mock ReAct
 loop through observe, plan, tool call, tool result, final answer, and reflection;
 dynamic timestamps and tool durations are normalized before comparison.
@@ -336,7 +336,7 @@ This keeps the dependency direction stable:
 
 `Flow -> AgentNode -> AgentRuntime -> ToolRegistry -> Tool/MCP/WorkflowTool`
 
-See `agentflow-agents/examples/hybrid_workflow_agent.rs` for a runnable mock
+See `yanshi-agents/examples/hybrid_workflow_agent.rs` for a runnable mock
 example of this full path. It runs a parent DAG with `AgentNode`, calls a child
 DAG through `WorkflowTool`, and prints the resulting agent steps/events.
 
@@ -397,7 +397,7 @@ exhausting it is a hard `PlanExecuteError::SchemaValidationFailed`, matching
 Run the mock example with:
 
 ```sh
-cargo run -p agentflow-agents --example plan_execute_agent
+cargo run -p yanshi-agents --example plan_execute_agent
 ```
 
 ## Extending the runtime

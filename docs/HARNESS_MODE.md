@@ -3,7 +3,7 @@
 Last updated: 2026-05-15
 Status: **Phase H0 + H1 + H2 + H3 + H4 + H5 closed.** Slice 4 wrapped up the `:resume` route, swapped the Web UI from polling to SSE, and added the full-stack `tests/harness_full_stack_e2e.rs`. The follow-up append-mode resume slice is also in: the upstream contract knob `HarnessRuntime::with_initial_seq` is plumbed through the server, and the `:resume` route accepts `mode: "rerun" | "append"` so callers can preserve the prior event log and continue the seq series instead of restarting from `0`.
 
-Harness Mode is AgentFlow's long-lived, workspace-aware agent session
+Harness Mode is Yanshi's long-lived, workspace-aware agent session
 layer. It wraps existing `AgentRuntime`, `ToolRegistry`, `SkillBuilder`,
 memory, and tracing surfaces with a stable session protocol so the same
 contract works across CLI direct execution, the local server, and the
@@ -17,7 +17,7 @@ design lives in `HARNESS_MODE_EVOLUTION.md`.
 
 Phase H0 freezes the **contract surface** so downstream consumers can
 build against stable types while Phase H1 wires runtime execution. The
-crate `agentflow-harness` ships these types only — no runtime, no
+crate `yanshi-harness` ships these types only — no runtime, no
 orchestration, no platform side effects.
 
 Frozen surfaces:
@@ -35,28 +35,28 @@ Stability tier: **experimental** until Phase H1 exercises them
 end-to-end (`docs/STABILITY.md`).
 
 Envelope schema version: `harness/1` (constant
-`agentflow_harness::HARNESS_ENVELOPE_SCHEMA_VERSION`). Bump only on
+`yanshi_harness::HARNESS_ENVELOPE_SCHEMA_VERSION`). Bump only on
 breaking wire shape changes; additive optional fields and additive
 event kinds keep the same version.
 
 ## Crate placement
 
-`agentflow-harness` is a **new crate** under `agentflow-harness/`. Two
+`yanshi-harness` is a **new crate** under `yanshi-harness/`. Two
 reasons:
 
 1. **Additive boundary.** Building Harness as a crate next to
-   `agentflow-agents` rather than a module inside it makes the wrapper
+   `yanshi-agents` rather than a module inside it makes the wrapper
    pattern explicit: Harness composes the existing runtime, it does
    not replace it. This addresses HARNESS_MODE_EVOLUTION Risk 1 ("a
    parallel runtime") by physical separation.
 2. **Light dependency footprint.** The contract crate depends only on
-   `agentflow-tools` (for `ToolIdempotency`, `ToolPermission`,
+   `yanshi-tools` (for `ToolIdempotency`, `ToolPermission`,
    `ToolSource`) plus `serde` / `chrono` / `async-trait` / `thiserror`.
    This keeps the wire surface reusable from UIs and SDKs that should
    not pull in the entire agent stack.
 
-Phase H1+ will add execution dependencies (`agentflow-agents`,
-`agentflow-skills`, `agentflow-tracing`, ...).
+Phase H1+ will add execution dependencies (`yanshi-agents`,
+`yanshi-skills`, `yanshi-tracing`, ...).
 
 ## Event envelope
 
@@ -91,7 +91,7 @@ The frozen kind set (Phase H0):
 | `memory_summary_added` | layer, summary, token_estimate | memory compaction appended a summary |
 | `stopped` | reason, final_answer, error | session terminating |
 
-The enum is **closed**. New kinds are additive AgentFlow releases.
+The enum is **closed**. New kinds are additive Yanshi releases.
 Trace replay tooling depends on the closed surface.
 
 `token_delta` (V2.2) is **live-only**: `HarnessAgentEventBridge` emits it
@@ -102,8 +102,8 @@ the post-hoc `translate_inner_events` fallback and never appears in
 event embedded in every stored trace/checkpoint forever would bloat them
 for a signal whose value is being observed live. `delta` is the
 provider's raw streamed text verbatim (a JSON-envelope fragment for a
-ReAct turn, not necessarily clean prose); `agentflow harness chat` and
-`agentflow harness run --output text` render it as an in-place "typing"
+ReAct turn, not necessarily clean prose); `yanshi harness chat` and
+`yanshi harness run --output text` render it as an in-place "typing"
 line on stderr, and the Web UI accumulates it into a separate live-text
 region above the event timeline instead of the discrete event list.
 
@@ -159,13 +159,13 @@ re-entry point) treats the same name as a reserved pseudo-tool
 intercepted inside a plan step, before real tool dispatch.
 
 ```rust
-// agentflow_agent_spi::runtime::AgentStopReason
+// yanshi_agent_spi::runtime::AgentStopReason
 AwaitingInput { question: String }
 
-// agentflow_agent_spi::checkpoint::AgentLoopCheckpoint
+// yanshi_agent_spi::checkpoint::AgentLoopCheckpoint
 pending_question: Option<String>  // None for every stop reason but AwaitingInput
 
-// agentflow_agent_spi::runtime::AgentRuntime
+// yanshi_agent_spi::runtime::AgentRuntime
 async fn resume_from_loop_checkpoint(
   &mut self, context: AgentContext, checkpoint: AgentLoopCheckpoint, answer: Option<String>,
 ) -> Result<AgentRunResult, AgentRuntimeError>;
@@ -246,7 +246,7 @@ files blindly (HARNESS_MODE_EVOLUTION Risk 4).
 
 ### Wiring hooks into the tool registry (Phase H2)
 
-The `agentflow_harness::wrap_registry` function decorates every tool
+The `yanshi_harness::wrap_registry` function decorates every tool
 already registered in a `ToolRegistry` with a `HookedTool` wrapper.
 The wrapper:
 
@@ -284,7 +284,7 @@ The wrapper:
 7. Runs every `PostToolHook` (advisory; failures are logged but
    never undo the tool result).
 
-Three reference providers ship in `agentflow_harness::approval_providers`:
+Three reference providers ship in `yanshi_harness::approval_providers`:
 
 - `AutoAllowApprovalProvider` — CI smoke + dev profile override.
 - `AutoDenyApprovalProvider` (`with_stop_on_deny`) — production
@@ -360,12 +360,12 @@ them to providers and hooks.
 ## CLI surface (shipped in Phase H1)
 
 ```bash
-agentflow harness run "Analyze this project and propose next steps"
-agentflow harness run --skill ./skills/code-review "Review current changes"
-agentflow harness run --output stream-json "Implement the next TODO safely"
-agentflow harness resume <session_id>
-agentflow harness list
-agentflow harness inspect <session_id>
+yanshi harness run "Analyze this project and propose next steps"
+yanshi harness run --skill ./skills/code-review "Review current changes"
+yanshi harness run --output stream-json "Implement the next TODO safely"
+yanshi harness resume <session_id>
+yanshi harness list
+yanshi harness inspect <session_id>
 ```
 
 Flags:
@@ -386,20 +386,20 @@ Initial implementation must not ship a TUI. A stable `stream-json`
 event surface gives TUI / Web UI a clean integration point later
 (HARNESS_MODE_EVOLUTION Risk 5).
 
-The CLI also exposes `agentflow harness list` / `agentflow harness
+The CLI also exposes `yanshi harness list` / `yanshi harness
 inspect <session_id>` for offline session log triage. Both honour the
-same `--run-dir` precedence (explicit → `AGENTFLOW_RUN_DIR` →
-`AGENTFLOW_TRACE_DIR` → `~/.agentflow/runs`) so the trace replay tools
+same `--run-dir` precedence (explicit → `YANSHI_RUN_DIR` →
+`YANSHI_TRACE_DIR` → `~/.yanshi/runs`) so the trace replay tools
 can find Harness logs without bespoke wiring.
 
 ### Agent-loop checkpoint resume (V2.4, post-freeze)
 
-`agentflow harness run` attaches an
-`agentflow_agent_spi::checkpoint::AgentLoopCheckpointer` by default
+`yanshi harness run` attaches an
+`yanshi_agent_spi::checkpoint::AgentLoopCheckpointer` by default
 (unconditional, no opt-in flag) whenever a run-dir is available; the
 inner `ReActAgent`/`PlanExecuteAgent` saves an `AgentLoopCheckpoint`
 after every completed turn/plan-step (`<run-dir>/harness/
-loop_checkpoints/<session_id>.json`). `agentflow harness resume-loop
+loop_checkpoints/<session_id>.json`). `yanshi harness resume-loop
 <session_id> [--model <model> | --skill <path>]` rebuilds the agent the
 same way `run` does and calls `resume_from_loop_checkpoint` to
 genuinely continue execution from the checkpointed step — distinct from
@@ -412,7 +412,7 @@ resume wiring is a follow-up.
 
 ### `ask_user` interrupt / resume (V2.3, post-freeze)
 
-`agentflow harness run` and `agentflow harness chat` handle
+`yanshi harness run` and `yanshi harness chat` handle
 `AgentStopReason::AwaitingInput` inline: `run` prompts on a real TTY
 (stdin and stdout both interactive) and resumes in the same process;
 otherwise it prints the question and exits `0` (not a failure — the
@@ -424,7 +424,7 @@ turn — this needed `chat` to attach a `FileLoopCheckpointer` by default
 for the first time (it previously ran with none, since nothing before
 V2.3 needed to resume a `chat` session's loop).
 
-`agentflow harness resume-loop <session_id>` (V2.4) gains two flags for
+`yanshi harness resume-loop <session_id>` (V2.4) gains two flags for
 this: `--runtime react|plan_execute` (a checkpoint is only resumable by
 the runtime kind that produced it — the two use different loop-state
 shapes) and `--answer <text>` (resolves a pending `ask_user` question;
@@ -434,10 +434,10 @@ rejects `--answer` outright).
 
 ### Runtime-limit flags (added post-freeze; not in the Phase H1 block above)
 
-`agentflow harness run`/`chat` also accept `--max-steps`,
+`yanshi harness run`/`chat` also accept `--max-steps`,
 `--max-tool-calls` (`run` only), `--timeout-ms` (`run` only),
 `--context-budget`, `--token-budget`, and `--cost-limit-usd` (U1.3) —
-all thin CLI entry points into `agentflow_agent_spi::runtime::
+all thin CLI entry points into `yanshi_agent_spi::runtime::
 RuntimeLimits`, threaded through `HarnessRunOptions::with_limits(...)`.
 `POST /v1/harness/sessions` mirrors `cost_limit_usd` as an optional
 request-body field (U1.3); the other `RuntimeLimits` fields have no API
@@ -449,11 +449,11 @@ behavior.
 
 ### Tracing bridge
 
-`agentflow_harness::tracing_bridge` resolves the session-log root from
-the `AGENTFLOW_TRACE_DIR` convention shared by the rest of AgentFlow
+`yanshi_harness::tracing_bridge` resolves the session-log root from
+the `YANSHI_TRACE_DIR` convention shared by the rest of Yanshi
 trace tooling. Each Harness session is one append-only JSONL file at
 `<base>/harness/sessions/<session_id>.jsonl`. Deeper integration with
-`agentflow-tracing::TraceStorage` (a single storage layer for both
+`yanshi-tracing::TraceStorage` (a single storage layer for both
 agent and Harness events) is Phase H5 work; it does not block Phase
 H1 because the on-disk layout already makes the data discoverable.
 
@@ -518,7 +518,7 @@ Both flavours echo the applied `mode` in the response body so callers
 that omit the field can confirm the default.
 
 V2.3 adds the interrupt/resume surface, backed by a Postgres
-`DbLoopCheckpointer` (`agentflow-db`'s `harness_loop_checkpoints` table
+`DbLoopCheckpointer` (`yanshi-db`'s `harness_loop_checkpoints` table
 + nullable `pending_question`/`pending_question_step_index` columns on
 `harness_sessions`) that `LiveHarnessExecutor` attaches to every
 session by default:
@@ -582,11 +582,11 @@ because the new seqs arrive on top of them as a single continuous
 timeline.
 
 The combined integration test
-`agentflow-server/tests/harness_full_stack_e2e.rs` exercises every
+`yanshi-server/tests/harness_full_stack_e2e.rs` exercises every
 layer the Web UI consumes in one ~6.5 s pass against real Postgres +
 Moonshot: submit → SSE stream → DB history → terminal row → resume
 → rerun history. Skips automatically without
-`AGENTFLOW_DATABASE_TEST_URL` and `MOONSHOT_API_KEY`.
+`YANSHI_DATABASE_TEST_URL` and `MOONSHOT_API_KEY`.
 
 DB schema (slice 1): two dedicated tables `harness_sessions` and
 `harness_session_events` (Postgres migration
@@ -603,7 +603,7 @@ Slice 1 plumbing uses a `StubHarnessExecutor` that emits
 `failed: executor_not_yet_wired`. Slice 2 introduces
 `LiveHarnessExecutor`, which wires `HarnessRuntime` ↔ `ReActAgent` ↔
 a hook-wrapped tool registry (`wrap_registry(HookConfig)`) backed by
-`ServerApprovalProvider`. `agentflow serve` swaps the default stub
+`ServerApprovalProvider`. `yanshi serve` swaps the default stub
 for the live executor; unit tests keep the stub via plain
 `AppState::new(db)` so the hermetic test suite never contacts an LLM
 provider. `HarnessRuntime::run` holds `&self` across awaits, so the
@@ -616,7 +616,7 @@ The server is **optional**. CLI direct execution stays first-class.
 ## Fixtures and tests
 
 Phase H0 ships frozen-fixture round-trip tests in
-`agentflow-harness/tests/`:
+`yanshi-harness/tests/`:
 
 - `envelope_contract.rs` — decode + re-encode of session bootstrap,
   approval request/decision, terminal stopped event, and an additive

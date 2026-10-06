@@ -6,7 +6,7 @@
 
 ## 🎉 集成成功！
 
-Tera 模板引擎已成功集成到 AgentFlow，所有功能正常运行，测试全部通过。
+Tera 模板引擎已成功集成到 Yanshi，所有功能正常运行，测试全部通过。
 
 ## 实施总结
 
@@ -14,13 +14,13 @@ Tera 模板引擎已成功集成到 AgentFlow，所有功能正常运行，测�
 
 #### 1. 核心实现
 
-**文件**: `agentflow-nodes/src/nodes/template.rs`
+**文件**: `yanshi-nodes/src/nodes/template.rs`
 - 完全使用 Tera 引擎重写 TemplateNode
 - 使用 `OnceLock<Mutex<Tera>>` 实现全局 Tera 实例
 - 支持动态上下文注入
 - 向后兼容旧的简单模板
 
-**文件**: `agentflow-nodes/src/common/tera_helpers.rs`
+**文件**: `yanshi-nodes/src/common/tera_helpers.rs`
 - FlowValue 到 Tera Value 的转换函数
 - JSON 到 Tera Value 的递归转换
 - 自定义过滤器:
@@ -33,16 +33,16 @@ Tera 模板引擎已成功集成到 AgentFlow，所有功能正常运行，测�
 
 #### 2. 依赖管理
 
-**文件**: `agentflow-nodes/Cargo.toml`
+**文件**: `yanshi-nodes/Cargo.toml`
 ```toml
 tera = "1.19"
 ```
 
-**注意**: Tera 已在 `agentflow-cli/Cargo.toml` 中，现在 `agentflow-nodes` 也有了。
+**注意**: Tera 已在 `yanshi-cli/Cargo.toml` 中，现在 `yanshi-nodes` 也有了。
 
 #### 3. 测试覆盖
 
-**文件**: `agentflow-nodes/src/nodes/template.rs` (tests 模块)
+**文件**: `yanshi-nodes/src/nodes/template.rs` (tests 模块)
 
 13 个测试全部通过：
 
@@ -230,45 +230,45 @@ template: "{{ greeting }} {{ name }}!"
 
 ```bash
 # 条件逻辑示例
-cargo run --release -- workflow run agentflow-cli/templates/tera-conditional-example.yml
+cargo run --release -- workflow run yanshi-cli/templates/tera-conditional-example.yml
 
 # 循环示例
-cargo run --release -- workflow run agentflow-cli/templates/tera-loop-example.yml
+cargo run --release -- workflow run yanshi-cli/templates/tera-loop-example.yml
 
 # 过滤器示例
-cargo run --release -- workflow run agentflow-cli/templates/tera-filters-example.yml
+cargo run --release -- workflow run yanshi-cli/templates/tera-filters-example.yml
 
 # 复杂报告示例
-cargo run --release -- workflow run agentflow-cli/templates/tera-complex-report-example.yml
+cargo run --release -- workflow run yanshi-cli/templates/tera-complex-report-example.yml
 ```
 
 ### 运行测试
 
 ```bash
 # 模板节点测试
-cargo test --package agentflow-nodes --lib template
+cargo test --package yanshi-nodes --lib template
 
 # 所有 flow 测试
-cargo test --package agentflow-core --lib flow
+cargo test --package yanshi-core --lib flow
 ```
 
 ## 影响的文件
 
 ### 新增文件 (4个)
-1. `agentflow-nodes/src/common/tera_helpers.rs` - Tera 辅助函数
-2. `agentflow-cli/templates/tera-conditional-example.yml`
-3. `agentflow-cli/templates/tera-loop-example.yml`
-4. `agentflow-cli/templates/tera-filters-example.yml`
-5. `agentflow-cli/templates/tera-complex-report-example.yml`
+1. `yanshi-nodes/src/common/tera_helpers.rs` - Tera 辅助函数
+2. `yanshi-cli/templates/tera-conditional-example.yml`
+3. `yanshi-cli/templates/tera-loop-example.yml`
+4. `yanshi-cli/templates/tera-filters-example.yml`
+5. `yanshi-cli/templates/tera-complex-report-example.yml`
 6. `TERA_INTEGRATION_ANALYSIS.md` - 分析文档
 7. `TERA_TEMPLATE_GUIDE.md` - 使用指南
 8. `TERA_INTEGRATION_COMPLETE.md` - 本文档
 
 ### 修改文件 (4个)
-1. `agentflow-nodes/Cargo.toml` - 添加 Tera 依赖
-2. `agentflow-nodes/src/common/mod.rs` - 导出 tera_helpers
-3. `agentflow-nodes/src/nodes/template.rs` - 完全重写使用 Tera
-4. `agentflow-core/src/flow.rs` - 之前已修复的空格支持（保留）
+1. `yanshi-nodes/Cargo.toml` - 添加 Tera 依赖
+2. `yanshi-nodes/src/common/mod.rs` - 导出 tera_helpers
+3. `yanshi-nodes/src/nodes/template.rs` - 完全重写使用 Tera
+4. `yanshi-core/src/flow.rs` - 之前已修复的空格支持（保留）
 
 ## 下一步建议
 
@@ -310,11 +310,11 @@ cargo test --package agentflow-core --lib flow
 - 文档完善
 - 示例丰富
 
-AgentFlow 现在拥有了业界标准的模板引擎，可以处理从简单变量替换到复杂报告生成的各种场景。
+Yanshi 现在拥有了业界标准的模板引擎，可以处理从简单变量替换到复杂报告生成的各种场景。
 
 ---
 
 **实施日期**: 2025-10-06
 **实施者**: Claude (Anthropic)
-**版本**: AgentFlow 0.1.0
+**版本**: Yanshi 0.1.0
 **状态**: ✅ 完成并可用

@@ -6,6 +6,6 @@ target/
 *.tmp
 .DS_Store
 TODOs.md
-agentflow-cli/runs/
+yanshi-cli/runs/
 **/.env
 **/.env.*

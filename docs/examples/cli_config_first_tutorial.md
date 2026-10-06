@@ -6,8 +6,8 @@ keys. It uses the built-in mock provider for model calls.
 ## 1. Configure A Mock Model
 
 ```bash
-mkdir -p ~/.agentflow
-cat > ~/.agentflow/models.yml <<'YAML'
+mkdir -p ~/.yanshi
+cat > ~/.yanshi/models.yml <<'YAML'
 models:
   mock-model:
     vendor: mock
@@ -18,34 +18,34 @@ providers:
     api_key_env: MOCK_API_KEY
 YAML
 
-agentflow config show models
-agentflow config validate
-agentflow llm models --provider mock --detailed
+yanshi config show models
+yanshi config validate
+yanshi llm models --provider mock --detailed
 ```
 
 ## 2. Run A Fixed DAG
 
 ```bash
-agentflow workflow run agentflow-cli/examples/workflows/fixed_dag_basic.yml --dry-run
+yanshi workflow run yanshi-cli/examples/workflows/fixed_dag_basic.yml --dry-run
 
-agentflow workflow run agentflow-cli/examples/workflows/fixed_dag_basic.yml \
-  --input topic AgentFlow \
-  --output /tmp/agentflow-fixed-dag.json
+yanshi workflow run yanshi-cli/examples/workflows/fixed_dag_basic.yml \
+  --input topic Yanshi \
+  --output /tmp/yanshi-fixed-dag.json
 ```
 
 ## 3. Inspect And Test A Skill
 
 ```bash
-agentflow skill inspect agentflow-cli/examples/skills/mock-reviewer
-agentflow skill list-tools agentflow-cli/examples/skills/mock-reviewer
-agentflow skill test agentflow-cli/examples/skills/mock-reviewer --dry-run
+yanshi skill inspect yanshi-cli/examples/skills/mock-reviewer
+yanshi skill list-tools yanshi-cli/examples/skills/mock-reviewer
+yanshi skill test yanshi-cli/examples/skills/mock-reviewer --dry-run
 ```
 
 ## 4. Run A Skill With Model And Memory Overrides
 
 ```bash
-AGENTFLOW_MOCK_RESPONSE='{"thought":"done","answer":"Reviewed with mock model."}' \
-  agentflow skill run agentflow-cli/examples/skills/mock-reviewer \
+YANSHI_MOCK_RESPONSE='{"thought":"done","answer":"Reviewed with mock model."}' \
+  yanshi skill run yanshi-cli/examples/skills/mock-reviewer \
     --message "Review the CLI workflow changes" \
     --model mock-model \
     --memory none \
@@ -55,12 +55,12 @@ AGENTFLOW_MOCK_RESPONSE='{"thought":"done","answer":"Reviewed with mock model."}
 ## 5. Run A Skill-Agent Workflow
 
 ```bash
-agentflow workflow run agentflow-cli/examples/workflows/skill_agent_hybrid.yml --dry-run
+yanshi workflow run yanshi-cli/examples/workflows/skill_agent_hybrid.yml --dry-run
 
-AGENTFLOW_MOCK_RESPONSE='{"thought":"done","answer":"Looks good."}' \
-  agentflow workflow run agentflow-cli/examples/workflows/skill_agent_hybrid.yml \
+YANSHI_MOCK_RESPONSE='{"thought":"done","answer":"Looks good."}' \
+  yanshi workflow run yanshi-cli/examples/workflows/skill_agent_hybrid.yml \
     --model mock-model \
-    --output /tmp/agentflow-skill-agent.json
+    --output /tmp/yanshi-skill-agent.json
 ```
 
 The final state JSON contains the skill-agent `response`, `session_id`,
@@ -73,8 +73,8 @@ collection and then passes retrieved context into a Skill-backed agent. The
 dry-run path does not contact Qdrant or an embedding provider.
 
 ```bash
-cargo run -p agentflow-cli --features rag -- \
-  workflow run agentflow-cli/examples/workflows/rag_skill_assistant.yml --dry-run
+cargo run -p yanshi-cli --features rag -- \
+  workflow run yanshi-cli/examples/workflows/rag_skill_assistant.yml --dry-run
 ```
 
 Full execution additionally requires Qdrant, embedding credentials such as
@@ -83,11 +83,11 @@ Full execution additionally requires Qdrant, embedding credentials such as
 ## 7. Marketplace Install Flow
 
 ```bash
-agentflow skill marketplace list agentflow-skills/examples/marketplace.toml
-agentflow skill marketplace install agentflow-skills/examples/marketplace.toml mcp-demo \
-  --dir /tmp/agentflow-skills \
+yanshi skill marketplace list yanshi-skills/examples/marketplace.toml
+yanshi skill marketplace install yanshi-skills/examples/marketplace.toml mcp-demo \
+  --dir /tmp/yanshi-skills \
   --force
-agentflow skill inspect /tmp/agentflow-skills/mcp-basic
+yanshi skill inspect /tmp/yanshi-skills/mcp-basic
 ```
 
 ## 8. Trace Viewing
@@ -95,6 +95,6 @@ agentflow skill inspect /tmp/agentflow-skills/mcp-basic
 When a command writes trace files, inspect them with:
 
 ```bash
-agentflow trace replay <run_id>
-agentflow trace tui <run_id> --filter all --details
+yanshi trace replay <run_id>
+yanshi trace tui <run_id> --filter all --details
 ```

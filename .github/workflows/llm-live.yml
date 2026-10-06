@@ -2,8 +2,8 @@ name: LLM Live Smoke
 
 # Nightly cross-provider smoke test against real LLM endpoints.
 #
-# Runs `cargo test -p agentflow-llm --test provider_consistency_live` with
-# `AGENTFLOW_LIVE_LLM_TESTS=1` and per-provider API keys from repository
+# Runs `cargo test -p yanshi-llm --test provider_consistency_live` with
+# `YANSHI_LIVE_LLM_TESTS=1` and per-provider API keys from repository
 # secrets. Each provider test self-skips with a log line when its API key
 # secret is empty, so it's safe to flip on a single provider at a time.
 #
@@ -31,7 +31,7 @@ jobs:
     # own 30s timeout in code.
     timeout-minutes: 15
     env:
-      AGENTFLOW_LIVE_LLM_TESTS: "1"
+      YANSHI_LIVE_LLM_TESTS: "1"
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -40,7 +40,7 @@ jobs:
       # GLM (Zhipu / BigModel) — the 6th `LIVE_PROVIDER_PROFILES` row in
       # provider_consistency_live.rs. Optional like the others; the
       # live test self-skips when the secret is empty. Three env-var
-      # aliases match agentflow-llm's resolution order so operators can
+      # aliases match yanshi-llm's resolution order so operators can
       # set whichever matches their vault's naming.
       GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
       BIGMODEL_API_KEY: ${{ secrets.BIGMODEL_API_KEY }}
@@ -67,5 +67,5 @@ jobs:
           # An empty `inputs.providers` runs the full suite; otherwise we feed
           # each comma-separated token as its own filter token.
           FILTERS="$(echo "${{ inputs.providers }}" | tr ',' ' ')"
-          cargo test -p agentflow-llm --test provider_consistency_live -- \
+          cargo test -p yanshi-llm --test provider_consistency_live -- \
             --nocapture --test-threads=1 ${FILTERS}

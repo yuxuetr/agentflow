@@ -1,4 +1,4 @@
-# AgentFlow Roadmap
+# Yanshi Roadmap
 
 Last updated: 2026-07-23
 
@@ -16,7 +16,7 @@ Short-term execution items live in `TODOs.md`.
 
 ## Direction
 
-AgentFlow is converging on a Rust-native runtime for reliable AI workflows and
+Yanshi is converging on a Rust-native runtime for reliable AI workflows and
 agents. The near-term strategy is **Core Runtime Stabilization**: make the
 execution kernel, agent runtime, tool/MCP/Skill composition, tracing, security
 governance, CLI, Rust SDK, and local server/daemon surfaces dependable before
@@ -51,7 +51,7 @@ contracts and security model are stronger.
 
 ## Target Product Shape
 
-AgentFlow should expose three primary access modes:
+Yanshi should expose three primary access modes:
 
 1. **Rust SDK** for embedding `Flow`, `AgentRuntime`, `ToolRegistry`,
    `SkillBuilder`, MCP, RAG, memory, and tracing in applications.
@@ -84,7 +84,7 @@ AgentFlow should expose three primary access modes:
 
 ### P2 — Local Server / Daemon Reliability
 
-- Add `agentflow serve` as the supported local runtime service command.
+- Add `yanshi serve` as the supported local runtime service command.
 - Continue hardening server/database behavior with production run storage,
   retention, cleanup, and tenant/session policy.
 - Exercise `/v1/runs`, cancellation, SSE, and Web UI workflows against real
@@ -99,7 +99,7 @@ AgentFlow should expose three primary access modes:
   tracing, and tool security.
 - Keep human-readable CLI output ergonomic and machine-readable JSON output
   stable enough for automation.
-- Expand `agentflow doctor` into a full environment and security diagnostic
+- Expand `yanshi doctor` into a full environment and security diagnostic
   covering config, providers, feature flags, MCP, sandbox, server, database,
   and plugin readiness.
 - Keep official examples offline/mock runnable by default, with live provider
@@ -156,7 +156,7 @@ Converge the four execution paradigms onto one narrow-waist contract kernel by a
   behind a Skill's `knowledge:` declaration (the `rag search/index` CLI demotes
   to ops subcommands; the eval harness stays as the quality gate).
 - Resolve the one open crate-division question the evaluation surfaced:
-  decompose the fat `agentflow-nodes` straddler so tool-tier nodes
+  decompose the fat `yanshi-nodes` straddler so tool-tier nodes
   (`template`/`file`/`http`/`batch`/`conditional`/`while`) stop dragging the
   `llm` / `rag` capabilities into the tool tier (evaluation R3).
 
@@ -234,7 +234,7 @@ fallback chains, cross-cutting cache layer) stage in `docs/ROADMAP_v2.md` §K.
 
 ### Harness Agent Mode
 
-AgentFlow's evolution toward a long-lived, workspace-aware, governable agent
+Yanshi's evolution toward a long-lived, workspace-aware, governable agent
 session pattern. Full design lives in `HARNESS_MODE_EVOLUTION.md`; active
 execution tasks live in `TODOs.md` under the `P-H` parallel track.
 
@@ -250,7 +250,7 @@ prerequisites:
 - H3 (parallel tool calls) — depends on H1 and `P3.7` LLM provider matrix.
 - H4 (background task tools) — depends on H2 and an in-process task runtime
   design from H0.
-- H5 (server + Web UI integration) — depends on `P2.1` (`agentflow serve`),
+- H5 (server + Web UI integration) — depends on `P2.1` (`yanshi serve`),
   `P2.2` (retention), `P2.4` (SSE robustness), `P-H.2`, and `P6.*` Web UI
   baseline.
 - H6 (advanced compatibility) — open-ended; remains in this Later Track and
@@ -273,7 +273,7 @@ Explicit Non-Goals for Harness Mode (preserved here):
   are done (`P5.5`–`P5.7`, closed).
 - Worker-executable node types are done (`P2.8`, closed): `template`, `file`,
   `mock`, `llm`, `http`, `mcp`, and `agent` all dispatch
-  (`agentflow-worker/src/lib.rs::execute_supported_node_payload`). The
+  (`yanshi-worker/src/lib.rs::execute_supported_node_payload`). The
   `agent` payload's tool wiring stays minimal — it runs against a fresh,
   empty `ToolRegistry` (no distributed tool-call support yet); richer tool
   wiring rides the same `parameters` plumbing once that distribution

@@ -2,7 +2,7 @@
 name: research-assistant
 description: Gather, compare, and summarize technical research notes with source-aware reasoning.
 license: Apache-2.0
-compatibility: AgentFlow v1 stability inventory
+compatibility: Yanshi v1 stability inventory
 allowed-tools: file
 metadata:
   version: "1.0.0"

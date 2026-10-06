@@ -8,7 +8,7 @@
 # RUSTSEC-2026-0104+0098+0099+0049, tar/RUSTSEC-2026-0068+0067,
 # tracing-subscriber/RUSTSEC-2025-0055) were fixed directly via targeted
 # `cargo update -p <crate>` bumps instead of being ignored here — each
-# verified individually against `agentflow-worker`'s real mTLS gRPC test
+# verified individually against `yanshi-worker`'s real mTLS gRPC test
 # suite before being kept. A blanket workspace-wide `cargo update` was tried
 # first and discarded: it silently rebalanced the `rustls` crypto-provider
 # feature-unification across the workspace and broke that same test suite
@@ -17,7 +17,7 @@
 # bump. The two entries below remain because neither has a safe fix path.
 [advisories]
 ignore = [
-  # lopdf 0.34.0 (pulled in only by agentflow-rag's optional `pdf` feature,
+  # lopdf 0.34.0 (pulled in only by yanshi-rag's optional `pdf` feature,
   # via pdf-extract): stack-overflow DoS on deeply nested PDF objects.
   # RustSec's fix requires lopdf >=0.42.0, a breaking 0.34 -> 0.42 bump that
   # pdf-extract's own Cargo.toml would need to allow first — needs its own

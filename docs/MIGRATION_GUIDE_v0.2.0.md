@@ -6,7 +6,7 @@
 
 ## Overview
 
-AgentFlow v0.2.0 introduces major stability and observability improvements through Phase 1 enhancements. This release focuses on production-readiness with retry mechanisms, error context tracking, workflow debugging tools, and resource management capabilities.
+Yanshi v0.2.0 introduces major stability and observability improvements through Phase 1 enhancements. This release focuses on production-readiness with retry mechanisms, error context tracking, workflow debugging tools, and resource management capabilities.
 
 **Key Highlights:**
 - ✅ **Zero Breaking Changes** - Fully backward compatible
@@ -36,9 +36,9 @@ Update your `Cargo.toml`:
 
 ```toml
 [dependencies]
-agentflow-core = "0.2.0"
-agentflow-llm = "0.2.0"
-agentflow-cli = "0.2.0"
+yanshi-core = "0.2.0"
+yanshi-llm = "0.2.0"
+yanshi-cli = "0.2.0"
 ```
 
 Then run:
@@ -64,7 +64,7 @@ cargo test
 Add retry configuration to error-prone operations:
 
 ```rust
-use agentflow_core::{RetryPolicy, RetryStrategy, execute_with_retry};
+use yanshi_core::{RetryPolicy, RetryStrategy, execute_with_retry};
 
 let policy = RetryPolicy::builder()
     .max_attempts(3)
@@ -88,7 +88,7 @@ let result = execute_with_retry(&policy, "api_call", || async {
 Enhance error reporting with detailed context:
 
 ```rust
-use agentflow_core::{execute_with_retry_and_context, ErrorContext};
+use yanshi_core::{execute_with_retry_and_context, ErrorContext};
 
 let result = execute_with_retry_and_context(
     &policy,
@@ -116,16 +116,16 @@ Debug workflows before execution:
 
 ```bash
 # Validate workflow configuration
-agentflow workflow debug workflow.yml --validate
+yanshi workflow debug workflow.yml --validate
 
 # Visualize DAG structure
-agentflow workflow debug workflow.yml --visualize
+yanshi workflow debug workflow.yml --visualize
 
 # Analyze complexity and bottlenecks
-agentflow workflow debug workflow.yml --analyze
+yanshi workflow debug workflow.yml --analyze
 
 # Dry-run without execution
-agentflow workflow debug workflow.yml --dry-run
+yanshi workflow debug workflow.yml --dry-run
 ```
 
 #### 3.4 Enable Resource Management
@@ -133,7 +133,7 @@ agentflow workflow debug workflow.yml --dry-run
 Add memory limits to prevent unbounded growth:
 
 ```rust
-use agentflow_core::{ResourceLimits, StateMonitor};
+use yanshi_core::{ResourceLimits, StateMonitor};
 
 let limits = ResourceLimits::builder()
     .max_state_size(100 * 1024 * 1024)  // 100 MB
@@ -184,7 +184,7 @@ All existing APIs remain unchanged and fully functional.
 - `ResourceStats` - Usage statistics
 
 #### CLI Commands
-- `agentflow workflow debug` - Workflow debugging command
+- `yanshi workflow debug` - Workflow debugging command
   - `--validate` - Validate configuration
   - `--visualize` - Show DAG structure
   - `--analyze` - Analyze complexity
@@ -267,14 +267,14 @@ async fn fetch_data() -> Result<Data, Error> {
 
 **After v0.2.0:**
 ```rust
-async fn fetch_data() -> Result<Data, AgentFlowError> {
+async fn fetch_data() -> Result<Data, YanshiError> {
     let policy = RetryPolicy::builder()
         .max_attempts(3)
         .strategy(RetryStrategy::Fixed { delay_ms: 100 })
         .build();
 
     execute_with_retry(&policy, "fetch_data", || async {
-        api_call().await.map_err(|e| AgentFlowError::Generic(e.to_string()))
+        api_call().await.map_err(|e| YanshiError::Generic(e.to_string()))
     }).await
 }
 ```
@@ -339,7 +339,7 @@ for item in large_dataset {
         // Handle resource limit
         monitor.cleanup(0.5)?;
         if !monitor.record_allocation(&item.id, size) {
-            return Err(AgentFlowError::ResourcePoolExhausted {
+            return Err(YanshiError::ResourcePoolExhausted {
                 resource_type: "memory".to_string()
             });
         }
@@ -387,9 +387,9 @@ If you need to revert to v0.1.0:
 
 ```toml
 [dependencies]
-agentflow-core = "0.1.0"
-agentflow-llm = "0.1.0"
-agentflow-cli = "0.1.0"
+yanshi-core = "0.1.0"
+yanshi-llm = "0.1.0"
+yanshi-cli = "0.1.0"
 ```
 
 Then:
@@ -417,9 +417,9 @@ Before deploying v0.2.0 to production:
 ## Getting Help
 
 - **Documentation**: `docs/` directory
-- **Examples**: `agentflow-core/examples/`
-- **Issues**: https://github.com/anthropics/agentflow/issues
-- **Discussions**: https://github.com/anthropics/agentflow/discussions
+- **Examples**: `yanshi-core/examples/`
+- **Issues**: https://github.com/anthropics/yanshi/issues
+- **Discussions**: https://github.com/anthropics/yanshi/discussions
 
 ## Related Documentation
 

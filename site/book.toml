@@ -1,10 +1,10 @@
-# AgentFlow manual. Build locally with `mdbook build site` (output in
+# Yanshi manual. Build locally with `mdbook build site` (output in
 # site/book/) or preview with `mdbook serve site`; CI publishes it to GitHub
 # Pages via .github/workflows/docs.yml.
 
 [book]
-title = "AgentFlow Manual"
-description = "User and operator manual for AgentFlow, a Rust framework for DAG workflows and agent-native loops."
+title = "Yanshi Manual"
+description = "User and operator manual for Yanshi, a Rust framework for DAG workflows and agent-native loops."
 language = "en"
 # Pages are written to be read on GitHub too, so they stay in docs/; the table
 # of contents is docs/SUMMARY.md.
@@ -19,6 +19,6 @@ create-missing = false
 command = "python3 repo_links.py"
 
 [output.html]
-site-url = "/agentflow/"
-git-repository-url = "https://github.com/yuxuetr/agentflow"
-edit-url-template = "https://github.com/yuxuetr/agentflow/edit/main/docs/{path}"
+site-url = "/yanshi/"
+git-repository-url = "https://github.com/yuxuetr/yanshi"
+edit-url-template = "https://github.com/yuxuetr/yanshi/edit/main/docs/{path}"

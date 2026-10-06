@@ -20,9 +20,9 @@
 //!     = { value, graph, store-spi, agent-spi, async-util, tool } — the crate
 //!     list CLAUDE.md's "L0 Contract Kernel" section names (`tool`, not
 //!     `tools`, since T3.3 2026-07-30 split the `Tool` contract out of the
-//!     builtin-impl-carrying `agentflow-tools`). Added after an
-//!     independent audit found `agentflow-agent-spi` depending directly on
-//!     `agentflow-llm` (an L2 impl crate) for over a month with neither the
+//!     builtin-impl-carrying `yanshi-tools`). Added after an
+//!     independent audit found `yanshi-agent-spi` depending directly on
+//!     `yanshi-llm` (an L2 impl crate) for over a month with neither the
 //!     allowlist nor the latent-edge map ever noticing, because until R1.2 no
 //!     law covered kernel crates at all (see R1.1 in TODOs.md for the fix that
 //!     paid that specific edge down first). Intra-kernel edges (e.g.
@@ -50,31 +50,31 @@ use std::io::Write;
 use std::path::Path;
 
 /// Runtime-tier crates (RFC §3). No runtime may depend on another runtime.
-const ARCH_RUNTIME_CRATES: &[&str] = &["agentflow-core", "agentflow-agents", "agentflow-harness"];
+const ARCH_RUNTIME_CRATES: &[&str] = &["yanshi-core", "yanshi-agents", "yanshi-harness"];
 
 /// Surface-tier binary crates (RFC §3). No surface may depend on another
 /// surface — they compose only via shared contract / assembly crates.
-const ARCH_SURFACE_CRATES: &[&str] = &["agentflow-cli", "agentflow-server", "agentflow-worker"];
+const ARCH_SURFACE_CRATES: &[&str] = &["yanshi-cli", "yanshi-server", "yanshi-worker"];
 
 /// L0 contract-kernel crates (RFC §4, CLAUDE.md "L0 Contract Kernel"). A
 /// kernel crate may depend on other kernel crates (that's the narrow waist
 /// working as intended) but never on an L2/L3/L4 crate.
 ///
-/// T3.3 (2026-07-30, `docs/RFC_TOOL_CONTRACT_SPLIT.md`): `agentflow-tools`
-/// replaced by `agentflow-tool` — the former bundled five concrete builtin
+/// T3.3 (2026-07-30, `docs/RFC_TOOL_CONTRACT_SPLIT.md`): `yanshi-tools`
+/// replaced by `yanshi-tool` — the former bundled five concrete builtin
 /// tools + four OS-sandbox backends, which is exactly the impl-tier code a
 /// kernel crate must never hold (RFC §7 Law 1). The `Tool` contract itself
 /// (trait, `ToolRegistry`, `ToolMetadata`, `Capability`, `ToolPolicy`,
 /// `SecurityProfile`, the `SandboxBackend` trait + DTOs) now lives in the
-/// dependency-free `agentflow-tool`; `agentflow-tools` (the builtin impls)
+/// dependency-free `yanshi-tool`; `yanshi-tools` (the builtin impls)
 /// dropped out of the kernel set and re-exports the contract crate in full.
 const ARCH_KERNEL_CRATES: &[&str] = &[
-  "agentflow-value",
-  "agentflow-graph",
-  "agentflow-store-spi",
-  "agentflow-agent-spi",
-  "agentflow-async-util",
-  "agentflow-tool",
+  "yanshi-value",
+  "yanshi-graph",
+  "yanshi-store-spi",
+  "yanshi-agent-spi",
+  "yanshi-async-util",
+  "yanshi-tool",
 ];
 
 const LAW_RUNTIME_ISOLATION: &str = "runtime-isolation (RFC §7 Law 4/6)";
@@ -97,12 +97,12 @@ const ARCH_ALLOWLIST: &[ArchAllow] = &[
   // - P-A1.3/1.4 + P-A (this): agents -> core. agents builds on the graph IR +
   //   the FlowRunner contract + async-util; the executor (`CoreFlowRunner`) is
   //   injected by the surface, and core is only a dev-dependency.
-  // - P-A2.1: harness -> agents. harness depends on the agentflow-agent-spi
+  // - P-A2.1: harness -> agents. harness depends on the yanshi-agent-spi
   //   contract; agents stays a harness dev-dependency for the smoke test.
   // - P-A2.3: worker -> server. the worker protocol + gRPC client moved to
-  //   `agentflow-worker-proto`; server stays a worker dev-dependency for tests.
+  //   `yanshi-worker-proto`; server stays a worker dev-dependency for tests.
   // - P-A2.4: server -> cli. the config/executor assembly + the diagnostics
-  //   report builder moved to `agentflow-config`.
+  //   report builder moved to `yanshi-config`.
 ];
 
 /// A latent target-state violation: an edge that does NOT break either of the
@@ -131,20 +131,20 @@ const ARCH_LATENT_EDGES: &[ArchLatent] = &[
   // Row 5 — `agents` runtime fused to concrete impls (law 4); inject via
   // agent-spi / store-spi / tool contracts at surfaces (P-A1.1/1.2 + P-A2.1).
   ArchLatent {
-    from: "agentflow-agents",
-    to: "agentflow-llm",
+    from: "yanshi-agents",
+    to: "yanshi-llm",
     becomes: "law 4 runtime→impl",
     burndown: "P-A1.1 — inject LLM via agent-spi at surfaces",
   },
   ArchLatent {
-    from: "agentflow-agents",
-    to: "agentflow-mcp",
+    from: "yanshi-agents",
+    to: "yanshi-mcp",
     becomes: "law 4 runtime→impl",
     burndown: "P-A1.1 — inject MCP tools via tool contract",
   },
   // U2.5 (2026-07-31): `ProjectMemoryStore`/`ProjectFact` PAID DOWN —
-  // extracted to `agentflow-store-spi` (mirroring `TaskSummaryStore`),
-  // `agentflow-memory` keeps `InMemoryProjectMemoryStore`/
+  // extracted to `yanshi-store-spi` (mirroring `TaskSummaryStore`),
+  // `yanshi-memory` keeps `InMemoryProjectMemoryStore`/
   // `SqliteProjectMemoryStore` and re-exports the contract types under
   // their original paths.
   // U2.6 (2026-08-01): `PreferenceStore` ALSO PAID DOWN — re-auditing
@@ -152,13 +152,13 @@ const ARCH_LATENT_EDGES: &[ArchLatent] = &[
   // (`SqlitePreferenceStore` only ever touches `&self.pool`, an
   // `Arc`-backed `sqlx::SqlitePool` that's already safe to share;
   // `AgeEncryptedPreferenceStore` just encrypts and forwards). Redesigned
-  // the trait to `&self`, extracted it to `agentflow-store-spi` alongside
+  // the trait to `&self`, extracted it to `yanshi-store-spi` alongside
   // `PreferenceScope`/`PreferenceValue`, and `ReActAgent`'s
   // `preference_store` field + `RememberPreferenceTool` both dropped
   // their `Mutex` wrapper for a bare `Arc<dyn PreferenceStore>` —
   // matching `project_memory_store`/`task_summary_store` exactly.
   // This edge STILL stays real (not paid down) — a third, different
-  // reason surfaced during U2.6's audit: `agentflow-agents/src/dynamic.rs`
+  // reason surfaced during U2.6's audit: `yanshi-agents/src/dynamic.rs`
   // (`DynamicWorkflowAgent`, compiling an LLM-authored `agent` plan step)
   // constructs a concrete `Box::new(SessionMemory::default_window())` as
   // its default memory backend. `SessionMemory` has no store-spi contract
@@ -168,76 +168,76 @@ const ARCH_LATENT_EDGES: &[ArchLatent] = &[
   // caller-injectable, a genuinely different (and larger) change than
   // "extract one more contract." Not attempted in U2.6; no new item
   // opened to track it — left as an accepted, load-bearing use of a
-  // concrete `agentflow-memory` type, not a to-do.
+  // concrete `yanshi-memory` type, not a to-do.
   ArchLatent {
-    from: "agentflow-agents",
-    to: "agentflow-memory",
+    from: "yanshi-agents",
+    to: "yanshi-memory",
     becomes: "law 4 runtime→impl",
     burndown: "not closable via contract extraction alone — dynamic.rs's SessionMemory default needs an injectable-memory redesign",
   },
-  // T3.3 (2026-07-30): `agents -> tools` PAID DOWN — `agentflow-tools`
-  // split into `agentflow-tool` (contract) + `agentflow-tools` (builtin
-  // impl), and `agentflow-agents` now depends on the contract crate only
+  // T3.3 (2026-07-30): `agents -> tools` PAID DOWN — `yanshi-tools`
+  // split into `yanshi-tool` (contract) + `yanshi-tools` (builtin
+  // impl), and `yanshi-agents` now depends on the contract crate only
   // (`docs/RFC_TOOL_CONTRACT_SPLIT.md`).
   // Row 6 — `harness` carries 5 impl edges; only `harness→agents` is in the
   // allowlist. These three remain after P-A2.1 repoints harness→agent-spi.
   ArchLatent {
-    from: "agentflow-harness",
-    to: "agentflow-llm",
+    from: "yanshi-harness",
+    to: "yanshi-llm",
     becomes: "law 4 runtime→impl",
     burndown: "P-A1.2 — tokenizer via value/store-spi util (R6)",
   },
   // T3.3 (2026-07-30): `harness -> tools` PAID DOWN alongside `agents ->
-  // tools` above — `agentflow-harness` now depends on the `agentflow-tool`
+  // tools` above — `yanshi-harness` now depends on the `yanshi-tool`
   // contract crate only.
   // U2.1 (2026-07-30): `harness -> memory` PAID DOWN — production code
   // only ever touched `MemoryStore`/`Message` (both plain store-spi
-  // re-exports), so `[dependencies]` now points at `agentflow-store-spi`
-  // directly; `agentflow-memory` moved to `[dev-dependencies]` for
+  // re-exports), so `[dependencies]` now points at `yanshi-store-spi`
+  // directly; `yanshi-memory` moved to `[dev-dependencies]` for
   // `SessionMemory` in this crate's own tests. `agents -> memory` (row
   // above) stays real, not paid down — see the U2.5/U2.6 notes on that row for
   // the current (post-U2.2 preference wiring) reason why.
   ArchLatent {
-    from: "agentflow-harness",
-    to: "agentflow-tracing",
+    from: "yanshi-harness",
+    to: "yanshi-tracing",
     becomes: "law 4 runtime→impl",
     burndown: "P-A1.1 — redaction/trace-context via agent-spi (R6)",
   },
   // Row 7–8 — `nodes` straddler. P-A0.5 BURNED DOWN the capability edges
   // (nodes→{llm,rag,mcp}): the capability-backed nodes moved to the new
-  // `agentflow-nodes-ai` adapter crate, so the tool-tier `agentflow-nodes`
+  // `yanshi-nodes-ai` adapter crate, so the tool-tier `yanshi-nodes`
   // crate carries no capability deps. The IR edge below remains.
   ArchLatent {
-    from: "agentflow-nodes",
-    to: "agentflow-core",
+    from: "yanshi-nodes",
+    to: "yanshi-core",
     becomes: "law 2 tool→runtime",
     burndown: "P-A1.3 — IR-only edge; becomes nodes→graph",
   },
   // Row 9 — `skills` capability depends on the `agents` runtime (law 3 inversion).
   ArchLatent {
-    from: "agentflow-skills",
-    to: "agentflow-agents",
+    from: "yanshi-skills",
+    to: "yanshi-agents",
     becomes: "law 3 capability→runtime",
     burndown: "P-A4.3 — Capability::lower; surface wires the runtime",
   },
   // Row 10 — `memory` capability→capability (law 3).
   ArchLatent {
-    from: "agentflow-memory",
-    to: "agentflow-rag",
+    from: "yanshi-memory",
+    to: "yanshi-rag",
     becomes: "law 3 capability→capability",
     burndown: "P-A1.2 — EmbeddingProvider via store-spi (R6)",
   },
   // Row 11 — `mcp` tool→ops (law 2), traceparent ambient only.
   ArchLatent {
-    from: "agentflow-mcp",
-    to: "agentflow-tracing",
+    from: "yanshi-mcp",
+    to: "yanshi-tracing",
     becomes: "law 2 tool→ops",
     burndown: "P-A1.1 — trace-context contract via agent-spi/value (R6)",
   },
   // Extra — `tracing` ops→runtime for the workflow event types.
   ArchLatent {
-    from: "agentflow-tracing",
-    to: "agentflow-core",
+    from: "yanshi-tracing",
+    to: "yanshi-core",
     becomes: "ops→runtime",
     burndown: "P-A1.1/P-A1.5 — depend on agent-spi + value, not core",
   },
@@ -380,7 +380,7 @@ fn read_internal_deps(manifest: &Path, members: &BTreeSet<String>) -> Result<Vec
       continue;
     };
     for (key, value) in tbl {
-      // `foo = { package = "agentflow-x" }` renames resolve to the real crate.
+      // `foo = { package = "yanshi-x" }` renames resolve to the real crate.
       let crate_name = value
         .as_table()
         .and_then(|t| t.get("package"))
@@ -591,7 +591,7 @@ mod arch_tests {
   #[test]
   fn kernel_depending_on_non_kernel_is_a_new_violation() {
     // R1.2 regression pin: this is exactly the shape of the bug the audit
-    // found (agentflow-agent-spi -> agentflow-llm) before R1.1 fixed it.
+    // found (yanshi-agent-spi -> yanshi-llm) before R1.1 fixed it.
     let e = edges(&[("k-a", "impl-x")]);
     let eval = evaluate_arch(&e, &[], &[], &["k-a", "k-b"], &[]);
     assert_eq!(eval.new.len(), 1);
@@ -601,7 +601,7 @@ mod arch_tests {
   #[test]
   fn kernel_depending_on_kernel_is_allowed() {
     // Intra-kernel edges are the narrow waist working as intended, e.g.
-    // `agentflow-graph -> agentflow-value` or `agent-spi -> store-spi`.
+    // `yanshi-graph -> yanshi-value` or `agent-spi -> store-spi`.
     let e = edges(&[("k-a", "k-b")]);
     let eval = evaluate_arch(&e, &[], &[], &["k-a", "k-b"], &[]);
     assert!(eval.new.is_empty() && eval.tracked.is_empty() && eval.stale.is_empty());
@@ -666,25 +666,25 @@ mod arch_tests {
       &manifest,
       "[package]\nname = \"x\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n\
        [dependencies]\n\
-       agentflow-core = { path = \"../agentflow-core\" }\n\
-       aliased = { package = \"agentflow-tools\" }\n\
+       yanshi-core = { path = \"../yanshi-core\" }\n\
+       aliased = { package = \"yanshi-tools\" }\n\
        serde = \"1\"\n\n\
        [dev-dependencies]\n\
-       agentflow-llm = { path = \"../agentflow-llm\" }\n",
+       yanshi-llm = { path = \"../yanshi-llm\" }\n",
     )
     .expect("write manifest");
-    let members: BTreeSet<String> = ["agentflow-core", "agentflow-tools", "agentflow-llm"]
+    let members: BTreeSet<String> = ["yanshi-core", "yanshi-tools", "yanshi-llm"]
       .iter()
       .map(|s| s.to_string())
       .collect();
     let deps = read_internal_deps(&manifest, &members).expect("read deps");
-    assert!(deps.contains(&"agentflow-core".to_string()));
+    assert!(deps.contains(&"yanshi-core".to_string()));
     assert!(
-      deps.contains(&"agentflow-tools".to_string()),
+      deps.contains(&"yanshi-tools".to_string()),
       "rename via package= must resolve"
     );
     assert!(
-      !deps.contains(&"agentflow-llm".to_string()),
+      !deps.contains(&"yanshi-llm".to_string()),
       "dev-dependencies must be excluded"
     );
     assert_eq!(deps.len(), 2);
@@ -743,26 +743,26 @@ mod arch_tests {
     }
   }
 
-  /// T3.3 regression (`docs/RFC_TOOL_CONTRACT_SPLIT.md`): `agentflow-tools`
+  /// T3.3 regression (`docs/RFC_TOOL_CONTRACT_SPLIT.md`): `yanshi-tools`
   /// bundled concrete builtin tools + OS-sandbox backends, which is exactly
   /// the impl-tier code a kernel crate must never hold — it was replaced by
-  /// the dependency-free `agentflow-tool` contract crate in the kernel set,
-  /// and `agentflow-agents` / `agentflow-harness` now depend on that
+  /// the dependency-free `yanshi-tool` contract crate in the kernel set,
+  /// and `yanshi-agents` / `yanshi-harness` now depend on that
   /// contract crate directly instead of the builtin-impl one, resolving
   /// both `law 4 runtime→impl` latent edges this test locks in as gone.
   #[test]
   fn tool_contract_split_removed_the_tools_kernel_membership_and_latent_edges() {
     assert!(
-      ARCH_KERNEL_CRATES.contains(&"agentflow-tool"),
-      "agentflow-tool must be the kernel-tier contract crate"
+      ARCH_KERNEL_CRATES.contains(&"yanshi-tool"),
+      "yanshi-tool must be the kernel-tier contract crate"
     );
     assert!(
-      !ARCH_KERNEL_CRATES.contains(&"agentflow-tools"),
-      "agentflow-tools (builtin impls) must not be in the kernel set"
+      !ARCH_KERNEL_CRATES.contains(&"yanshi-tools"),
+      "yanshi-tools (builtin impls) must not be in the kernel set"
     );
     for (from, to) in [
-      ("agentflow-agents", "agentflow-tools"),
-      ("agentflow-harness", "agentflow-tools"),
+      ("yanshi-agents", "yanshi-tools"),
+      ("yanshi-harness", "yanshi-tools"),
     ] {
       assert!(
         !ARCH_LATENT_EDGES

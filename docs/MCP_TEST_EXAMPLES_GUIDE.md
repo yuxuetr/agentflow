@@ -1,4 +1,4 @@
-# AgentFlow MCP - Testing & Examples Guide
+# Yanshi MCP - Testing & Examples Guide
 
 **Date**: 2025-10-27
 **Status**: ✅ COMPLETED
@@ -8,7 +8,7 @@
 
 ## Overview
 
-This guide documents the testing infrastructure and examples created for the AgentFlow MCP client. It includes:
+This guide documents the testing infrastructure and examples created for the Yanshi MCP client. It includes:
 - **MockTransport** for testing without real servers
 - **11 integration tests** covering all client functionality
 - **2 practical examples** demonstrating real-world usage
@@ -52,7 +52,7 @@ MockTransport simulates MCP server responses for testing purposes, allowing you 
 ### Usage Example
 
 ```rust
-use agentflow_mcp::transport::MockTransport;
+use yanshi_mcp::transport::MockTransport;
 use serde_json::json;
 
 // Create mock transport
@@ -212,7 +212,7 @@ cargo run --example simple_client -- node server.js
 #### Output Sample
 
 ```
-=== AgentFlow MCP Client Example ===
+=== Yanshi MCP Client Example ===
 
 Using mock transport
 
@@ -289,7 +289,7 @@ cargo run --example retry_example
 #### Output Sample
 
 ```
-=== AgentFlow MCP Retry Example ===
+=== Yanshi MCP Retry Example ===
 
 --- Example 1: Default Retry Configuration ---
 Retry config: max_retries=3, backoff_base=100ms
@@ -513,7 +513,7 @@ async fn test_retry_behavior() {
 
 ---
 
-**Document Author**: Claude (AgentFlow MCP Team)
+**Document Author**: Claude (Yanshi MCP Team)
 **Last Updated**: 2025-10-27
 **Related Documents**:
 - MCP_PRODUCTION_DESIGN.md

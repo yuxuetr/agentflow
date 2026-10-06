@@ -1,10 +1,10 @@
 # Trace Persistence Schema
 
-AgentFlow trace persistence uses a normalized relational schema plus a full
+Yanshi trace persistence uses a normalized relational schema plus a full
 `trace_json` copy on `trace_runs` for compatibility with the existing
 `ExecutionTrace` model.
 
-The canonical DDL constants live in `agentflow-tracing/src/storage/schema.rs`:
+The canonical DDL constants live in `yanshi-tracing/src/storage/schema.rs`:
 
 - `POSTGRES_TRACE_SCHEMA`
 - `SQLITE_TRACE_SCHEMA`
@@ -30,20 +30,20 @@ the same table and column names so query code can share most of its shape.
 
 ## Hop continuity (P3.8)
 
-W3C `traceparent` is the wire-format AgentFlow uses to keep an OTel
+W3C `traceparent` is the wire-format Yanshi uses to keep an OTel
 trace stitched across every process and protocol hop a run touches.
 Producers install the active value via
-`agentflow_tracing::context::scope(traceparent, fut)` and consumers
-read it with `agentflow_tracing::context::current_traceparent()`. The
+`yanshi_tracing::context::scope(traceparent, fut)` and consumers
+read it with `yanshi_tracing::context::current_traceparent()`. The
 canonical env var on outbound spawns is
-`agentflow_tracing::context::TRACEPARENT_ENV` (`"TRACEPARENT"`).
+`yanshi_tracing::context::TRACEPARENT_ENV` (`"TRACEPARENT"`).
 
 | Hop | Carrier | Wired (✓) / planned (○) |
 | --- | --- | --- |
-| LLM HTTP call | `traceparent` HTTP header (via `agentflow_llm::trace_context::LlmTraceContext` task-local) | ✓ |
-| Plugin subprocess spawn | `TRACEPARENT` env var, injected by `agentflow-cli` plugin preparers (`OsSandboxPluginPreparer` + `NoopWithTraceparent`) | ✓ |
-| MCP transport (JSON-RPC stdio) | JSON-RPC `params._meta.traceparent` (per `agentflow_mcp::protocol::traceparent`; injected on every outbound `send_request` / `send_notification`) | ✓ |
-| Worker gRPC | gRPC `traceparent` metadata entry on the tonic `Request` (injected by `GrpcWorkerProtocol::unary` client-side; extracted + installed via `agentflow_tracing::context::scope` server-side by the four unary handler stubs in `WorkerControlServer::call`) | ✓ |
+| LLM HTTP call | `traceparent` HTTP header (via `yanshi_llm::trace_context::LlmTraceContext` task-local) | ✓ |
+| Plugin subprocess spawn | `TRACEPARENT` env var, injected by `yanshi-cli` plugin preparers (`OsSandboxPluginPreparer` + `NoopWithTraceparent`) | ✓ |
+| MCP transport (JSON-RPC stdio) | JSON-RPC `params._meta.traceparent` (per `yanshi_mcp::protocol::traceparent`; injected on every outbound `send_request` / `send_notification`) | ✓ |
+| Worker gRPC | gRPC `traceparent` metadata entry on the tonic `Request` (injected by `GrpcWorkerProtocol::unary` client-side; extracted + installed via `yanshi_tracing::context::scope` server-side by the four unary handler stubs in `WorkerControlServer::call`) | ✓ |
 
 When no context is in scope, `current_traceparent()` returns `None`
 and consumers MUST NOT emit a carrier — propagating an empty value

@@ -1,0 +1,991 @@
+//! `AgentNode` — wraps a [`ReActAgent`] as an [`AsyncNode`] so that
+//! autonomous agents can be embedded directly in a DAG workflow.
+//!
+//! # Input keys
+//! | Key       | Type                 | Required |
+//! |-----------|----------------------|----------|
+//! | `message` | `FlowValue::Json(String)` | yes  |
+//!
+//! # Output keys
+//! | Key          | Type                    |
+//! |--------------|-------------------------|
+//! | `response`   | `FlowValue::Json(String)` |
+//! | `session_id` | `FlowValue::Json(String)` |
+//! | `stop_reason` | `FlowValue::Json(Object)` |
+//! | `agent_result` | `FlowValue::Json(Object)` |
+//! | `agent_resume` | `FlowValue::Json(Object)` |
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use tokio::sync::Mutex;
+use yanshi_graph::{
+  AsyncNode,
+  async_node::{AsyncNodeInputs, AsyncNodeResult},
+  error::YanshiError,
+  value::FlowValue,
+};
+use yanshi_tool::{ToolIdempotency, ToolRegistry};
+
+use crate::react::agent::ReActAgent;
+use crate::runtime::{
+  AgentCancellationToken, AgentContext, AgentEventSink, AgentRunResult, AgentStepKind,
+  AgentStopReason, RuntimeLimits,
+};
+
+const AGENT_RESUME_CONTRACT_VERSION: u32 = 1;
+
+/// How an [`AgentNode`] output can be used during workflow resume.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentNodeResumeMode {
+  /// The run reached a successful terminal state and can be reused from
+  /// checkpointed outputs without executing the agent again.
+  CompletedRun,
+  /// The runtime emitted durable steps, but this node cannot safely continue a
+  /// partial agent loop yet.
+  PartialRunUnsupported,
+  /// The runtime emitted durable steps and can continue from recorded
+  /// observations without replaying completed tool calls.
+  PartialRunSupported,
+  /// The node must start a new agent run. Any tool calls must be safe to repeat.
+  RestartRequired,
+}
+
+/// Replay policy for a tool call recorded in an agent runtime trace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentNodeToolReplayPolicy {
+  /// A result was recorded; resume should reuse that observation instead of
+  /// calling the tool again.
+  ReuseRecordedResult,
+  /// No result was recorded, and the tool is safe to call again.
+  ReplayAllowed,
+  /// No result was recorded, and a human or explicit recovery policy must
+  /// decide whether the side effect is safe to repeat.
+  ManualRequired,
+  /// Legacy name retained for older serialized contracts.
+  #[serde(alias = "requires_idempotent_retry")]
+  RequiresIdempotentRetry,
+}
+
+/// Side-effect classification for an agent tool call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentNodeToolSideEffectClass {
+  ReadOnly,
+  Idempotent,
+  Mutating,
+  External,
+}
+
+/// Tool call information extracted from the runtime trace for resume review.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentNodeToolResumeRecord {
+  pub call_id: String,
+  pub step_index: usize,
+  pub tool: String,
+  pub params: Value,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub idempotency_key: Option<String>,
+  pub side_effect_class: AgentNodeToolSideEffectClass,
+  pub result_step_index: Option<usize>,
+  pub result_is_error: Option<bool>,
+  pub replay_policy: AgentNodeToolReplayPolicy,
+}
+
+/// Stable resume contract emitted by [`AgentNode`].
+///
+/// The contract is intentionally explicit about what is and is not resumable.
+/// Current workflow checkpointing already skips a completed `AgentNode`; this
+/// structure makes the embedded agent state inspectable and defines the future
+/// boundary for partial agent-loop resume.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentNodeResumeContract {
+  pub version: u32,
+  pub node_name: String,
+  pub runtime_name: String,
+  pub session_id: String,
+  pub resume_mode: AgentNodeResumeMode,
+  pub completed: bool,
+  pub stop_reason: AgentStopReason,
+  pub step_count: usize,
+  pub last_step_index: Option<usize>,
+  pub tool_calls: Vec<AgentNodeToolResumeRecord>,
+  pub completed_run_replay_safe: bool,
+  pub partial_run_resume_supported: bool,
+  pub restart_requires_idempotent_tools: bool,
+}
+
+impl AgentNodeResumeContract {
+  /// Build the resume contract without consulting a tool registry.
+  ///
+  /// Tools that did not embed `_yanshi.side_effect_class` in their
+  /// params will be classified using only the params hint, defaulting
+  /// to `External` (i.e. `ManualRequired` on partial-resume) when no
+  /// hint is present. Prefer [`Self::from_result_with_tools`] when the
+  /// caller has a [`ToolRegistry`] available — tools that declared
+  /// `ToolIdempotency::Idempotent` via [`yanshi_tool::Tool::idempotency`]
+  /// or [`yanshi_tool::ToolMetadata::with_idempotency`] will then be
+  /// recognized as replay-safe without requiring an inline hint.
+  pub fn from_result(
+    node_name: impl Into<String>,
+    runtime_name: impl Into<String>,
+    result: &AgentRunResult,
+  ) -> Self {
+    // The empty registry is a no-op fallback — every `tool_idempotency`
+    // lookup returns `None`, so behaviour matches the pre-bridge path.
+    Self::from_result_with_tools(node_name, runtime_name, result, &ToolRegistry::new())
+  }
+
+  /// Build the resume contract using a [`ToolRegistry`] as the
+  /// fallback source of idempotency metadata.
+  ///
+  /// The classification precedence is:
+  /// 1. `params._yanshi.side_effect_class` / `params.side_effect_class`
+  ///    when set to a recognized variant (operator/agent intent wins).
+  /// 2. `tools.tool_idempotency(tool_name, params)` when the registry
+  ///    knows this tool — `Idempotent` becomes `Idempotent`,
+  ///    `NonIdempotent` becomes `Mutating`.
+  /// 3. `External` (i.e. `ManualRequired` on partial-resume) when no
+  ///    hint and no registry record exist.
+  pub fn from_result_with_tools(
+    node_name: impl Into<String>,
+    runtime_name: impl Into<String>,
+    result: &AgentRunResult,
+    tools: &ToolRegistry,
+  ) -> Self {
+    let completed = result.stop_reason.is_success();
+    let partial_run_resume_supported =
+      !completed && !result.steps.is_empty() && !has_unresolved_tool_call(result);
+    let resume_mode = if completed {
+      AgentNodeResumeMode::CompletedRun
+    } else if partial_run_resume_supported {
+      AgentNodeResumeMode::PartialRunSupported
+    } else if result.steps.is_empty() {
+      AgentNodeResumeMode::RestartRequired
+    } else {
+      AgentNodeResumeMode::PartialRunUnsupported
+    };
+
+    Self {
+      version: AGENT_RESUME_CONTRACT_VERSION,
+      node_name: node_name.into(),
+      runtime_name: runtime_name.into(),
+      session_id: result.session_id.clone(),
+      resume_mode,
+      completed,
+      stop_reason: result.stop_reason.clone(),
+      step_count: result.steps.len(),
+      last_step_index: result.steps.last().map(|step| step.index),
+      tool_calls: extract_tool_resume_records(result, tools),
+      completed_run_replay_safe: completed,
+      partial_run_resume_supported,
+      restart_requires_idempotent_tools: !completed && has_unresolved_tool_call(result),
+    }
+  }
+}
+
+// ── Public struct ─────────────────────────────────────────────────────────────
+
+/// An [`AsyncNode`] that delegates execution to a [`ReActAgent`].
+///
+/// The inner agent is wrapped in `Arc<Mutex<…>>` so that:
+/// - `AgentNode` satisfies the `&self` signature of `AsyncNode::execute`.
+/// - The same inner agent can optionally be shared with an [`AgentTool`](crate::tools::AgentTool).
+///
+/// # Example
+/// ```rust,no_run
+/// use yanshi_agents::nodes::AgentNode;
+/// use yanshi_agents::react::{ReActAgent, ReActConfig};
+/// use yanshi_memory::SessionMemory;
+/// use yanshi_tool::ToolRegistry;
+/// use std::sync::Arc;
+///
+/// let agent = ReActAgent::new(
+///     ReActConfig::new("gpt-4o"),
+///     Box::new(SessionMemory::default_window()),
+///     Arc::new(ToolRegistry::new()),
+/// );
+/// let node = AgentNode::from_agent("my_agent", agent);
+/// ```
+pub struct AgentNode {
+  /// Logical name for this node (appears in workflow logs).
+  pub name: String,
+  agent: Arc<Mutex<ReActAgent>>,
+  /// W2.3: parent-flow governance forwarded into this embedded agent's run
+  /// context instead of the agent building an isolated, ungoverned one via
+  /// `run_with_trace`. All `None` by default — set via
+  /// [`Self::with_governance`].
+  cancellation_token: Option<AgentCancellationToken>,
+  event_sink: Option<Arc<dyn AgentEventSink>>,
+  parent_limits: Option<RuntimeLimits>,
+}
+
+impl AgentNode {
+  /// Construct from an existing [`ReActAgent`].
+  pub fn from_agent(name: impl Into<String>, agent: ReActAgent) -> Self {
+    Self {
+      name: name.into(),
+      agent: Arc::new(Mutex::new(agent)),
+      cancellation_token: None,
+      event_sink: None,
+      parent_limits: None,
+    }
+  }
+
+  /// Govern this embedded agent step with the parent flow's cancellation
+  /// token / event sink / resource limits (W2.3), so a sub-agent step is
+  /// cancellable, budget-constrained, and Harness-visible instead of
+  /// running in an isolated bubble with only its own `ReActConfig`-derived
+  /// defaults. Each parameter independently opts in — pass `None` for any
+  /// governance dimension the caller doesn't have. `parent_limits` is
+  /// merged into (not replacing) the step's own default limits by taking
+  /// the tighter bound field-by-field (a "downgraded copy"): a parent
+  /// constraint can only make the child stricter, never looser.
+  pub fn with_governance(
+    mut self,
+    cancellation_token: Option<AgentCancellationToken>,
+    event_sink: Option<Arc<dyn AgentEventSink>>,
+    parent_limits: Option<RuntimeLimits>,
+  ) -> Self {
+    self.cancellation_token = cancellation_token;
+    self.event_sink = event_sink;
+    self.parent_limits = parent_limits;
+    self
+  }
+
+  /// Return a cloned handle to the inner agent lock so it can be shared
+  /// with an [`AgentTool`](crate::tools::AgentTool).
+  pub fn agent_handle(&self) -> Arc<Mutex<ReActAgent>> {
+    self.agent.clone()
+  }
+
+  /// Whether any governance dimension is set — when none is, `execute`
+  /// keeps calling `run_with_trace` unchanged (no behavior change for
+  /// every pre-W2.3 caller that never opts in).
+  fn has_governance(&self) -> bool {
+    self.cancellation_token.is_some() || self.event_sink.is_some() || self.parent_limits.is_some()
+  }
+}
+
+/// Take the tighter of two optional bounds — `None` means "no bound from
+/// this side", so the other side's value (if any) wins; when both are
+/// set, the smaller (more restrictive) one wins. Mirrors how a child's own
+/// limit and a parent-imposed limit should combine: a parent constraint
+/// narrows, never widens.
+fn tighter_bound<T: Ord>(child: Option<T>, parent: Option<T>) -> Option<T> {
+  match (child, parent) {
+    (Some(a), Some(b)) => Some(a.min(b)),
+    (Some(a), None) => Some(a),
+    (None, Some(b)) => Some(b),
+    (None, None) => None,
+  }
+}
+
+/// Same as [`tighter_bound`] for `f64` (no `Ord` impl, due to `NaN`).
+fn tighter_bound_f64(child: Option<f64>, parent: Option<f64>) -> Option<f64> {
+  match (child, parent) {
+    (Some(a), Some(b)) => Some(a.min(b)),
+    (Some(a), None) => Some(a),
+    (None, Some(b)) => Some(b),
+    (None, None) => None,
+  }
+}
+
+/// Downgrade `child`'s limits by `parent`'s — field by field, the tighter
+/// bound wins (W2.3).
+fn downgrade_limits(child: RuntimeLimits, parent: &RuntimeLimits) -> RuntimeLimits {
+  RuntimeLimits {
+    max_steps: tighter_bound(child.max_steps, parent.max_steps),
+    max_tool_calls: tighter_bound(child.max_tool_calls, parent.max_tool_calls),
+    timeout_ms: tighter_bound(child.timeout_ms, parent.timeout_ms),
+    token_budget: tighter_bound(child.token_budget, parent.token_budget),
+    cost_limit_usd: tighter_bound_f64(child.cost_limit_usd, parent.cost_limit_usd),
+  }
+}
+
+// ── AsyncNode implementation ──────────────────────────────────────────────────
+
+#[async_trait]
+impl AsyncNode for AgentNode {
+  /// Execute the agent on the `"message"` input and return `"response"`.
+  async fn execute(&self, inputs: &AsyncNodeInputs) -> AsyncNodeResult {
+    // ── Extract "message" ─────────────────────────────────────────────
+    let message = match inputs.get("message") {
+      Some(FlowValue::Json(v)) => match v.as_str() {
+        Some(s) => s.to_string(),
+        None => {
+          return Err(YanshiError::NodeInputError {
+            message: format!("AgentNode '{}': 'message' must be a JSON string", self.name),
+          });
+        }
+      },
+      Some(other) => {
+        return Err(YanshiError::NodeInputError {
+          message: format!(
+            "AgentNode '{}': 'message' must be FlowValue::Json(string), got {:?}",
+            self.name, other
+          ),
+        });
+      }
+      None => {
+        return Err(YanshiError::NodeInputError {
+          message: format!(
+            "AgentNode '{}': required input 'message' is missing",
+            self.name
+          ),
+        });
+      }
+    };
+
+    // ── Run agent ────────────────────────────────────────────────────
+    let mut agent = self.agent.lock().await;
+    let prior_result = parse_prior_agent_result(inputs)?;
+    let result = if let Some(prior) = prior_result {
+      let context = AgentContext::new(&prior.session_id, &message, "");
+      agent
+        .resume_with_context(context, prior)
+        .await
+        .map_err(|e| YanshiError::NodeExecutionFailed {
+          message: format!("AgentNode '{}': {}", self.name, e),
+        })?
+    } else if self.has_governance() {
+      let mut context = agent.context_for_input(&message);
+      if let Some(sink) = &self.event_sink {
+        context = context.with_event_sink(Arc::clone(sink));
+      }
+      if let Some(token) = &self.cancellation_token {
+        context = context.with_cancellation_token(token.clone());
+      }
+      if let Some(parent_limits) = &self.parent_limits {
+        context.limits = downgrade_limits(context.limits, parent_limits);
+      }
+      agent
+        .run_with_context(context)
+        .await
+        .map_err(|e| YanshiError::NodeExecutionFailed {
+          message: format!("AgentNode '{}': {}", self.name, e),
+        })?
+    } else {
+      agent
+        .run_with_trace(&message)
+        .await
+        .map_err(|e| YanshiError::NodeExecutionFailed {
+          message: format!("AgentNode '{}': {}", self.name, e),
+        })?
+    };
+    let tools = agent.tools().clone();
+    if !result.stop_reason.is_success() {
+      let partial_outputs = build_outputs(&self.name, &result, &tools)?;
+      return Err(YanshiError::NodePartialExecutionFailed {
+        message: format!(
+          "AgentNode '{}': agent stopped before final answer: {:?}",
+          self.name, result.stop_reason
+        ),
+        partial_outputs,
+      });
+    }
+    build_outputs(&self.name, &result, &tools)
+  }
+}
+
+fn parse_prior_agent_result(
+  inputs: &AsyncNodeInputs,
+) -> Result<Option<AgentRunResult>, YanshiError> {
+  let Some(value) = inputs.get("agent_result") else {
+    return Ok(None);
+  };
+  let FlowValue::Json(value) = value else {
+    return Err(YanshiError::NodeInputError {
+      message: "'agent_result' must be FlowValue::Json(object)".to_string(),
+    });
+  };
+  serde_json::from_value(value.clone())
+    .map(Some)
+    .map_err(|e| YanshiError::NodeInputError {
+      message: format!("failed to deserialize 'agent_result': {}", e),
+    })
+}
+
+fn build_outputs(
+  node_name: &str,
+  result: &AgentRunResult,
+  tools: &ToolRegistry,
+) -> AsyncNodeResult {
+  let response = result.answer.clone().unwrap_or_default();
+  let stop_reason =
+    serde_json::to_value(&result.stop_reason).map_err(|e| YanshiError::NodeExecutionFailed {
+      message: format!(
+        "AgentNode '{}': failed to serialize stop reason: {}",
+        node_name, e
+      ),
+    })?;
+  let agent_result =
+    serde_json::to_value(result).map_err(|e| YanshiError::NodeExecutionFailed {
+      message: format!(
+        "AgentNode '{}': failed to serialize runtime result: {}",
+        node_name, e
+      ),
+    })?;
+  let agent_resume = serde_json::to_value(AgentNodeResumeContract::from_result_with_tools(
+    node_name, "react", result, tools,
+  ))
+  .map_err(|e| YanshiError::NodeExecutionFailed {
+    message: format!(
+      "AgentNode '{}': failed to serialize resume contract: {}",
+      node_name, e
+    ),
+  })?;
+
+  let mut outputs = HashMap::new();
+  outputs.insert("response".to_string(), FlowValue::Json(json!(response)));
+  outputs.insert(
+    "session_id".to_string(),
+    FlowValue::Json(json!(result.session_id)),
+  );
+  outputs.insert("stop_reason".to_string(), FlowValue::Json(stop_reason));
+  outputs.insert("agent_result".to_string(), FlowValue::Json(agent_result));
+  outputs.insert("agent_resume".to_string(), FlowValue::Json(agent_resume));
+  Ok(outputs)
+}
+
+fn extract_tool_resume_records(
+  result: &AgentRunResult,
+  tools: &ToolRegistry,
+) -> Vec<AgentNodeToolResumeRecord> {
+  let mut records = Vec::new();
+  for step in &result.steps {
+    let AgentStepKind::ToolCall { tool, params } = &step.kind else {
+      continue;
+    };
+    let result_step = result.steps.iter().find(|candidate| {
+      matches!(
+        &candidate.kind,
+        AgentStepKind::ToolResult {
+          tool: result_tool,
+          ..
+        } if result_tool == tool && candidate.index > step.index
+      )
+    });
+    let result_is_error = result_step.and_then(|candidate| {
+      if let AgentStepKind::ToolResult { is_error, .. } = candidate.kind {
+        Some(is_error)
+      } else {
+        None
+      }
+    });
+    let idempotency_key = tool_idempotency_key(params);
+    let side_effect_class = tool_side_effect_class(params, tool, tools);
+    let replay_policy = tool_replay_policy(result_step.is_some(), &side_effect_class);
+
+    records.push(AgentNodeToolResumeRecord {
+      call_id: tool_call_id(&result.session_id, step.index, tool),
+      step_index: step.index,
+      tool: tool.clone(),
+      params: params.clone(),
+      idempotency_key,
+      side_effect_class,
+      result_step_index: result_step.map(|step| step.index),
+      result_is_error,
+      replay_policy,
+    });
+  }
+  records
+}
+
+fn tool_replay_policy(
+  has_recorded_result: bool,
+  side_effect_class: &AgentNodeToolSideEffectClass,
+) -> AgentNodeToolReplayPolicy {
+  if has_recorded_result {
+    return AgentNodeToolReplayPolicy::ReuseRecordedResult;
+  }
+
+  match side_effect_class {
+    AgentNodeToolSideEffectClass::ReadOnly => AgentNodeToolReplayPolicy::ReplayAllowed,
+    AgentNodeToolSideEffectClass::Idempotent => AgentNodeToolReplayPolicy::ReplayAllowed,
+    AgentNodeToolSideEffectClass::Mutating | AgentNodeToolSideEffectClass::External => {
+      AgentNodeToolReplayPolicy::ManualRequired
+    }
+  }
+}
+
+fn tool_call_id(session_id: &str, step_index: usize, tool: &str) -> String {
+  format!("{}:{}:{}", session_id, step_index, tool)
+}
+
+fn tool_idempotency_key(params: &Value) -> Option<String> {
+  params
+    .get("_yanshi")
+    .and_then(|value| value.get("idempotency_key"))
+    .or_else(|| params.get("idempotency_key"))
+    .and_then(Value::as_str)
+    .filter(|value| !value.is_empty())
+    .map(ToString::to_string)
+}
+
+fn tool_side_effect_class(
+  params: &Value,
+  tool_name: &str,
+  tools: &ToolRegistry,
+) -> AgentNodeToolSideEffectClass {
+  let raw = params
+    .get("_yanshi")
+    .and_then(|value| value.get("side_effect_class"))
+    .or_else(|| params.get("side_effect_class"))
+    .and_then(Value::as_str);
+
+  // 1) An explicit, recognized params hint always wins — operator /
+  //    agent intent shouldn't be silently overridden by registry
+  //    defaults.
+  match raw {
+    Some("read_only") => return AgentNodeToolSideEffectClass::ReadOnly,
+    Some("idempotent") => return AgentNodeToolSideEffectClass::Idempotent,
+    Some("mutating") => return AgentNodeToolSideEffectClass::Mutating,
+    Some("external") => return AgentNodeToolSideEffectClass::External,
+    Some(_) | None => {}
+  }
+
+  // 2) Fall back to the tool's own idempotency declaration. This is
+  //    the bridge that lets `Tool::idempotency()` /
+  //    `ToolMetadata::with_idempotency` from `yanshi-tools` reach
+  //    the resume planner without requiring callers to embed
+  //    `_yanshi.side_effect_class` in every params payload.
+  match tools.tool_idempotency(tool_name, params) {
+    Some(ToolIdempotency::Idempotent) => AgentNodeToolSideEffectClass::Idempotent,
+    Some(ToolIdempotency::NonIdempotent) => AgentNodeToolSideEffectClass::Mutating,
+    // 3) Unknown / unregistered ⇒ default to `External` so partial-
+    //    resume gates the call as `ManualRequired`. Operators can
+    //    upgrade with `--force-replay` once they've vetted the tool.
+    Some(ToolIdempotency::Unknown) | None => AgentNodeToolSideEffectClass::External,
+  }
+}
+
+fn has_unresolved_tool_call(result: &AgentRunResult) -> bool {
+  result.steps.iter().any(|step| {
+    let AgentStepKind::ToolCall { tool, .. } = &step.kind else {
+      return false;
+    };
+    !result.steps.iter().any(|candidate| {
+      matches!(
+        &candidate.kind,
+        AgentStepKind::ToolResult {
+          tool: result_tool,
+          ..
+        } if result_tool == tool && candidate.index > step.index
+      )
+    })
+  })
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use serde_json::json;
+  use yanshi_core::value::FlowValue;
+  use yanshi_memory::SessionMemory;
+  use yanshi_tool::ToolRegistry;
+
+  use crate::react::{ReActAgent, ReActConfig};
+  use crate::runtime::{AgentRunResult, AgentStep, AgentStepKind, AgentStopReason};
+
+  fn make_agent() -> ReActAgent {
+    ReActAgent::new(
+      ReActConfig::new("gpt-4o"),
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    )
+  }
+
+  // ── Construction ──────────────────────────────────────────────────────────
+
+  #[test]
+  fn from_agent_sets_name() {
+    let node = AgentNode::from_agent("my-node", make_agent());
+    assert_eq!(node.name, "my-node");
+  }
+
+  #[test]
+  fn agent_handle_returns_same_arc() {
+    let node = AgentNode::from_agent("shared", make_agent());
+    let h1 = node.agent_handle();
+    let h2 = node.agent_handle();
+    // Both Arc pointers point to the same allocation
+    assert!(Arc::ptr_eq(&h1, &h2));
+  }
+
+  // ── Governance (W2.3) ────────────────────────────────────────────────────
+
+  #[test]
+  fn downgrade_limits_takes_the_tighter_bound_per_field() {
+    let child = RuntimeLimits {
+      max_steps: Some(20),
+      max_tool_calls: None,
+      timeout_ms: Some(10_000),
+      token_budget: Some(50_000),
+      cost_limit_usd: None,
+    };
+    let parent = RuntimeLimits {
+      max_steps: Some(5),        // tighter than child's 20 -> wins
+      max_tool_calls: Some(3),   // child has none -> parent's wins
+      timeout_ms: Some(60_000),  // looser than child's 10_000 -> child's wins
+      token_budget: None,        // parent has none -> child's wins
+      cost_limit_usd: Some(1.5), // child has none -> parent's wins
+    };
+    let downgraded = downgrade_limits(child, &parent);
+    assert_eq!(
+      downgraded,
+      RuntimeLimits {
+        max_steps: Some(5),
+        max_tool_calls: Some(3),
+        timeout_ms: Some(10_000),
+        token_budget: Some(50_000),
+        cost_limit_usd: Some(1.5),
+      }
+    );
+  }
+
+  #[test]
+  fn downgrade_limits_is_a_no_op_against_an_all_none_parent() {
+    let child = RuntimeLimits {
+      max_steps: Some(20),
+      max_tool_calls: Some(4),
+      timeout_ms: Some(10_000),
+      token_budget: Some(50_000),
+      cost_limit_usd: Some(2.0),
+    };
+    let downgraded = downgrade_limits(child.clone(), &RuntimeLimits::default());
+    assert_eq!(
+      downgraded, child,
+      "no parent constraint must leave the child's own limits untouched"
+    );
+  }
+
+  #[test]
+  fn with_governance_sets_has_governance() {
+    let ungoverned = AgentNode::from_agent("test", make_agent());
+    assert!(!ungoverned.has_governance());
+
+    let governed = AgentNode::from_agent("test", make_agent()).with_governance(
+      Some(AgentCancellationToken::new()),
+      None,
+      None,
+    );
+    assert!(governed.has_governance());
+  }
+
+  // ── execute() input validation ────────────────────────────────────────────
+
+  #[tokio::test]
+  async fn execute_missing_message_returns_error() {
+    let node = AgentNode::from_agent("test", make_agent());
+    let inputs = HashMap::new(); // empty
+    let err = node.execute(&inputs).await.unwrap_err();
+    match err {
+      YanshiError::NodeInputError { message } => {
+        assert!(
+          message.contains("'message'"),
+          "error should mention 'message', got: {message}"
+        );
+      }
+      other => panic!("expected NodeInputError, got {:?}", other),
+    }
+  }
+
+  #[tokio::test]
+  async fn execute_non_string_message_returns_error() {
+    let node = AgentNode::from_agent("test", make_agent());
+    let mut inputs = HashMap::new();
+    inputs.insert("message".to_string(), FlowValue::Json(json!(42)));
+    let err = node.execute(&inputs).await.unwrap_err();
+    assert!(
+      matches!(err, YanshiError::NodeInputError { .. }),
+      "expected NodeInputError"
+    );
+  }
+
+  #[tokio::test]
+  async fn execute_file_value_returns_error() {
+    let node = AgentNode::from_agent("test", make_agent());
+    let mut inputs = HashMap::new();
+    inputs.insert(
+      "message".to_string(),
+      FlowValue::File {
+        path: std::path::PathBuf::from("/tmp/x"),
+        mime_type: None,
+      },
+    );
+    let err = node.execute(&inputs).await.unwrap_err();
+    assert!(
+      matches!(err, YanshiError::NodeInputError { .. }),
+      "expected NodeInputError for File value"
+    );
+  }
+
+  // ── execute() output shape (no LLM — we can only test the error path) ─────
+  //
+  // Real LLM calls are not made in unit tests.  The integration path is
+  // exercised by the workflow integration tests in yanshi-cli.
+
+  #[tokio::test]
+  async fn execute_propagates_agent_error_as_execution_error() {
+    // An agent with an empty model name will fail when it tries to call the
+    // LLM.  We just verify the error variant is correct.
+    let agent = ReActAgent::new(
+      ReActConfig::new(""), // empty model → LLM call will fail
+      Box::new(SessionMemory::default_window()),
+      Arc::new(ToolRegistry::new()),
+    );
+    let node = AgentNode::from_agent("failing", agent);
+    let mut inputs = HashMap::new();
+    inputs.insert("message".to_string(), FlowValue::Json(json!("hello")));
+    let result = node.execute(&inputs).await;
+    // We expect either NodeExecutionFailed (LLM failure) or some other error
+    // from the LLM stack — either way it must be Err.
+    assert!(result.is_err(), "expected error when model name is empty");
+  }
+
+  #[test]
+  fn resume_contract_marks_completed_run_as_checkpoint_reusable() {
+    let result = AgentRunResult {
+      session_id: "session-1".to_string(),
+      answer: Some("done".to_string()),
+      stop_reason: AgentStopReason::FinalAnswer,
+      steps: vec![
+        AgentStep::new(
+          0,
+          AgentStepKind::Observe {
+            input: "hello".to_string(),
+          },
+        ),
+        AgentStep::new(
+          1,
+          AgentStepKind::ToolCall {
+            tool: "echo".to_string(),
+            params: json!({"text": "hi"}),
+          },
+        ),
+        AgentStep::new(
+          2,
+          AgentStepKind::ToolResult {
+            tool: "echo".to_string(),
+            content: "echo: hi".to_string(),
+            is_error: false,
+            parts: vec![],
+          },
+        ),
+        AgentStep::new(
+          3,
+          AgentStepKind::FinalAnswer {
+            answer: "done".to_string(),
+          },
+        ),
+      ],
+      events: vec![],
+    };
+
+    let contract = AgentNodeResumeContract::from_result("agent", "react", &result);
+
+    assert_eq!(contract.version, 1);
+    assert_eq!(contract.resume_mode, AgentNodeResumeMode::CompletedRun);
+    assert!(contract.completed_run_replay_safe);
+    assert!(!contract.partial_run_resume_supported);
+    assert_eq!(contract.tool_calls.len(), 1);
+    assert_eq!(contract.tool_calls[0].call_id, "session-1:1:echo");
+    assert_eq!(
+      contract.tool_calls[0].side_effect_class,
+      AgentNodeToolSideEffectClass::External
+    );
+    assert_eq!(
+      contract.tool_calls[0].replay_policy,
+      AgentNodeToolReplayPolicy::ReuseRecordedResult
+    );
+  }
+
+  #[test]
+  fn resume_contract_requires_manual_recovery_for_unknown_partial_restart() {
+    let result = AgentRunResult {
+      session_id: "session-1".to_string(),
+      answer: None,
+      stop_reason: AgentStopReason::Cancelled {
+        message: "shutdown".to_string(),
+      },
+      steps: vec![AgentStep::new(
+        1,
+        AgentStepKind::ToolCall {
+          tool: "write_file".to_string(),
+          params: json!({"path": "/tmp/out"}),
+        },
+      )],
+      events: vec![],
+    };
+
+    let contract = AgentNodeResumeContract::from_result("agent", "react", &result);
+
+    assert_eq!(
+      contract.resume_mode,
+      AgentNodeResumeMode::PartialRunUnsupported
+    );
+    assert!(contract.restart_requires_idempotent_tools);
+    assert_eq!(
+      contract.tool_calls[0].side_effect_class,
+      AgentNodeToolSideEffectClass::External
+    );
+    assert_eq!(
+      contract.tool_calls[0].replay_policy,
+      AgentNodeToolReplayPolicy::ManualRequired
+    );
+  }
+
+  #[test]
+  fn resume_contract_allows_unresolved_read_only_tool_replay() {
+    let result = AgentRunResult {
+      session_id: "session-1".to_string(),
+      answer: None,
+      stop_reason: AgentStopReason::Cancelled {
+        message: "shutdown".to_string(),
+      },
+      steps: vec![AgentStep::new(
+        1,
+        AgentStepKind::ToolCall {
+          tool: "search".to_string(),
+          params: json!({
+            "query": "yanshi",
+            "_yanshi": {
+              "side_effect_class": "read_only"
+            }
+          }),
+        },
+      )],
+      events: vec![],
+    };
+
+    let contract = AgentNodeResumeContract::from_result("agent", "react", &result);
+
+    assert_eq!(
+      contract.tool_calls[0].side_effect_class,
+      AgentNodeToolSideEffectClass::ReadOnly
+    );
+    assert_eq!(
+      contract.tool_calls[0].replay_policy,
+      AgentNodeToolReplayPolicy::ReplayAllowed
+    );
+  }
+
+  #[test]
+  fn resume_contract_allows_unresolved_idempotent_tool_replay() {
+    let result = AgentRunResult {
+      session_id: "session-1".to_string(),
+      answer: None,
+      stop_reason: AgentStopReason::Cancelled {
+        message: "shutdown".to_string(),
+      },
+      steps: vec![AgentStep::new(
+        1,
+        AgentStepKind::ToolCall {
+          tool: "http".to_string(),
+          params: json!({
+            "url": "https://example.test",
+            "_yanshi": {
+              "side_effect_class": "idempotent"
+            }
+          }),
+        },
+      )],
+      events: vec![],
+    };
+
+    let contract = AgentNodeResumeContract::from_result("agent", "react", &result);
+
+    assert_eq!(
+      contract.tool_calls[0].side_effect_class,
+      AgentNodeToolSideEffectClass::Idempotent
+    );
+    assert_eq!(
+      contract.tool_calls[0].replay_policy,
+      AgentNodeToolReplayPolicy::ReplayAllowed
+    );
+  }
+
+  #[test]
+  fn resume_contract_requires_manual_recovery_for_mutating_tool_without_result() {
+    let result = AgentRunResult {
+      session_id: "session-1".to_string(),
+      answer: None,
+      stop_reason: AgentStopReason::Cancelled {
+        message: "shutdown".to_string(),
+      },
+      steps: vec![AgentStep::new(
+        1,
+        AgentStepKind::ToolCall {
+          tool: "write_file".to_string(),
+          params: json!({
+            "path": "/tmp/out",
+            "side_effect_class": "mutating"
+          }),
+        },
+      )],
+      events: vec![],
+    };
+
+    let contract = AgentNodeResumeContract::from_result("agent", "react", &result);
+
+    assert_eq!(
+      contract.tool_calls[0].side_effect_class,
+      AgentNodeToolSideEffectClass::Mutating
+    );
+    assert_eq!(
+      contract.tool_calls[0].replay_policy,
+      AgentNodeToolReplayPolicy::ManualRequired
+    );
+  }
+
+  #[test]
+  fn resume_contract_supports_partial_resume_after_recorded_tool_result() {
+    let result = AgentRunResult {
+      session_id: "session-1".to_string(),
+      answer: None,
+      stop_reason: AgentStopReason::Cancelled {
+        message: "shutdown".to_string(),
+      },
+      steps: vec![
+        AgentStep::new(
+          1,
+          AgentStepKind::ToolCall {
+            tool: "echo".to_string(),
+            params: json!({"text": "hi"}),
+          },
+        ),
+        AgentStep::new(
+          2,
+          AgentStepKind::ToolResult {
+            tool: "echo".to_string(),
+            content: "echo: hi".to_string(),
+            is_error: false,
+            parts: vec![],
+          },
+        ),
+      ],
+      events: vec![],
+    };
+
+    let contract = AgentNodeResumeContract::from_result("agent", "react", &result);
+
+    assert_eq!(
+      contract.resume_mode,
+      AgentNodeResumeMode::PartialRunSupported
+    );
+    assert!(contract.partial_run_resume_supported);
+    assert!(!contract.restart_requires_idempotent_tools);
+    assert_eq!(
+      contract.tool_calls[0].replay_policy,
+      AgentNodeToolReplayPolicy::ReuseRecordedResult
+    );
+  }
+}

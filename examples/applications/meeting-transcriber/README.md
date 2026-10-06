@@ -36,7 +36,7 @@ supports it) before summary.
 Provider choice is a cost / quality / privacy tradeoff documented in
 this README at implementation time.
 
-## What this validates in AgentFlow
+## What this validates in Yanshi
 
 - `asr` node (existing)
 - LLM multi-call pipeline with structured output (action items JSON)

@@ -1,7 +1,7 @@
-# AgentFlow Application Examples
+# Yanshi Application Examples
 
 This directory holds **dogfooding-driven, real-business application
-examples** built on top of AgentFlow. Each subdirectory is a complete,
+examples** built on top of Yanshi. Each subdirectory is a complete,
 runnable application — not a feature demo. The tracking + status
 overview lives at the repo root in [`EXAMPLES_TODOs.md`](../../EXAMPLES_TODOs.md).
 
@@ -11,7 +11,7 @@ overview lives at the repo root in [`EXAMPLES_TODOs.md`](../../EXAMPLES_TODOs.md
 | --- | --- | --- |
 | [`examples/README.md`](../README.md) | SDK feature matrix — every public capability has a minimal demo | SDK learners, maintainers |
 | [`examples/ecosystem/`](../ecosystem/) | Generic `SKILL.md` / `plugin.toml` / marketplace shape samples | Skill / plugin authors |
-| **`examples/applications/`** *(this dir)* | **End-to-end product-shaped applications** | Dogfooding, prospective users evaluating "can AgentFlow build my thing?" |
+| **`examples/applications/`** *(this dir)* | **End-to-end product-shaped applications** | Dogfooding, prospective users evaluating "can Yanshi build my thing?" |
 
 The three trees do not overlap. An application here exercises multiple
 SDK capabilities through a real business workflow; an SDK demo proves
@@ -30,7 +30,7 @@ status table.
 | A4 | Meeting recording → transcript + action items | TODO | [`meeting-transcriber/`](meeting-transcriber/) |
 | A5 | Scheduled weekly digest email | TODO | [`weekly-digest/`](weekly-digest/) |
 | A6 | Markdown folder multi-language translator | TODO | [`doc-translator/`](doc-translator/) |
-| A7 | Git log → conventional CHANGELOG (agentflow eats its own dogfood) | TODO | [`changelog-writer/`](changelog-writer/) |
+| A7 | Git log → conventional CHANGELOG (yanshi eats its own dogfood) | TODO | [`changelog-writer/`](changelog-writer/) |
 
 ## Conventions for new applications
 

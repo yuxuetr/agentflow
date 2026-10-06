@@ -62,13 +62,13 @@ hardening + finer-grained vendor compatibility.
   `docs/LLM_PROVIDER_MODULE_PROMOTION.md`. None has fired as of
   2026-05-20. Estimate when needed: ~300-500 LoC per vendor.
 - **Provider-specific tokenizers** (`P10.3.3` + `P10.3.3-FU1`,
-  both closed). `agentflow_llm::tokenizer` ships `TokenCounter`
+  both closed). `yanshi_llm::tokenizer` ships `TokenCounter`
   trait + `TiktokenCounter` (cl100k_base, o200k_base,
   p50k_base, r50k_base via `tiktoken-rs`) + `HeuristicCounter`
   fallback + `counter_for_model(model_id)` factory. FU1 added
-  the bridge from agentflow-llm to agentflow-memory:
+  the bridge from yanshi-llm to yanshi-memory:
   `Message::*_with_counter` constructors + a
-  `token_counter_adapter` in agentflow-agents that routes
+  `token_counter_adapter` in yanshi-agents that routes
   `ReActAgent` / `PlanExecuteAgent` message construction
   through the BPE counter. `apply_memory_prompt_budget`
   compacts against precise counts for the OpenAI family +
@@ -136,17 +136,17 @@ plane. v1.x hardening focuses on per-tenant operations.
 - **Grafana dashboard templates** (`P10.14.2`). Server emits
   Prometheus metrics; checked-in Grafana JSON would let
   operators import in 1 click. (NB: this is operator-dashboard
-  territory but lives in `agentflow-server` deliverables, not
+  territory but lives in `yanshi-server` deliverables, not
   the UI — consistent with the P10.17.1 positioning.)
 - **Real backup/restore implementation** (`P10.15.1`). Today:
-  docs + `agentflow doctor --backup-check` probes; production
-  uses `pg_dump` + filesystem snapshot. An `agentflow backup
+  docs + `yanshi doctor --backup-check` probes; production
+  uses `pg_dump` + filesystem snapshot. An `yanshi backup
   --output <path>` orchestrator would close the loop.
 - **Read-replica support** (`P10.15.2`, closed). `Database`
   carries an optional `read_pool`; every `get_*` / `list_*`
   repo method routes to it when configured, writes always hit
-  the primary. `agentflow serve --database-read-url <URL>`
-  (env `AGENTFLOW_DATABASE_READ_URL`) opts in. See
+  the primary. `yanshi serve --database-read-url <URL>`
+  (env `YANSHI_DATABASE_READ_URL`) opts in. See
   `docs/DEPLOYMENT.md` "Read-replica routing (P10.15.2)" for
   the operator playbook and the documented replication-lag
   caveat.
@@ -161,18 +161,18 @@ In scope (each is a small additive feature inside the
 debugger boundary):
 
 - **Harness session replay UI** — visual analogue of
-  `agentflow harness replay --speed 2x` (P10.10.2 landed the
+  `yanshi harness replay --speed 2x` (P10.10.2 landed the
   CLI). Stretch.
 - **Trace compare polish** — better diffs, more event-type
   coverage.
 - **Preference UI wiring follow-through** — extend P10.17.2's
   proof-of-pattern (run-console tenant) to the other 6
   syncable keys; the 3-line replication pattern lives in
-  `agentflow-ui/src/main.tsx::RunConsole`.
+  `yanshi-ui/src/main.tsx::RunConsole`.
 
 Architectural decisions already landed:
 
-- **`agentflow-viz` deleted** (`P10.13.1`, closed). Honest
+- **`yanshi-viz` deleted** (`P10.13.1`, closed). Honest
   audit revealed the "DAG visualisation" was a button grid of
   node status badges + the raw Mermaid markdown text in a
   `<pre>` block — no SVG, no spatial layout, no edges. The
@@ -183,7 +183,7 @@ Architectural decisions already landed:
   but is deferred to a future RFC. Agent-native execution
   visualisation (ReAct loop / multi-agent topology / Harness
   session tree) is its own design problem — today's surface is
-  `agentflow harness replay --speed 2x` per-event text timeline.
+  `yanshi harness replay --speed 2x` per-event text timeline.
 
 Explicitly NOT v2:
 
@@ -194,7 +194,7 @@ Explicitly NOT v2:
 
 ### E. Distributed execution & worker hardening
 
-Motivation: `agentflow-worker` exists with gRPC `WorkerProtocol`
+Motivation: `yanshi-worker` exists with gRPC `WorkerProtocol`
 + admission policy + PSK auth. v1.x adds identity + scheduling
 intelligence.
 
@@ -335,7 +335,7 @@ Still staging here (promote when demand sharpens):
   `waiting_approval` / `tool_failed` as first-class queryable
   run states on the server API (today they're derivable from
   the event stream but not materialized).
-- **Model routing / fallback chains** in `agentflow-llm` —
+- **Model routing / fallback chains** in `yanshi-llm` —
   automatic fallback across providers, strong/weak model
   tiering, token-budget-aware routing. Today provider choice is
   static per model id.

@@ -9,7 +9,7 @@
 #     editing 8 input_list entries.
 #
 # What's STILL hardcoded (would be iter 4 — needs platform work):
-#   - File discovery via shell. `agentflow-cli` doesn't expose a
+#   - File discovery via shell. `yanshi-cli` doesn't expose a
 #     `type: shell` YAML node (deliberate gap per F-A7-2); for real
 #     directory walking iter 4 needs either a wired shell node or a
 #     `file` node `list_dir` operation. For iter 3 the file list is
@@ -18,7 +18,7 @@
 #     workflow-level input in iter 4).
 #
 # Run:
-#   agentflow workflow run examples/applications/doc-translator/workflow-iter3.yml
+#   yanshi workflow run examples/applications/doc-translator/workflow-iter3.yml
 
 name: "doc-translator iteration 3"
 description: "Compute work list as file × lang cross product, then translate in parallel."

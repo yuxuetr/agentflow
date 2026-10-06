@@ -1,11 +1,11 @@
 # Official ecosystem hybrid demo.
 #
 # Offline validation:
-#   cargo run -p agentflow-cli --features "mcp rag plugin" -- \
+#   cargo run -p yanshi-cli --features "mcp rag plugin" -- \
 #     workflow validate examples/ecosystem/workflows/hybrid_offline_demo.yml --strict
 #
 # Dry run:
-#   cargo run -p agentflow-cli --features "mcp rag plugin" -- \
+#   cargo run -p yanshi-cli --features "mcp rag plugin" -- \
 #     workflow run examples/ecosystem/workflows/hybrid_offline_demo.yml --dry-run
 #
 # Full execution is intentionally opt-in because MCP, RAG, and model providers
@@ -19,7 +19,7 @@ nodes:
     type: template
     parameters:
       template: |
-        Review AgentFlow's v1 extension story:
+        Review Yanshi's v1 extension story:
         - stable Rust APIs
         - Skills and Plugins
         - Marketplace distribution
@@ -30,10 +30,10 @@ nodes:
     dependencies: ["intake"]
     parameters:
       operation: search
-      collection: "agentflow_docs"
+      collection: "yanshi_docs"
       qdrant_url: "http://localhost:6334"
       embedding_model: "mock-embedding"
-      query: "AgentFlow DAG Agent MCP RAG Trace Web UI"
+      query: "Yanshi DAG Agent MCP RAG Trace Web UI"
       top_k: 3
 
   - id: inspect_mcp_tools

@@ -1,0 +1,9 @@
+Yanshi has been installed.
+
+Health endpoints:
+  /health
+  /health/live
+  /health/ready
+
+Port-forward locally:
+  kubectl port-forward svc/{{ include "yanshi.fullname" . }} 3000:{{ .Values.service.port }}

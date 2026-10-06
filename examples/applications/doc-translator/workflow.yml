@@ -11,9 +11,9 @@
 #   - Downstream `report` node fans in the 4 results into a summary.
 #
 # Run:
-#   agentflow workflow run examples/applications/doc-translator/workflow.yml
+#   yanshi workflow run examples/applications/doc-translator/workflow.yml
 #
-# Requires MOONSHOT_API_KEY (auto-loaded from ~/.agentflow/.env via P9.3).
+# Requires MOONSHOT_API_KEY (auto-loaded from ~/.yanshi/.env via P9.3).
 
 name: "doc-translator iteration 1"
 description: "Translate a fixed markdown blurb to 4 languages in parallel via `map parallel`."
@@ -59,9 +59,9 @@ nodes:
                 - output ONLY the translation, no preamble or postamble
 
               ----- SOURCE -----
-              # AgentFlow
+              # Yanshi
 
-              AgentFlow is a Rust workspace for building agent-native
+              Yanshi is a Rust workspace for building agent-native
               workflows. It supports both deterministic DAGs and
               autonomous loops, with first-class LLM, tool, MCP, RAG,
               and tracing integration.
@@ -69,7 +69,7 @@ nodes:
               Quick start:
 
               ```rust
-              use agentflow_core::Flow;
+              use yanshi_core::Flow;
               let flow = Flow::new(nodes);
               let result = flow.execute().await?;
               ```
@@ -103,7 +103,7 @@ nodes:
       results: "{{ nodes.translate.outputs.results }}"
     parameters:
       template: |
-        Translated AgentFlow blurb into {{ results | length }} languages
+        Translated Yanshi blurb into {{ results | length }} languages
         in parallel via `map`. First-language preview (first 120 chars):
 
         {{ results[0].translate_one.output | truncate(length=120) }}

@@ -1,9 +1,9 @@
 [plugin]
-name = "agentflow-echo-plugin"
+name = "yanshi-echo-plugin"
 version = "1.0.0"
 runtime = "subprocess"
 entrypoint = "bin/echo_plugin.py"
-protocol = "agentflow.plugin/1"
+protocol = "yanshi.plugin/1"
 
 [[plugin.nodes]]
 type = "echo"

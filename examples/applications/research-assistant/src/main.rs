@@ -29,7 +29,7 @@
 //!   --output /tmp/arxiv-cs-AI.md
 //!
 //! # Subsequent runs only summarize NEW papers (dedup state at
-//! # ~/.agentflow/state/research-assistant.db by default).
+//! # ~/.yanshi/state/research-assistant.db by default).
 //! ```
 
 mod arxiv_fetch;
@@ -40,12 +40,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use agentflow_core::async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult};
-use agentflow_core::error::AgentFlowError;
-use agentflow_core::events::ConsoleListener;
-use agentflow_core::flow::{Flow, GraphNode, NodeType};
-use agentflow_core::value::FlowValue;
-use agentflow_llm::AgentFlow as LlmInit;
+use yanshi_core::async_node::{AsyncNode, AsyncNodeInputs, AsyncNodeResult};
+use yanshi_core::error::YanshiError;
+use yanshi_core::events::ConsoleListener;
+use yanshi_core::flow::{Flow, GraphNode, NodeType};
+use yanshi_core::value::FlowValue;
+use yanshi_llm::Yanshi as LlmInit;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -56,15 +56,15 @@ use tracing_subscriber::EnvFilter;
 use arxiv_fetch::Paper;
 use seen_store::SeenStore;
 
-fn load_agentflow_dotenv() {
+fn load_yanshi_dotenv() {
   if let Some(home) = std::env::home_dir() {
-    let _ = dotenvy::from_path(home.join(".agentflow").join(".env"));
+    let _ = dotenvy::from_path(home.join(".yanshi").join(".env"));
   }
 }
 
 fn default_state_path() -> PathBuf {
   std::env::home_dir()
-    .map(|h| h.join(".agentflow/state/research-assistant.db"))
+    .map(|h| h.join(".yanshi/state/research-assistant.db"))
     .unwrap_or_else(|| PathBuf::from("research-assistant.db"))
 }
 
@@ -87,7 +87,7 @@ impl AsyncNode for FetchArxivNode {
   async fn execute(&self, _inputs: &AsyncNodeInputs) -> AsyncNodeResult {
     let papers = arxiv_fetch::fetch_recent(&self.category, self.max_results)
       .await
-      .map_err(|err| AgentFlowError::AsyncExecutionError {
+      .map_err(|err| YanshiError::AsyncExecutionError {
         message: format!(
           "fetch_recent({}, {}): {err:#}",
           self.category, self.max_results
@@ -122,26 +122,26 @@ impl AsyncNode for DiffSeenNode {
       let mut bus = self.bus.lock().await;
       bus
         .take()
-        .ok_or_else(|| AgentFlowError::AsyncExecutionError {
+        .ok_or_else(|| YanshiError::AsyncExecutionError {
           message: "FetchArxivNode produced no paper list on the bus".to_string(),
         })?
     };
 
     let mut seen = SeenStore::open(self.state_path.clone())
       .await
-      .map_err(|err| AgentFlowError::ConfigurationError {
+      .map_err(|err| YanshiError::ConfigurationError {
         message: format!("open SeenStore({}): {err:#}", self.state_path.display()),
       })?;
     let unseen = seen
       .filter_unseen(&self.category, &all_papers)
       .await
-      .map_err(|err| AgentFlowError::AsyncExecutionError {
+      .map_err(|err| YanshiError::AsyncExecutionError {
         message: format!("filter_unseen: {err:#}"),
       })?;
     seen
       .mark_seen_batch(&self.category, &unseen)
       .await
-      .map_err(|err| AgentFlowError::AsyncExecutionError {
+      .map_err(|err| YanshiError::AsyncExecutionError {
         message: format!("mark_seen_batch: {err:#}"),
       })?;
 
@@ -182,7 +182,7 @@ impl AsyncNode for BriefingNode {
       let mut bus = self.bus.lock().await;
       bus
         .take()
-        .ok_or_else(|| AgentFlowError::AsyncExecutionError {
+        .ok_or_else(|| YanshiError::AsyncExecutionError {
           message: "DiffSeenNode produced no unseen-paper list on the bus".to_string(),
         })?
     };
@@ -193,7 +193,7 @@ impl AsyncNode for BriefingNode {
         self.category
       );
       tokio::fs::write(&self.output, &msg).await.map_err(|e| {
-        AgentFlowError::AsyncExecutionError {
+        YanshiError::AsyncExecutionError {
           message: format!("write {}: {e}", self.output.display()),
         }
       })?;
@@ -211,13 +211,13 @@ impl AsyncNode for BriefingNode {
 
     let markdown = briefing::render_briefing(&self.category, &papers, &self.model, None)
       .await
-      .map_err(|err| AgentFlowError::AsyncExecutionError {
+      .map_err(|err| YanshiError::AsyncExecutionError {
         message: format!("render_briefing: {err:#}"),
       })?;
 
     tokio::fs::write(&self.output, &markdown)
       .await
-      .map_err(|e| AgentFlowError::AsyncExecutionError {
+      .map_err(|e| YanshiError::AsyncExecutionError {
         message: format!("write {}: {e}", self.output.display()),
       })?;
 
@@ -285,7 +285,7 @@ fn parse_args() -> Result<Args> {
 
 fn print_help() {
   println!(
-    "research-assistant — A3 AgentFlow app (arxiv briefing via dedup + LLM summary)\n\
+    "research-assistant — A3 Yanshi app (arxiv briefing via dedup + LLM summary)\n\
      \n\
      USAGE:\n  \
        research-assistant --category <cat> [--max-results N] [--output <path>]\n  \
@@ -295,19 +295,19 @@ fn print_help() {
        --category <cat>     Arxiv category (cs.AI / cs.CL / math.ST / …) [required]\n  \
        --max-results <N>    How many recent papers to fetch (default: 30; arxiv max: 2000)\n  \
        --output <path>      Where to write the markdown briefing (default: /tmp/arxiv-briefing.md)\n  \
-       --state <path>       SQLite file for seen-papers dedup (default: ~/.agentflow/state/research-assistant.db)\n  \
+       --state <path>       SQLite file for seen-papers dedup (default: ~/.yanshi/state/research-assistant.db)\n  \
        --model <name>       LLM model for the briefing call (default: kimi-k2.6)\n  \
        -h, --help           Show this help\n\
      \n\
      ENV:\n  \
        MOONSHOT_API_KEY     Required by the default model. Auto-loaded from\n  \
-                            ~/.agentflow/.env if present.\n"
+                            ~/.yanshi/.env if present.\n"
   );
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-  load_agentflow_dotenv();
+  load_yanshi_dotenv();
   tracing_subscriber::fmt()
     .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
     .init();
@@ -317,7 +317,7 @@ async fn main() -> Result<()> {
 
   LlmInit::init()
     .await
-    .context("failed to initialise agentflow-llm (model registry / provider config)")?;
+    .context("failed to initialise yanshi-llm (model registry / provider config)")?;
 
   let bus: Arc<Mutex<Option<Vec<Paper>>>> = Arc::new(Mutex::new(None));
 

@@ -1,6 +1,6 @@
 # Release Checklist
 
-Use this checklist before tagging or publishing an AgentFlow release. The
+Use this checklist before tagging or publishing an Yanshi release. The
 automated checks are enforced by the `release gate` job in
 `.github/workflows/quality.yml`; the remaining items require human judgement.
 
@@ -13,9 +13,9 @@ The `release gate` job requires these automated jobs to pass:
 
 - `cargo fmt`
 - `cargo clippy`
-- package test matrix for `agentflow-core`, `agentflow-tools`,
-  `agentflow-memory`, `agentflow-mcp`, `agentflow-skills`,
-  `agentflow-agents`, and `agentflow-cli`
+- package test matrix for `yanshi-core`, `yanshi-tools`,
+  `yanshi-memory`, `yanshi-mcp`, `yanshi-skills`,
+  `yanshi-agents`, and `yanshi-cli`
 - workspace doc tests
 - selected feature combinations
 - workspace examples compile and no-API smoke tests
@@ -37,8 +37,8 @@ then lists the manual release review items.
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo check --workspace --target-dir /tmp/agentflow-target
-cargo test --workspace --doc --target-dir /tmp/agentflow-target
+cargo check --workspace --target-dir /tmp/yanshi-target
+cargo test --workspace --doc --target-dir /tmp/yanshi-target
 ```
 
 - [ ] Formatting passes.
@@ -52,19 +52,19 @@ cargo test --workspace --doc --target-dir /tmp/agentflow-target
 Run the focused crate matrix first so failures are easy to localize:
 
 ```bash
-cargo test -p agentflow-core --target-dir /tmp/agentflow-target
-cargo test -p agentflow-tools --target-dir /tmp/agentflow-target
-cargo test -p agentflow-memory --target-dir /tmp/agentflow-target
-cargo test -p agentflow-mcp --target-dir /tmp/agentflow-target
-cargo test -p agentflow-skills --target-dir /tmp/agentflow-target
-cargo test -p agentflow-agents --target-dir /tmp/agentflow-target
-cargo test -p agentflow-cli --target-dir /tmp/agentflow-target
+cargo test -p yanshi-core --target-dir /tmp/yanshi-target
+cargo test -p yanshi-tools --target-dir /tmp/yanshi-target
+cargo test -p yanshi-memory --target-dir /tmp/yanshi-target
+cargo test -p yanshi-mcp --target-dir /tmp/yanshi-target
+cargo test -p yanshi-skills --target-dir /tmp/yanshi-target
+cargo test -p yanshi-agents --target-dir /tmp/yanshi-target
+cargo test -p yanshi-cli --target-dir /tmp/yanshi-target
 ```
 
 Then run the full workspace:
 
 ```bash
-cargo test --workspace --target-dir /tmp/agentflow-target
+cargo test --workspace --target-dir /tmp/yanshi-target
 ```
 
 - [ ] Core workflow/checkpoint tests pass.
@@ -83,23 +83,23 @@ services or heavier local runtimes.
 
 Current feature inventory:
 
-- `agentflow-core`: `observability`.
-- `agentflow-mcp`: `client`, `server`, `stdio`, `http`.
-- `agentflow-cli`: `mcp`, `rag`.
-- `agentflow-llm`: `openai`, `anthropic`, `google`, `observability`, `logging`.
-- `agentflow-nodes`: `llm`, `http`, `file`, `template`, `batch`,
+- `yanshi-core`: `observability`.
+- `yanshi-mcp`: `client`, `server`, `stdio`, `http`.
+- `yanshi-cli`: `mcp`, `rag`.
+- `yanshi-llm`: `openai`, `anthropic`, `google`, `observability`, `logging`.
+- `yanshi-nodes`: `llm`, `http`, `file`, `template`, `batch`,
   `conditional`, `factories`, `mcp`, `rag`.
-- `agentflow-rag`: `qdrant`, `local-embeddings`, `pdf`, `html`.
-- `agentflow-tracing`: `postgres`.
-- `agentflow-agents`: empty default feature set.
+- `yanshi-rag`: `qdrant`, `local-embeddings`, `pdf`, `html`.
+- `yanshi-tracing`: `postgres`.
+- `yanshi-agents`: empty default feature set.
 
 CI-covered combinations:
 
 ```bash
-cargo check -p agentflow-core --features observability --target-dir /tmp/agentflow-target
-cargo check -p agentflow-mcp --features client,server,stdio --target-dir /tmp/agentflow-target
-cargo check -p agentflow-cli --no-default-features --features mcp --target-dir /tmp/agentflow-target
-cargo check -p agentflow-cli --no-default-features --features rag --target-dir /tmp/agentflow-target
+cargo check -p yanshi-core --features observability --target-dir /tmp/yanshi-target
+cargo check -p yanshi-mcp --features client,server,stdio --target-dir /tmp/yanshi-target
+cargo check -p yanshi-cli --no-default-features --features mcp --target-dir /tmp/yanshi-target
+cargo check -p yanshi-cli --no-default-features --features rag --target-dir /tmp/yanshi-target
 ```
 
 - [ ] CI-covered feature combinations pass.
@@ -109,34 +109,34 @@ cargo check -p agentflow-cli --no-default-features --features rag --target-dir /
 ## 5. Integration Smoke Tests (CI Covered)
 
 ```bash
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo test --workspace --examples --target-dir /tmp/agentflow-target
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-core --example fixed_dag_workflow --target-dir /tmp/agentflow-target
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-agents --example agent_native_react --target-dir /tmp/agentflow-target
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-agents --example plan_execute_agent --target-dir /tmp/agentflow-target
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- workflow run agentflow-cli/examples/workflows/fixed_dag_basic.yml --dry-run
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- workflow run agentflow-cli/examples/workflows/skill_agent_hybrid.yml --dry-run
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --features rag --target-dir /tmp/agentflow-target -- workflow run agentflow-cli/examples/workflows/rag_skill_assistant.yml --dry-run
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill index validate agentflow-skills/examples/skills.index.toml
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill index list agentflow-skills/examples/skills.index.toml
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill index resolve agentflow-skills/examples/skills.index.toml mcp-demo
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill validate agentflow-skills/examples/skills/mcp-basic
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill list-tools agentflow-skills/examples/skills/mcp-basic
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-skills --example skill_calls_mcp_tool --target-dir /tmp/agentflow-target
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-agents --example hybrid_workflow_agent --target-dir /tmp/agentflow-target
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo test --workspace --examples --target-dir /tmp/yanshi-target
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-core --example fixed_dag_workflow --target-dir /tmp/yanshi-target
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-agents --example agent_native_react --target-dir /tmp/yanshi-target
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-agents --example plan_execute_agent --target-dir /tmp/yanshi-target
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- workflow run yanshi-cli/examples/workflows/fixed_dag_basic.yml --dry-run
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- workflow run yanshi-cli/examples/workflows/skill_agent_hybrid.yml --dry-run
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --features rag --target-dir /tmp/yanshi-target -- workflow run yanshi-cli/examples/workflows/rag_skill_assistant.yml --dry-run
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill index validate yanshi-skills/examples/skills.index.toml
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill index list yanshi-skills/examples/skills.index.toml
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill index resolve yanshi-skills/examples/skills.index.toml mcp-demo
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill validate yanshi-skills/examples/skills/mcp-basic
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill list-tools yanshi-skills/examples/skills/mcp-basic
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-skills --example skill_calls_mcp_tool --target-dir /tmp/yanshi-target
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-agents --example hybrid_workflow_agent --target-dir /tmp/yanshi-target
 ```
 
 - [ ] Workspace examples compile.
@@ -196,11 +196,11 @@ workflow runs three jobs in parallel-then-aggregate:
 
 1. **`build-binaries`** — matrix of 4 targets (linux x86_64, linux
    aarch64, macOS Intel, macOS Apple Silicon). Produces
-   `agentflow-<target>.tar.gz` containing the `agentflow` CLI binary
+   `yanshi-<target>.tar.gz` containing the `yanshi` CLI binary
    at archive root, plus a `.sha256` per archive.
 2. **`build-docker`** — multi-arch (linux/amd64 + linux/arm64)
-   `agentflow-server` image built via `docker buildx` with QEMU,
-   pushed to `ghcr.io/<owner>/agentflow-server:<tag>` (+ `:latest`
+   `yanshi-server` image built via `docker buildx` with QEMU,
+   pushed to `ghcr.io/<owner>/yanshi-server:<tag>` (+ `:latest`
    when the tag has no pre-release suffix).
 3. **`publish-release`** — aggregates the tarballs + a combined
    `SHA256SUMS.txt`, creates the GitHub Release on the same tag,
@@ -220,7 +220,7 @@ The workflow also accepts `workflow_dispatch` with two inputs:
 
 ### First-push prerequisites
 
-- [ ] GHCR package `agentflow-server` is set to **public** visibility
+- [ ] GHCR package `yanshi-server` is set to **public** visibility
       after the first successful push (default for newly-created
       GHCR packages is `private`). Repository admin only; visible
       from GitHub package settings.

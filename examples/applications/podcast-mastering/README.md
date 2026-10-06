@@ -18,24 +18,24 @@ write the mastered result.
 This is the **L3 validation** in our three-tier integration
 architecture (see [the 3-tier table in
 EXAMPLES_TODOs.md](../../../EXAMPLES_TODOs.md)).
-While [A1](../blog-to-podcast/) validates **L1** (agentflow Flow with
+While [A1](../blog-to-podcast/) validates **L1** (yanshi Flow with
 custom AsyncNode wrapping phonon as a Rust library), this app
-validates **L3** (agentflow ReAct agent driving phonon-mcp as a
+validates **L3** (yanshi ReAct agent driving phonon-mcp as a
 separate subprocess over stdio JSON-RPC).
 
 Same `/tmp/episode-test.wav` audio buffer, completely different
 integration path:
 
 ```
-A1 (L1):  agentflow Flow → custom PodcastNode → phonon-podcast lib → audio
-A1.5(L3): agentflow ReAct → mcp_phonon_audio_* tools → phonon-mcp subprocess → audio
+A1 (L1):  yanshi Flow → custom PodcastNode → phonon-podcast lib → audio
+A1.5(L3): yanshi ReAct → mcp_phonon_audio_* tools → phonon-mcp subprocess → audio
 ```
 
 ## Architecture
 
 ```
 ┌─────────────────┐  spawns         ┌─────────────────────┐
-│ agentflow CLI   │ ───stdio──────▶ │ phonon-mcp binary   │
+│ yanshi CLI   │ ───stdio──────▶ │ phonon-mcp binary   │
 │ (skill run)     │ ◀──JSON-RPC──── │ (Server::run_stdio) │
 │                 │                 │                     │
 │ ReActAgent loop │                 │ AssetRegistry       │
@@ -63,8 +63,8 @@ A1.5(L3): agentflow ReAct → mcp_phonon_audio_* tools → phonon-mcp subprocess
 | Dep | How to satisfy |
 | --- | --- |
 | `phonon-mcp` binary | `cd /Users/hal/rustspace/phonon && cargo build --release -p phonon-mcp`. Binary lands at `/Users/hal/.target/release/phonon-mcp`. Path is hardcoded in `skill.toml`'s `[[mcp_servers]].command`; update if you move it. |
-| `MOONSHOT_API_KEY` env | Auto-loaded from `~/.agentflow/.env` if present, else `source` it manually. |
-| `agentflow` CLI (release build recommended) | `cargo build --release -p agentflow-cli`. |
+| `MOONSHOT_API_KEY` env | Auto-loaded from `~/.yanshi/.env` if present, else `source` it manually. |
+| `yanshi` CLI (release build recommended) | `cargo build --release -p yanshi-cli`. |
 
 ## Files
 
@@ -90,11 +90,11 @@ project-specific Rust code.
 cd /Users/hal/rustspace/phonon
 cargo build --release -p phonon-mcp     # produces /Users/hal/.target/release/phonon-mcp
 
-cd /Users/hal/arch/agentflow
-cargo build --release -p agentflow-cli  # produces /Users/hal/.target/release/agentflow
+cd /Users/hal/arch/yanshi
+cargo build --release -p yanshi-cli  # produces /Users/hal/.target/release/yanshi
 
 # Run (assumes /tmp/episode-test.wav exists; produce it via A1 first):
-/Users/hal/.target/release/agentflow skill run \
+/Users/hal/.target/release/yanshi skill run \
   examples/applications/podcast-mastering \
   --message "请把 /tmp/episode-test.wav 做后期：归一化到 -16 LUFS，加 0.5s 淡入 + 2s 淡出，输出到 /tmp/episode-mastered.wav。汇报前后 LUFS 对比。" \
   --trace
@@ -106,7 +106,7 @@ tool_result event). Without it you only get the final answer.
 Validation only (no LLM / network calls):
 
 ```bash
-/Users/hal/.target/release/agentflow skill validate \
+/Users/hal/.target/release/yanshi skill validate \
   examples/applications/podcast-mastering
 ```
 
@@ -129,7 +129,7 @@ confirms phonon-mcp spawns cleanly and exposes 14 tools.
   duration to source (147.99s × 44.1kHz × 16-bit mono), but content
   is LUFS-normalized (-19.45 → -16 dB) + faded.
 
-## What this validates in AgentFlow
+## What this validates in Yanshi
 
 - `[[mcp_servers]]` skill manifest field correctly spawns a subprocess
   MCP server (compiled Rust binary, not just script interpreters).

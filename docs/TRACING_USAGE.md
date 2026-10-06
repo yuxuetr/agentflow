@@ -1,4 +1,4 @@
-# AgentFlow 工作流追踪系统使用指南
+# Yanshi 工作流追踪系统使用指南
 
 **版本**: v1.0
 **日期**: 2025-11-23
@@ -8,7 +8,7 @@
 
 ## 🎯 概述
 
-AgentFlow 追踪系统提供详细的工作流执行追踪，包括：
+Yanshi 追踪系统提供详细的工作流执行追踪，包括：
 - ✅ 每个节点的输入/输出
 - ✅ LLM 提示词和响应
 - ✅ Token 使用和成本
@@ -48,15 +48,15 @@ runtime 对实际调用结果的计时和错误状态。
 
 ```toml
 [dependencies]
-agentflow-core = "0.3.0"
-agentflow-tracing = "0.1.0"
+yanshi-core = "0.3.0"
+yanshi-tracing = "0.1.0"
 ```
 
 ### 2. 基本使用
 
 ```rust
-use agentflow_core::events::{EventListener, WorkflowEvent};
-use agentflow_tracing::{
+use yanshi_core::events::{EventListener, WorkflowEvent};
+use yanshi_tracing::{
     TraceCollector,
     TraceConfig,
     storage::file::FileTraceStorage,
@@ -99,7 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### TraceConfig
 
 ```rust
-use agentflow_tracing::{TraceConfig, StorageErrorPolicy};
+use yanshi_tracing::{TraceConfig, StorageErrorPolicy};
 
 // 开发环境配置（完整追踪）
 let dev_config = TraceConfig::development();
@@ -133,7 +133,7 @@ let custom_config = TraceConfig {
 ### 1. 文件存储（开发环境）
 
 ```rust
-use agentflow_tracing::storage::file::FileTraceStorage;
+use yanshi_tracing::storage::file::FileTraceStorage;
 use std::path::PathBuf;
 
 let storage = FileTraceStorage::new(
@@ -158,7 +158,7 @@ let storage = FileTraceStorage::new(
 
 W4.4：`storage::schema` 模块导出了两套 DDL 常量
 （`POSTGRES_TRACE_SCHEMA`/`SQLITE_TRACE_SCHEMA`，5 表规范化 schema），但
-**没有任何代码执行这些 DDL 或实现 `TraceStorage` trait**——`agentflow-tracing`
+**没有任何代码执行这些 DDL 或实现 `TraceStorage` trait**——`yanshi-tracing`
 crate 里唯一的具体存储后端是上面的 `FileTraceStorage`。此前存在的
 `postgres` Cargo feature 只挂了一个零引用的 `sqlx` 可选依赖（一个死
 flag），已在 W4.4 移除；`cargo check --features postgres` 编译通过从来
@@ -179,16 +179,16 @@ wire 编码由该 crate 保证符合规范，不需要手写 OTLP 的 JSON schem
 
 ```toml
 [dependencies]
-agentflow-tracing = { version = "0.1", features = ["otlp-http"] }
+yanshi-tracing = { version = "0.1", features = ["otlp-http"] }
 ```
 
 ```rust
 use std::sync::Arc;
-use agentflow_tracing::{
+use yanshi_tracing::{
     OtelExporterConfig, OtelTraceExporter, TraceCollector, TraceConfig,
 };
-use agentflow_tracing::otlp::{OtlpHttpConfig, OtlpHttpSpanSink};
-use agentflow_tracing::storage::file::FileTraceStorage;
+use yanshi_tracing::otlp::{OtlpHttpConfig, OtlpHttpSpanSink};
+use yanshi_tracing::storage::file::FileTraceStorage;
 use std::path::PathBuf;
 
 let storage = Arc::new(FileTraceStorage::new(PathBuf::from("./traces"))?);
@@ -219,7 +219,7 @@ let collector = TraceCollector::new(storage, TraceConfig::production())
 ### 获取单个追踪
 
 ```rust
-use agentflow_tracing::TraceStorage;
+use yanshi_tracing::TraceStorage;
 
 // 通过 workflow_id 查询
 let trace = storage.get_trace("workflow-001").await?;
@@ -234,7 +234,7 @@ if let Some(trace) = trace {
 ### 查询多个追踪
 
 ```rust
-use agentflow_tracing::{TraceQuery, TraceStatus};
+use yanshi_tracing::{TraceQuery, TraceStatus};
 use chrono::{Utc, Duration};
 
 // 构建查询
@@ -265,7 +265,7 @@ for trace in traces {
 ### 人类可读格式
 
 ```rust
-use agentflow_tracing::format_trace_human_readable;
+use yanshi_tracing::format_trace_human_readable;
 
 let trace = storage.get_trace("workflow-001").await?.unwrap();
 let output = format_trace_human_readable(&trace);
@@ -318,7 +318,7 @@ Nodes Executed: 3
 ### JSON 格式
 
 ```rust
-use agentflow_tracing::export_trace_json;
+use yanshi_tracing::export_trace_json;
 
 let json = export_trace_json(&trace)?;
 println!("{}", json);
@@ -330,7 +330,7 @@ std::fs::write("trace-001.json", json)?;
 ### 简洁摘要
 
 ```rust
-use agentflow_tracing::format_trace_summary;
+use yanshi_tracing::format_trace_summary;
 
 let summary = format_trace_summary(&trace);
 println!("{}", summary);
@@ -339,20 +339,20 @@ println!("{}", summary);
 
 ### 终端调试视图
 
-`agentflow trace tui` 提供最小的静态 TUI timeline，用于在不重新执行 workflow、tool、MCP server 或 LLM 的情况下聚焦查看已持久化 trace。
+`yanshi trace tui` 提供最小的静态 TUI timeline，用于在不重新执行 workflow、tool、MCP server 或 LLM 的情况下聚焦查看已持久化 trace。
 
 ```bash
-agentflow trace tui workflow-001 --dir ./traces
-agentflow trace tui workflow-001 --dir ./traces --filter mcp --details
-agentflow trace tui workflow-001 --dir ./traces --filter agent --max-field-chars 240
+yanshi trace tui workflow-001 --dir ./traces
+yanshi trace tui workflow-001 --dir ./traces --filter mcp --details
+yanshi trace tui workflow-001 --dir ./traces --filter agent --max-field-chars 240
 ```
 
-If `--dir` is omitted, trace commands read `AGENTFLOW_TRACE_DIR` first and then
-fall back to `~/.agentflow/traces`:
+If `--dir` is omitted, trace commands read `YANSHI_TRACE_DIR` first and then
+fall back to `~/.yanshi/traces`:
 
 ```bash
-AGENTFLOW_TRACE_DIR=./traces agentflow trace replay workflow-001
-AGENTFLOW_TRACE_DIR=./traces agentflow trace tui workflow-001 --filter agent
+YANSHI_TRACE_DIR=./traces yanshi trace replay workflow-001
+YANSHI_TRACE_DIR=./traces yanshi trace tui workflow-001 --filter agent
 ```
 
 可用 filter:
@@ -370,7 +370,7 @@ AGENTFLOW_TRACE_DIR=./traces agentflow trace tui workflow-001 --filter agent
 ### 工作流事件
 
 ```rust
-use agentflow_core::events::WorkflowEvent;
+use yanshi_core::events::WorkflowEvent;
 
 // 工作流开始
 WorkflowEvent::WorkflowStarted {
@@ -457,7 +457,7 @@ WorkflowEvent::LLMResponseReceived {
 ### 自定义 EventListener
 
 ```rust
-use agentflow_core::events::{EventListener, WorkflowEvent};
+use yanshi_core::events::{EventListener, WorkflowEvent};
 
 struct MyCustomListener {
     // 你的字段
@@ -483,7 +483,7 @@ impl EventListener for MyCustomListener {
 ### 组合多个监听器
 
 ```rust
-use agentflow_core::events::MultiListener;
+use yanshi_core::events::MultiListener;
 
 let multi_listener = MultiListener::new(vec![
     Box::new(TraceCollector::new(storage, config)),
@@ -586,18 +586,18 @@ for trace in running {
 
 ### 完整示例
 
-参见 `agentflow-tracing/examples/simple_tracing.rs`
+参见 `yanshi-tracing/examples/simple_tracing.rs`
 
 运行：
 ```bash
-cargo run --example simple_tracing -p agentflow-tracing
+cargo run --example simple_tracing -p yanshi-tracing
 ```
 
 ### 输出示例
 
 ```
 ╔══════════════════════════════════════════════════════╗
-║   AgentFlow Tracing System - Simple Example         ║
+║   Yanshi Tracing System - Simple Example         ║
 ╚══════════════════════════════════════════════════════╝
 
 🚀 Simulating workflow execution: demo-workflow-001
@@ -628,17 +628,17 @@ cargo run --example simple_tracing -p agentflow-tracing
 
 ## 🌐 W3C Trace Context 端到端连续
 
-> 自 v0.3.0 起，AgentFlow 在每个 LLM HTTP 出站调用上注入 W3C
+> 自 v0.3.0 起，Yanshi 在每个 LLM HTTP 出站调用上注入 W3C
 > [`traceparent`](https://www.w3.org/TR/trace-context/) header，让 OTel-aware
 > 服务器（Jaeger / Tempo / Honeycomb / 自建网关）能把 LLM 一跳作为
-> AgentFlow 的子 span 接进同一棵 trace，避免在 LLM 边界断开。
+> Yanshi 的子 span 接进同一棵 trace，避免在 LLM 边界断开。
 
 ### 工作原理
 
-1. `agentflow_llm::LlmTraceContext { trace_id, span_id, flags }` 是 W3C
+1. `yanshi_llm::LlmTraceContext { trace_id, span_id, flags }` 是 W3C
    wire 格式的 typed 包装。`trace_id` 32 hex / `span_id` 16 hex。
 2. 模块用 [tokio task-local](https://docs.rs/tokio/latest/tokio/macro.task_local.html)
-   保存当前 context；用 `agentflow_llm::trace_context::scope(ctx, fut).await`
+   保存当前 context；用 `yanshi_llm::trace_context::scope(ctx, fut).await`
    设置一次，包裹的 future 内所有 LLM 调用都会自动看到。
 3. 每个 provider（OpenAI / Anthropic / Google / Moonshot / StepFun）的
    `build_headers()` 末尾调用 `inject_into_headers(&mut headers)`，读取
@@ -654,10 +654,10 @@ agent → LLM HTTP 这一跳的 trace 永远连贯。
 ### 显式调用（不走 agent runtime）
 
 ```rust
-use agentflow_llm::{AgentFlow, LlmTraceContext};
+use yanshi_llm::{Yanshi, LlmTraceContext};
 
 let ctx = LlmTraceContext::random();
-let answer = AgentFlow::model("gpt-4o-mini")
+let answer = Yanshi::model("gpt-4o-mini")
   .prompt("hello")
   .trace_context(ctx)        // ← 出站 HTTP 现在带 traceparent
   .execute()
@@ -670,13 +670,13 @@ let answer = AgentFlow::model("gpt-4o-mini")
 
 - 已经在用 `opentelemetry-rust` ：从 active span 取 `SpanContext`，
   `LlmTraceContext::new(span_ctx.trace_id().to_string(), span_ctx.span_id().to_string())`。
-- 只用 `agentflow-tracing` 内置 exporter：`agentflow-tracing/src/otel.rs`
+- 只用 `yanshi-tracing` 内置 exporter：`yanshi-tracing/src/otel.rs`
   里的 `trace_id`/`span_id` 生成 W3C 规范要求的随机 16/8 字节 ID（Q2.2.2
   修正——此前是从 `workflow_id` 派生的确定性 ID，违反 W3C "MUST be
   random" 要求，已废弃）。跨进程一致性通过 `ExecutionTrace.metadata.
   external_trace_id`/`external_parent_span_id` 承接入站 `traceparent`
   实现（`trace_to_spans` 优先用这两个字段，没有才回退到随机生成），而不
-  是靠确定性派生。W4.4：`agentflow-tracing::otlp`（`otlp-http` feature）
+  是靠确定性派生。W4.4：`yanshi-tracing::otlp`（`otlp-http` feature）
   现在提供开箱即用的 OTLP/HTTP 导出器，不必再自己实现 `OtelSpanSink`。
 
 ### 何时不会注入
@@ -702,10 +702,10 @@ let answer = AgentFlow::model("gpt-4o-mini")
 
 - [追踪系统设计](./TRACING_DESIGN.md) - 详细架构设计
 - [当前架构](./ARCHITECTURE.md) - workspace 和 runtime 边界
-- [API 文档](../agentflow-tracing/src/lib.rs) - 完整 API 参考
+- [API 文档](../yanshi-tracing/src/lib.rs) - 完整 API 参考
 
 ---
 
-**维护者**: AgentFlow Team
+**维护者**: Yanshi Team
 **问题反馈**: GitHub Issues
 **最后更新**: 2025-11-23

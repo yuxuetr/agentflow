@@ -1,7 +1,7 @@
 # RAG Evaluation Harness
 
 > Status: shipped in v0.4.0 (P1 #10).
-> Crate: `agentflow-rag::eval`. CLI: `agentflow rag eval`.
+> Crate: `yanshi-rag::eval`. CLI: `yanshi rag eval`.
 
 The eval harness turns retrieval quality into a number. Given a labeled dataset
 (`corpus + queries + judgments`) and a retriever, it produces a structured
@@ -18,7 +18,7 @@ directly via the `Retriever` trait.
 - Tuning a retrieval config (chunk size, BM25 k1/b, embedding model).
 - Catching regressions when changing the indexing pipeline.
 - Comparing two retrievers (e.g. BM25 vs vector vs hybrid) on the same gold set.
-- Smoke-testing in CI: the bundled `agentflow_mini` dataset takes ~10 ms to run.
+- Smoke-testing in CI: the bundled `yanshi_mini` dataset takes ~10 ms to run.
 
 ## Dataset format
 
@@ -35,7 +35,7 @@ A dataset lives in a directory with the following layout:
 ### corpus.jsonl
 
 ```json
-{"id": "doc_dag", "title": "DAG execution engine", "text": "AgentFlow Flow orchestrator runs ..."}
+{"id": "doc_dag", "title": "DAG execution engine", "text": "Yanshi Flow orchestrator runs ..."}
 ```
 
 - `id` — stable identifier referenced from judgments.
@@ -68,11 +68,11 @@ Flat key-value provenance metadata. Recognized keys: `name`, `version`,
 `source`, `license`, `description`. Anything else is ignored.
 
 ```toml
-name = "agentflow_mini"
+name = "yanshi_mini"
 version = "0.1.0"
 source = "synthetic, hand-authored"
 license = "MIT"
-description = "Tiny offline RAG demo dataset built from AgentFlow facts."
+description = "Tiny offline RAG demo dataset built from Yanshi facts."
 ```
 
 Loading via `Dataset::load_from_dir(path)` validates that every judgment
@@ -106,8 +106,8 @@ Notes:
 
 ```bash
 # Quick smoke test on the bundled demo dataset (BM25 — no API key)
-agentflow rag eval \
-  --dataset agentflow-rag/examples/datasets/agentflow_mini \
+yanshi rag eval \
+  --dataset yanshi-rag/examples/datasets/yanshi_mini \
   --retriever bm25 \
   -k 1,3,5,10
 ```
@@ -131,14 +131,14 @@ The CLI supports three backends via `--retriever`:
 
 ```bash
 # Dense embedding-based retrieval (needs OPENAI_API_KEY)
-agentflow rag eval \
+yanshi rag eval \
   --dataset path/to/dataset \
   --retriever dense \
   --embedding-model text-embedding-3-small \
   -k 1,3,5,10
 
 # Hybrid BM25 + dense via RRF
-agentflow rag eval \
+yanshi rag eval \
   --dataset path/to/dataset \
   --retriever hybrid \
   --embedding-model text-embedding-3-small \
@@ -148,8 +148,8 @@ agentflow rag eval \
 Output:
 
 ```
-Loaded dataset: agentflow-rag/examples/datasets/agentflow_mini
-  manifest: name=agentflow_mini
+Loaded dataset: yanshi-rag/examples/datasets/yanshi_mini
+  manifest: name=yanshi_mini
   corpus=16 queries=12 judgments=12
 
 Retriever: bm25
@@ -180,11 +180,11 @@ per chunk strategy to spot chunking-side regressions:
 
 ```bash
 # Capture three baselines, one per chunk size:
-agentflow rag eval --dataset path/to/dataset --chunk-size 256 \
+yanshi rag eval --dataset path/to/dataset --chunk-size 256 \
   --output baselines/chunk-256.json
-agentflow rag eval --dataset path/to/dataset --chunk-size 512 \
+yanshi rag eval --dataset path/to/dataset --chunk-size 512 \
   --output baselines/chunk-512.json
-agentflow rag eval --dataset path/to/dataset --chunk-size 1024 \
+yanshi rag eval --dataset path/to/dataset --chunk-size 1024 \
   --output baselines/chunk-1024.json
 ```
 
@@ -206,7 +206,7 @@ misinterpreted.
 ### Baseline comparison
 
 ```bash
-agentflow rag eval \
+yanshi rag eval \
   --dataset path/to/dataset \
   --retriever bm25 \
   --compare-to "k1=1.8,b=0.6" \
@@ -246,7 +246,7 @@ the JSON report.
 #### Checked-in regression baselines (P10.6.2)
 
 The repo ships three regression-gate baselines for the bundled
-`ci_offline` dataset under `agentflow-rag/eval_baselines/ci_offline/`:
+`ci_offline` dataset under `yanshi-rag/eval_baselines/ci_offline/`:
 
 | Baseline file | Retriever | API key needed at run time? | CI gating |
 | --- | --- | --- | --- |
@@ -269,17 +269,17 @@ Regenerating after upstream changes (new corpus docs, new queries,
 embedding-model upgrade):
 
 ```bash
-agentflow rag eval \
-  --dataset agentflow-rag/eval_datasets/ci_offline \
+yanshi rag eval \
+  --dataset yanshi-rag/eval_datasets/ci_offline \
   --retriever dense \
   --embedding-model text-embedding-3-small \
-  --output agentflow-rag/eval_baselines/ci_offline/dense.json
+  --output yanshi-rag/eval_baselines/ci_offline/dense.json
 
-agentflow rag eval \
-  --dataset agentflow-rag/eval_datasets/ci_offline \
+yanshi rag eval \
+  --dataset yanshi-rag/eval_datasets/ci_offline \
   --retriever hybrid \
   --embedding-model text-embedding-3-small \
-  --output agentflow-rag/eval_baselines/ci_offline/hybrid.json
+  --output yanshi-rag/eval_baselines/ci_offline/hybrid.json
 ```
 
 ## JSON report shape
@@ -291,7 +291,7 @@ suitable for downstream tooling:
 {
   "dataset": {
     "path": "...",
-    "manifest": {"name": "agentflow_mini", "version": "0.1.0", ...},
+    "manifest": {"name": "yanshi_mini", "version": "0.1.0", ...},
     "corpus_size": 16,
     "queries": 12,
     "judgments": 12
@@ -324,13 +324,13 @@ The CLI ships only with BM25; for vector / hybrid / external retrievers,
 implement the `Retriever` trait directly:
 
 ```rust
-use agentflow_rag::eval::{Dataset, EvalConfig, Retriever, evaluate};
+use yanshi_rag::eval::{Dataset, EvalConfig, Retriever, evaluate};
 
 struct MyVectorRetriever { /* ... */ }
 
 impl Retriever for MyVectorRetriever {
   fn name(&self) -> &str { "vector:openai" }
-  fn search(&self, query: &str, k: usize) -> agentflow_rag::Result<Vec<String>> {
+  fn search(&self, query: &str, k: usize) -> yanshi_rag::Result<Vec<String>> {
     // ... call your vector store, return ranked doc ids
     Ok(vec![])
   }
@@ -354,7 +354,7 @@ or stage embeddings/results in a buffer.
 
 | Path | Size | Source | License |
 | --- | --- | --- | --- |
-| `agentflow-rag/examples/datasets/agentflow_mini` | 16 docs / 12 queries | synthetic, hand-authored from AgentFlow architecture facts | MIT |
+| `yanshi-rag/examples/datasets/yanshi_mini` | 16 docs / 12 queries | synthetic, hand-authored from Yanshi architecture facts | MIT |
 
 The mini dataset is intended as a CI smoke test, not a benchmark. For real
 quality numbers, point the harness at a public IR dataset
@@ -363,8 +363,8 @@ conversion utility for BEIR is on the roadmap.
 
 ## Related
 
-- [`docs/PHASE3_CHANGELOG.md`](../agentflow-rag/PHASE3_CHANGELOG.md) — RAG
+- [`docs/PHASE3_CHANGELOG.md`](../yanshi-rag/PHASE3_CHANGELOG.md) — RAG
   pipeline history.
-- `agentflow rag ops search|index|collections` — operator CLI for managing the
+- `yanshi rag ops search|index|collections` — operator CLI for managing the
   vector store directly, on top of the same retrieval stack (P-A4.1b). The
   agent-facing retrieval path is the `rag_search` tool a Skill exposes.

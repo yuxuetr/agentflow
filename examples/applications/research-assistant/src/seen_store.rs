@@ -1,4 +1,4 @@
-//! Thin wrapper around `agentflow_memory::SqliteEntityFactStore` that
+//! Thin wrapper around `yanshi_memory::SqliteEntityFactStore` that
 //! tracks "papers I've already seen / briefed on" so periodic runs only
 //! summarize genuinely new arrivals.
 //!
@@ -14,8 +14,8 @@
 //!   — denormalized snapshot so the briefing tool can describe a paper
 //!   without re-fetching arxiv if it ever needs to.
 
-use agentflow_memory::SqliteEntityFactStore;
-use agentflow_memory::layer::{EntityFact, EntityFactStore};
+use yanshi_memory::SqliteEntityFactStore;
+use yanshi_memory::layer::{EntityFact, EntityFactStore};
 use anyhow::{Context, Result};
 use serde_json::json;
 use std::path::PathBuf;

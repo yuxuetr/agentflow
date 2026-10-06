@@ -2,13 +2,13 @@
 
 ## 概述
 
-`rust_interview_code_first_proper_test_zh.rs` 是一个完整的示例，展示如何正确使用 AgentFlow 的代码优先方法来构建工作流程。这个例子专门针对 Rust 后端面试问题的生成和评估，使用中文系统提示。
+`rust_interview_code_first_proper_test_zh.rs` 是一个完整的示例，展示如何正确使用 Yanshi 的代码优先方法来构建工作流程。这个例子专门针对 Rust 后端面试问题的生成和评估，使用中文系统提示。
 
 ## 核心架构
 
 ### LlmNode - LLM 集成节点
 
-这个自定义节点展示了如何正确地将 `agentflow-core` 的工作流程引擎与 `agentflow-llm` 的模型接口集成：
+这个自定义节点展示了如何正确地将 `yanshi-core` 的工作流程引擎与 `yanshi-llm` 的模型接口集成：
 
 ```rust
 pub struct LlmNode {
@@ -71,7 +71,7 @@ async fn post_async(
     shared: &SharedState,
     _prep_result: Value,
     exec_result: Value,
-) -> Result<Option<String>, agentflow_core::AgentFlowError> {
+) -> Result<Option<String>, yanshi_core::YanshiError> {
     // 生成唯一的输出键名：节点名 + "_output"
     let output_key = format!("{}_output", self.name);  // "question_generator_output"
     
@@ -103,7 +103,7 @@ let question_evaluator = LlmNode::new("question_evaluator", "step-2-mini")
 #### 第三步：模板解析和数据注入 (`prep_async`)
 
 ```rust
-async fn prep_async(&self, shared: &SharedState) -> Result<Value, agentflow_core::AgentFlowError> {
+async fn prep_async(&self, shared: &SharedState) -> Result<Value, yanshi_core::YanshiError> {
     // SharedState 自动解析模板中的占位符
     let resolved_prompt = shared.resolve_template_advanced(&self.prompt_template);
     let resolved_system = self
@@ -141,7 +141,7 @@ async fn prep_async(&self, shared: &SharedState) -> Result<Value, agentflow_core
 
 ### `run_async` 方法的作用
 
-`run_async` 是 AgentFlow 核心的编排方法，它：
+`run_async` 是 Yanshi 核心的编排方法，它：
 
 1. **自动调用生命周期方法**: `prep_async` → `exec_async` → `post_async`
 2. **处理模板解析**: 在 `prep_async` 中自动解析所有模板占位符
@@ -173,7 +173,7 @@ let resolved_prompt = shared.resolve_template_advanced(&self.prompt_template);
 .with_prompt("基于问题: {{ question_generator_output }} 和评估: {{ question_evaluator_output }}")
 ```
 
-这种设计模式使得 AgentFlow 能够处理复杂的有向无环图（DAG）工作流程，同时保持代码的简洁性和可维护性。
+这种设计模式使得 Yanshi 能够处理复杂的有向无环图（DAG）工作流程，同时保持代码的简洁性和可维护性。
 
 ## 关键技术特性
 
@@ -212,7 +212,7 @@ cargo run --example rust_interview_code_first_proper_test_zh
 ```
 
 ### 预期输出
-1. AgentFlow 系统初始化日志
+1. Yanshi 系统初始化日志
 2. 问题生成节点执行状态
 3. 模板解析和依赖处理信息
 4. 问题评估节点执行状态
@@ -221,8 +221,8 @@ cargo run --example rust_interview_code_first_proper_test_zh
 ## 架构优势
 
 ### 1. 正确的关注点分离
-- `agentflow-core`: 工作流程编排和状态管理
-- `agentflow-llm`: LLM 提供商抽象和 API 调用
+- `yanshi-core`: 工作流程编排和状态管理
+- `yanshi-llm`: LLM 提供商抽象和 API 调用
 - 自定义节点: 业务逻辑和集成桥梁
 
 ### 2. 模板驱动的依赖管理
@@ -252,9 +252,9 @@ impl LlmNode {
 ```rust
 #[async_trait]
 impl AsyncNode for LlmNode {
-    async fn prep_async(&self, shared: &SharedState) -> Result<Value, AgentFlowError>
-    async fn exec_async(&self, prep_result: Value) -> Result<Value, AgentFlowError>
-    async fn post_async(&self, shared: &SharedState, ...) -> Result<Option<String>, AgentFlowError>
+    async fn prep_async(&self, shared: &SharedState) -> Result<Value, YanshiError>
+    async fn exec_async(&self, prep_result: Value) -> Result<Value, YanshiError>
+    async fn post_async(&self, shared: &SharedState, ...) -> Result<Option<String>, YanshiError>
 }
 ```
 
@@ -280,7 +280,7 @@ impl AsyncNode for LlmNode {
 
 - Rust 2021 edition
 - Tokio 异步运行时
-- AgentFlow 0.1.0+
+- Yanshi 0.1.0+
 - 有效的 LLM API 密钥（用于实际 API 调用）
 
 ## 扩展建议
@@ -291,4 +291,4 @@ impl AsyncNode for LlmNode {
 4. **添加 Web 接口**: 提供 REST API 服务
 5. **支持批处理**: 并行处理多个候选人
 
-这个示例展示了 AgentFlow 的完整能力，是学习如何构建生产级别工作流程应用的最佳起点。
+这个示例展示了 Yanshi 的完整能力，是学习如何构建生产级别工作流程应用的最佳起点。

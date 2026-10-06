@@ -3,7 +3,7 @@
 Local rehearsal of the two build legs in
 [`.github/workflows/release.yml`](../../.github/workflows/release.yml):
 release-mode CLI binary build + `docker buildx` of the
-`agentflow-server` image (without pushing). Catches Dockerfile /
+`yanshi-server` image (without pushing). Catches Dockerfile /
 feature-flag / dep-graph regressions before the real `v*` tag cut
 fires the workflow.
 
@@ -22,7 +22,7 @@ fall-through path checks the single-arch (host) build only.
 
 | Leg | What it catches | Local cost |
 |-----|-----------------|------------|
-| `cargo build --release -p agentflow-cli --bin agentflow` (host triple) | feature-flag regressions, dep-graph breakage, default-feature compile errors | ~3-5 min cold, ~30 s warm |
+| `cargo build --release -p yanshi-cli --bin yanshi` (host triple) | feature-flag regressions, dep-graph breakage, default-feature compile errors | ~3-5 min cold, ~30 s warm |
 | `docker buildx build linux/amd64,linux/arm64 --output cacheonly` (Docker runtime) | Dockerfile drift, apt-get base bitrot, multi-arch QEMU compat | ~10-15 min cold, ~2 min warm |
 | Apple `container build` single-arch | smoke check that the Dockerfile still builds at all; multi-arch validation defers to CI | ~5-8 min cold, ~30 s warm |
 
@@ -48,7 +48,7 @@ publishing.
   and `scripts/production_dress_rehearsal/`).
 - After any PR that touches:
   - `Dockerfile` at repo root.
-  - `agentflow-cli/Cargo.toml` (default features).
+  - `yanshi-cli/Cargo.toml` (default features).
   - The release workflow itself.
 - After a Rust toolchain bump.
 

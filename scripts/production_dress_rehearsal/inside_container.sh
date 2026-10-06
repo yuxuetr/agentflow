@@ -6,7 +6,7 @@
 # require an external Postgres.
 #
 # The driver `scripts/production_dress_rehearsal/run.sh` mounts this
-# script + the prebuilt `agentflow-doctor-smoke` image's binary into a
+# script + the prebuilt `yanshi-doctor-smoke` image's binary into a
 # fresh container and invokes us. We emit a step-by-step crossed-off
 # log to stdout and a final JSON summary to stderr (so the driver can
 # capture both independently).
@@ -42,14 +42,14 @@ heading() {
 }
 
 # ── Step 1: Pick a security profile and wire it through the environment ──────
-heading "Step 1: AGENTFLOW_SECURITY_PROFILE=production"
+heading "Step 1: YANSHI_SECURITY_PROFILE=production"
 
-export AGENTFLOW_SECURITY_PROFILE=production
-echo "  exported AGENTFLOW_SECURITY_PROFILE=${AGENTFLOW_SECURITY_PROFILE}" | tee -a "${OUT_LOG}"
-record "step1_security_profile" "pass" "AGENTFLOW_SECURITY_PROFILE=production"
+export YANSHI_SECURITY_PROFILE=production
+echo "  exported YANSHI_SECURITY_PROFILE=${YANSHI_SECURITY_PROFILE}" | tee -a "${OUT_LOG}"
+record "step1_security_profile" "pass" "YANSHI_SECURITY_PROFILE=production"
 
 # ── Step 2: Provision the API auth token via secret manager ──────────────────
-heading "Step 2: AGENTFLOW_API_TOKEN via secret-manager equivalent"
+heading "Step 2: YANSHI_API_TOKEN via secret-manager equivalent"
 
 # Inside the rehearsal we generate a one-off CSPRNG token. Production
 # operators source this from their actual secret manager (kubectl /
@@ -57,12 +57,12 @@ heading "Step 2: AGENTFLOW_API_TOKEN via secret-manager equivalent"
 if ! command -v openssl >/dev/null 2>&1; then
   apt-get update -qq && apt-get install -y --no-install-recommends openssl >/dev/null 2>&1
 fi
-AGENTFLOW_API_TOKEN="$(openssl rand -hex 32)"
-export AGENTFLOW_API_TOKEN
-TOKEN_LEN=${#AGENTFLOW_API_TOKEN}
+YANSHI_API_TOKEN="$(openssl rand -hex 32)"
+export YANSHI_API_TOKEN
+TOKEN_LEN=${#YANSHI_API_TOKEN}
 echo "  generated random token (length=${TOKEN_LEN} hex chars)" | tee -a "${OUT_LOG}"
 if [[ ${TOKEN_LEN} -ge 32 ]]; then
-  record "step2_api_token" "pass" "AGENTFLOW_API_TOKEN exported (${TOKEN_LEN} hex chars)"
+  record "step2_api_token" "pass" "YANSHI_API_TOKEN exported (${TOKEN_LEN} hex chars)"
 else
   record "step2_api_token" "fail" "token shorter than the 32-char floor"
 fi
@@ -71,28 +71,28 @@ fi
 heading "Step 3: pre-provision storage directories"
 
 # Use a system-style path layout matching the docs example, instead of
-# the default ~/.agentflow/*. Production deploys typically split state
+# the default ~/.yanshi/*. Production deploys typically split state
 # off the user home. We test the same env-var contract operators use.
-export AGENTFLOW_RUN_DIR=/var/lib/agentflow/runs
-export AGENTFLOW_TRACE_DIR=/var/lib/agentflow/traces
-export AGENTFLOW_MARKETPLACE_CACHE=/var/lib/agentflow/marketplace-cache
-export AGENTFLOW_SKILLS_DIR=/var/lib/agentflow/skills
-export AGENTFLOW_PLUGINS_DIR=/var/lib/agentflow/plugins
+export YANSHI_RUN_DIR=/var/lib/yanshi/runs
+export YANSHI_TRACE_DIR=/var/lib/yanshi/traces
+export YANSHI_MARKETPLACE_CACHE=/var/lib/yanshi/marketplace-cache
+export YANSHI_SKILLS_DIR=/var/lib/yanshi/skills
+export YANSHI_PLUGINS_DIR=/var/lib/yanshi/plugins
 
 install -d -m 0750 \
-  "${AGENTFLOW_RUN_DIR}" \
-  "${AGENTFLOW_TRACE_DIR}" \
-  "${AGENTFLOW_MARKETPLACE_CACHE}" \
-  "${AGENTFLOW_SKILLS_DIR}" \
-  "${AGENTFLOW_PLUGINS_DIR}"
+  "${YANSHI_RUN_DIR}" \
+  "${YANSHI_TRACE_DIR}" \
+  "${YANSHI_MARKETPLACE_CACHE}" \
+  "${YANSHI_SKILLS_DIR}" \
+  "${YANSHI_PLUGINS_DIR}"
 
 ALL_EXIST=true
 for d in \
-  "${AGENTFLOW_RUN_DIR}" \
-  "${AGENTFLOW_TRACE_DIR}" \
-  "${AGENTFLOW_MARKETPLACE_CACHE}" \
-  "${AGENTFLOW_SKILLS_DIR}" \
-  "${AGENTFLOW_PLUGINS_DIR}"; do
+  "${YANSHI_RUN_DIR}" \
+  "${YANSHI_TRACE_DIR}" \
+  "${YANSHI_MARKETPLACE_CACHE}" \
+  "${YANSHI_SKILLS_DIR}" \
+  "${YANSHI_PLUGINS_DIR}"; do
   if [[ -d "${d}" && -w "${d}" ]]; then
     echo "  ✓ ${d}" | tee -a "${OUT_LOG}"
   else
@@ -112,21 +112,21 @@ heading "Step 4: DATABASE_URL (mocked — no Postgres sidecar in this rehearsal)
 # Real deploys point at a Postgres 14+ instance. The dress rehearsal
 # only sets the env so the var-resolution path is exercised; no
 # connection is attempted by doctor or by `serve --check`.
-export DATABASE_URL="postgres://agentflow:rehearsal@db.invalid:5432/agentflow"
+export DATABASE_URL="postgres://yanshi:rehearsal@db.invalid:5432/yanshi"
 echo "  set DATABASE_URL=<masked> (host db.invalid — intentionally non-routable)" | tee -a "${OUT_LOG}"
 echo "  NOTE: actual Postgres connectivity not validated in single-container rehearsal." | tee -a "${OUT_LOG}"
 echo "        See README.md for the host-side docker compose follow-up." | tee -a "${OUT_LOG}"
 record "step4_database_url" "pass-noted" "DATABASE_URL exported (connectivity not validated; see README)"
 
-# ── Step 5: Verify with `agentflow doctor --profile production` ──────────────
-heading "Step 5: agentflow doctor --profile production --backup-check --format json"
+# ── Step 5: Verify with `yanshi doctor --profile production` ──────────────
+heading "Step 5: yanshi doctor --profile production --backup-check --format json"
 
 # stderr goes to file so an `eprintln!` warning doesn't drown out the
 # JSON; stdout is the report.
 DOCTOR_JSON=/tmp/doctor.json
 DOCTOR_STDERR=/tmp/doctor.stderr
 set +e
-agentflow doctor --profile production --backup-check --format json \
+yanshi doctor --profile production --backup-check --format json \
   >"${DOCTOR_JSON}" 2>"${DOCTOR_STDERR}"
 DOCTOR_EXIT=$?
 set -e
@@ -152,13 +152,13 @@ else
   record "ag1_doctor_exit_zero" "fail" "exit=${DOCTOR_EXIT}"
 fi
 
-# ── Acceptance gate 2: `agentflow serve --check --security-profile production`
-heading "Acceptance gate 2: agentflow serve --check --security-profile production"
+# ── Acceptance gate 2: `yanshi serve --check --security-profile production`
+heading "Acceptance gate 2: yanshi serve --check --security-profile production"
 
 SERVE_STDOUT=/tmp/serve_check.stdout
 SERVE_STDERR=/tmp/serve_check.stderr
 set +e
-agentflow serve --check --security-profile production \
+yanshi serve --check --security-profile production \
   >"${SERVE_STDOUT}" 2>"${SERVE_STDERR}"
 SERVE_EXIT=$?
 set -e
@@ -190,7 +190,7 @@ fi
 
 # ── Step 6: docker-compose smoke (not runnable in-container; documented) ─────
 heading "Step 6: docker compose up smoke (host-side, not run in this rehearsal)"
-echo "  This step requires Docker on the host (with the agentflow-server" | tee -a "${OUT_LOG}"
+echo "  This step requires Docker on the host (with the yanshi-server" | tee -a "${OUT_LOG}"
 echo "  image + Postgres sidecar). docker-in-docker is intentionally out" | tee -a "${OUT_LOG}"
 echo "  of scope for the single-container dress rehearsal — see README.md" | tee -a "${OUT_LOG}"
 echo "  for the host-side reproduction commands." | tee -a "${OUT_LOG}"

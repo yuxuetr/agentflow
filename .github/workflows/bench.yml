@@ -29,11 +29,11 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - "agentflow-core/**"
-      - "agentflow-llm/**"
-      - "agentflow-nodes/**"
-      - "agentflow-rag/**"
-      - "agentflow-tracing/**"
+      - "yanshi-core/**"
+      - "yanshi-llm/**"
+      - "yanshi-nodes/**"
+      - "yanshi-rag/**"
+      - "yanshi-tracing/**"
       - "benches/**"
       - "xtask/**"
       - ".github/workflows/bench.yml"
@@ -51,7 +51,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # Cache cargo registry + target dir across runs. Without this the
       # job rebuilds the whole workspace + 6 bench targets from scratch
-      # (agentflow-rag pulls heavy embedding/vector deps), which on
+      # (yanshi-rag pulls heavy embedding/vector deps), which on
       # 2026-05-23 pushed the wall clock to 33m and tripped the
       # timeout. `key` is keyed on bench.yml + workspace Cargo.lock so
       # the cache invalidates only when deps or the workflow change.
@@ -65,25 +65,25 @@ jobs:
       # ./target/criterion/<group>/<bench>/new/estimates.json which
       # the gate then walks.
       - name: cargo bench (scheduler)
-        run: cargo bench -p agentflow-core --bench scheduler -- --warm-up-time 1 --measurement-time 1 --sample-size 10
+        run: cargo bench -p yanshi-core --bench scheduler -- --warm-up-time 1 --measurement-time 1 --sample-size 10
       # P10.1.1 — FlowValue decode + checkpoint-roundtrip hot paths.
-      # Same agentflow-core crate as `scheduler`, but the two benches
+      # Same yanshi-core crate as `scheduler`, but the two benches
       # exercise completely different code (serde + fs vs. DAG), so
       # they're run as separate steps for clean failure isolation.
       - name: cargo bench (hot_paths)
-        run: cargo bench -p agentflow-core --bench hot_paths -- --warm-up-time 1 --measurement-time 1 --sample-size 10
+        run: cargo bench -p yanshi-core --bench hot_paths -- --warm-up-time 1 --measurement-time 1 --sample-size 10
       - name: cargo bench (provider_hop)
-        run: cargo bench -p agentflow-llm --bench provider_hop -- --warm-up-time 1 --measurement-time 1 --sample-size 10
+        run: cargo bench -p yanshi-llm --bench provider_hop -- --warm-up-time 1 --measurement-time 1 --sample-size 10
       - name: cargo bench (retrieval)
-        run: cargo bench -p agentflow-rag --bench retrieval -- --warm-up-time 1 --measurement-time 1 --sample-size 10
+        run: cargo bench -p yanshi-rag --bench retrieval -- --warm-up-time 1 --measurement-time 1 --sample-size 10
       - name: cargo bench (event_write)
-        run: cargo bench -p agentflow-tracing --bench event_write -- --warm-up-time 1 --measurement-time 1 --sample-size 10
+        run: cargo bench -p yanshi-tracing --bench event_write -- --warm-up-time 1 --measurement-time 1 --sample-size 10
       # P10.2.1 — per-node hot-path bench. The bench has
       # `required-features = ["conditional"]` so cargo auto-enables
       # the gated module; explicit `--features` here makes the
       # workflow self-documenting.
       - name: cargo bench (node_latency)
-        run: cargo bench -p agentflow-nodes --bench node_latency --features conditional -- --warm-up-time 1 --measurement-time 1 --sample-size 10
+        run: cargo bench -p yanshi-nodes --bench node_latency --features conditional -- --warm-up-time 1 --measurement-time 1 --sample-size 10
 
       # The gate fails non-zero on regression. `--allow-missing` keeps
       # the job green when the apple-m2-max baseline references benches

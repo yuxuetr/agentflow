@@ -56,8 +56,8 @@ file; don't overwrite another host's file with numbers from yours.
   },
   "notes": ["..."],
   "timings": {
-    "agentflow-core": { "wall_clock_ns": 12345678900, "test_count": 139 },
-    "agentflow-tools": { "wall_clock_ns": 3000000000, "test_count": 87 }
+    "yanshi-core": { "wall_clock_ns": 12345678900, "test_count": 139 },
+    "yanshi-tools": { "wall_clock_ns": 3000000000, "test_count": 87 }
   }
 }
 ```
@@ -75,7 +75,7 @@ when no summary line was present (compile error, harness disabled).
 cargo xtask test-gate --update
 
 # Filter to a subset while iterating:
-cargo xtask test-gate --update --include agentflow-core --include agentflow-tools
+cargo xtask test-gate --update --include yanshi-core --include yanshi-tools
 
 # Compare against the checked-in baseline (default mode):
 cargo xtask test-gate

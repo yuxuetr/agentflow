@@ -1,8 +1,8 @@
-# AgentFlow Web UI Run Console
+# Yanshi Web UI Run Console
 
-`agentflow-ui/` is the browser console for submitting, cancelling, and
+`yanshi-ui/` is the browser console for submitting, cancelling, and
 debugging hybrid DAG, agent, and tool runs. It is a React + Vite + TypeScript
-SPA embedded into `agentflow-server` as static assets under `/ui`.
+SPA embedded into `yanshi-server` as static assets under `/ui`.
 
 ## Product positioning
 
@@ -30,7 +30,7 @@ is the kind of drift this decision exists to prevent.
 ### Why debugger-only
 
 1. **Single-dev maintenance budget.** The UI is dog-fooded by the
-   AgentFlow maintainers; a sprawling dashboard surface costs more
+   Yanshi maintainers; a sprawling dashboard surface costs more
    in test + e2e maintenance than the audience justifies today.
 2. **Operator dashboards have better tools.** Prometheus + Grafana
    (cost trends, utilization, retry rates), tenant-aware BI
@@ -45,7 +45,7 @@ is the kind of drift this decision exists to prevent.
 ### v1.1 additive scope (within the debugger boundary)
 
 - Harness session replay UI (visual analogue of
-  `agentflow harness replay --speed 2x` from P10.10.2).
+  `yanshi harness replay --speed 2x` from P10.10.2).
 - Trace compare polish (better diffs, more event types covered).
 - Long-run perf polish — including the
   P10.17.3 server-side `?filter=` pre-filter
@@ -63,12 +63,12 @@ for the right tool first:
   the server's `/metrics` endpoint; consider adding the
   per-tenant cost gauge to that scrape rather than the SPA.
 - **Worker fleet utilization:** the gRPC control plane
-  (`agentflow-worker`) already exposes admission counts;
+  (`yanshi-worker`) already exposes admission counts;
   surface them via Prometheus, not the UI.
 - **Policy decision summary:** trace persistence has the
   per-event policy decisions; aggregate them in BI / a
   scheduled query, not the UI.
-- **Multi-tenant cost / quota:** outside agentflow's scope
+- **Multi-tenant cost / quota:** outside yanshi's scope
   entirely — wire your own billing system.
 
 ### How to use this section
@@ -80,9 +80,9 @@ top-level tab.
 
 ## Architecture
 
-- Frontend source: `agentflow-ui/src/`
-- Embedded assets: `agentflow-ui/dist/`
-- Server mount: `agentflow-server/src/ui.rs`
+- Frontend source: `yanshi-ui/src/`
+- Embedded assets: `yanshi-ui/dist/`
+- Server mount: `yanshi-server/src/ui.rs`
 - Submit dependency: `POST /v1/runs`
 - Cancel dependency: `POST /v1/runs/{id}:cancel`
 - REST dependency: `GET /v1/runs/{id}`
@@ -106,14 +106,14 @@ Vite is configured to emit stable asset names:
 - `/ui/assets/app.js`
 - `/ui/assets/styles.css`
 
-Keep those names stable unless `agentflow-server/src/ui.rs` changes too.
+Keep those names stable unless `yanshi-server/src/ui.rs` changes too.
 
 ## Local Development
 
 Run the backend as usual:
 
 ```bash
-cargo run -p agentflow-server
+cargo run -p yanshi-server
 ```
 
 Then open:
@@ -125,12 +125,12 @@ http://localhost:8080/ui
 For frontend-only iteration:
 
 ```bash
-cd agentflow-ui
+cd yanshi-ui
 npm install
 npm run dev
 ```
 
-The Vite dev server should proxy or target an `agentflow-server` instance for
+The Vite dev server should proxy or target an `yanshi-server` instance for
 `/v1/runs/{id}` and `/v1/runs/{id}/events`.
 
 ## Run Console
@@ -138,7 +138,7 @@ The Vite dev server should proxy or target an `agentflow-server` instance for
 - Submit run: paste config-first workflow YAML, set the tenant, then submit.
 - Connect run: paste an existing run id or select a recent run.
 - Cancel run: cancels queued/running runs via `/v1/runs/{id}:cancel`.
-- Auth token: paste the bearer token configured by `AGENTFLOW_API_TOKEN`.
+- Auth token: paste the bearer token configured by `YANSHI_API_TOKEN`.
   The token is stored in browser local storage and sent in `Authorization`
   headers for REST and streaming requests.
 - Live reconnect: the UI streams SSE with `fetch`, tracks the last observed
@@ -154,13 +154,13 @@ of truth.
 
 | Local key | Server key | Synced today |
 | --- | --- | --- |
-| `agentflow.ui.tenantId` (run console) | `ui.run-console.tenant` | **Yes** |
-| `agentflow.ui.newForm.tenant` | `ui.new-form.tenant` | mapped; wiring follow-up |
-| `agentflow.ui.newForm.profile` | `ui.new-form.profile` | mapped; wiring follow-up |
-| `agentflow.ui.harness.newForm.tenant_id` | `ui.harness-new-form.tenant` | mapped; wiring follow-up |
-| `agentflow.ui.harness.newForm.profile` | `ui.harness-new-form.profile` | mapped; wiring follow-up |
-| `agentflow.ui.harness.newForm.runtime_kind` | `ui.harness-new-form.runtime` | mapped; wiring follow-up |
-| `agentflow.ui.run.eventFilter.<run_id>` | `ui.event-filter.<run_id>` | mapped; wiring follow-up |
+| `yanshi.ui.tenantId` (run console) | `ui.run-console.tenant` | **Yes** |
+| `yanshi.ui.newForm.tenant` | `ui.new-form.tenant` | mapped; wiring follow-up |
+| `yanshi.ui.newForm.profile` | `ui.new-form.profile` | mapped; wiring follow-up |
+| `yanshi.ui.harness.newForm.tenant_id` | `ui.harness-new-form.tenant` | mapped; wiring follow-up |
+| `yanshi.ui.harness.newForm.profile` | `ui.harness-new-form.profile` | mapped; wiring follow-up |
+| `yanshi.ui.harness.newForm.runtime_kind` | `ui.harness-new-form.runtime` | mapped; wiring follow-up |
+| `yanshi.ui.run.eventFilter.<run_id>` | `ui.event-filter.<run_id>` | mapped; wiring follow-up |
 
 "Mapped" = `serverKeyForLocal()` in `src/preferences.ts` returns
 the server key; "Synced" = a React component currently calls
@@ -174,11 +174,11 @@ follow-up inside the same TODO.
 
 | Local key | Why local-only |
 | --- | --- |
-| `agentflow.ui.apiToken` | **Security.** The token is the only sensitive value in the UI; uploading it to a route that lists every preference would leak it. |
-| `agentflow.ui.workflowDraft` / `agentflow.ui.newForm.workflow` | Workflow YAML drafts can be large (>16 KiB server cap) and may contain example tokens that would trip the server's [token-shape rejection](../agentflow-server/src/preferences.rs). |
-| `agentflow.ui.newForm.inputs` | Same as workflow drafts — user-supplied JSON, can include user-pasted content. |
-| `agentflow.ui.harness.newForm.user_input` | Prompt text often contains personal info. |
-| `agentflow.ui.harness.newForm.workspace_root` | Filesystem path — machine-specific (`/Users/alice/...` ≠ `C:\Users\bob\...`). |
+| `yanshi.ui.apiToken` | **Security.** The token is the only sensitive value in the UI; uploading it to a route that lists every preference would leak it. |
+| `yanshi.ui.workflowDraft` / `yanshi.ui.newForm.workflow` | Workflow YAML drafts can be large (>16 KiB server cap) and may contain example tokens that would trip the server's [token-shape rejection](../yanshi-server/src/preferences.rs). |
+| `yanshi.ui.newForm.inputs` | Same as workflow drafts — user-supplied JSON, can include user-pasted content. |
+| `yanshi.ui.harness.newForm.user_input` | Prompt text often contains personal info. |
+| `yanshi.ui.harness.newForm.workspace_root` | Filesystem path — machine-specific (`/Users/alice/...` ≠ `C:\Users\bob\...`). |
 
 ### Wire shape contract
 
@@ -208,7 +208,7 @@ follow-up inside the same TODO.
 - DAG status (event-derived): a button grid of nodes observed in
   the event stream, coloured by the most recent event tone. No
   spatial layout — graphical DAG visualisation was intentionally
-  cut in P10.13.1 (the `agentflow-viz` crate was deleted; see
+  cut in P10.13.1 (the `yanshi-viz` crate was deleted; see
   `docs/ROADMAP_v2.md` Theme D for the decision rationale).
 - DAG node detail: selected node id/status and latest matching event.
 - Agent timeline: ordered event stream, with agent/tool/failure status tones.
@@ -228,25 +228,25 @@ follow-up inside the same TODO.
 ## Verification
 
 ```bash
-cargo test -p agentflow-server ui::tests --target-dir /tmp/agentflow-target
-cd agentflow-ui && npm test
+cargo test -p yanshi-server ui::tests --target-dir /tmp/yanshi-target
+cd yanshi-ui && npm test
 ```
 
 ### Playwright E2E (P10.17.4)
 
-E2E specs in `agentflow-ui/e2e/` exercise the SPA against a real
-running `agentflow-server`. Local quickstart:
+E2E specs in `yanshi-ui/e2e/` exercise the SPA against a real
+running `yanshi-server`. Local quickstart:
 
 ```bash
-cd agentflow-ui
+cd yanshi-ui
 npm install                      # one-time
 npm run e2e:install              # one-time — installs Chromium
-# Start agentflow-server in another terminal first…
+# Start yanshi-server in another terminal first…
 npm run e2e
 ```
 
 Full operator + CI guide in
-[`agentflow-ui/e2e/README.md`](../agentflow-ui/e2e/README.md).
+[`yanshi-ui/e2e/README.md`](../yanshi-ui/e2e/README.md).
 CI runs nightly (10:30 UTC) and on `workflow_dispatch`; it's
 **not** in `quality.yml::release-gate.needs` because the build +
 browser-install cost doesn't justify gating every PR on the

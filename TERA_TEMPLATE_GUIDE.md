@@ -1,8 +1,8 @@
-# AgentFlow Tera 模板使用指南
+# Yanshi Tera 模板使用指南
 
 ## 概述
 
-AgentFlow 现已集成 Tera 模板引擎，提供强大的模板渲染功能。Tera 是一个受 Jinja2 启发的模板引擎，支持条件、循环、过滤器等高级特性。
+Yanshi 现已集成 Tera 模板引擎，提供强大的模板渲染功能。Tera 是一个受 Jinja2 启发的模板引擎，支持条件、循环、过滤器等高级特性。
 
 ## 快速开始
 
@@ -174,7 +174,7 @@ template: |
 
 #### 自定义过滤器
 
-AgentFlow 提供了额外的自定义过滤器：
+Yanshi 提供了额外的自定义过滤器：
 
 ```yaml
 {{ data | json_pretty }}        # 美化JSON
@@ -234,7 +234,7 @@ template: |
 
 ### 7. 内置函数
 
-AgentFlow 提供了两个自定义函数：
+Yanshi 提供了两个自定义函数：
 
 ```yaml
 {{ now() }}                     # 当前UTC时间戳
@@ -307,7 +307,7 @@ AgentFlow 提供了两个自定义函数：
 
       ---
       Generated: {{ now() }}
-    project_name: "AgentFlow"
+    project_name: "Yanshi"
     tasks:
       - name: "Task 1"
         status: "done"
@@ -533,25 +533,25 @@ template: "{{ greeting }} {{ name }}"
 
 查看更多示例：
 
-- `agentflow-cli/templates/tera-conditional-example.yml`
-- `agentflow-cli/templates/tera-loop-example.yml`
-- `agentflow-cli/templates/tera-filters-example.yml`
-- `agentflow-cli/templates/tera-complex-report-example.yml`
+- `yanshi-cli/templates/tera-conditional-example.yml`
+- `yanshi-cli/templates/tera-loop-example.yml`
+- `yanshi-cli/templates/tera-filters-example.yml`
+- `yanshi-cli/templates/tera-complex-report-example.yml`
 
 ## 运行示例
 
 ```bash
 # 条件示例
-cargo run -- workflow run agentflow-cli/templates/tera-conditional-example.yml
+cargo run -- workflow run yanshi-cli/templates/tera-conditional-example.yml
 
 # 循环示例
-cargo run -- workflow run agentflow-cli/templates/tera-loop-example.yml
+cargo run -- workflow run yanshi-cli/templates/tera-loop-example.yml
 
 # 过滤器示例
-cargo run -- workflow run agentflow-cli/templates/tera-filters-example.yml
+cargo run -- workflow run yanshi-cli/templates/tera-filters-example.yml
 
 # 复杂报告示例
-cargo run -- workflow run agentflow-cli/templates/tera-complex-report-example.yml
+cargo run -- workflow run yanshi-cli/templates/tera-complex-report-example.yml
 ```
 
 ## 更多资源
@@ -563,4 +563,4 @@ cargo run -- workflow run agentflow-cli/templates/tera-complex-report-example.ym
 ---
 
 **最后更新**: 2025-10-06
-**AgentFlow 版本**: 0.1.0
+**Yanshi 版本**: 0.1.0

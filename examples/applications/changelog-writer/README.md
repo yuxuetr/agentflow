@@ -14,7 +14,7 @@ release notes.
 
 ## Architecture: L1 binary (NOT a skill)
 
-Two AgentFlow nodes in a Flow:
+Two Yanshi nodes in a Flow:
 
 ```
 ┌──────────────┐    raw git log    ┌──────────────────┐    markdown
@@ -67,7 +67,7 @@ the skill form was fighting the architecture.
 | Dep | How to satisfy |
 | --- | --- |
 | `git` on PATH | Standard system install. |
-| LLM API key | Default model is `moonshot-v1-128k`; needs `MOONSHOT_API_KEY`. Auto-loaded from `~/.agentflow/.env` (via P9.3). Override model with `--model <name>` if you prefer another agentflow-llm provider. |
+| LLM API key | Default model is `moonshot-v1-128k`; needs `MOONSHOT_API_KEY`. Auto-loaded from `~/.yanshi/.env` (via P9.3). Override model with `--model <name>` if you prefer another yanshi-llm provider. |
 
 ## Files
 
@@ -75,7 +75,7 @@ the skill form was fighting the architecture.
 changelog-writer/
 ├── README.md                # ← this file
 ├── Cargo.toml               # standalone Cargo project; path deps to
-│                            # agentflow-core + agentflow-llm
+│                            # yanshi-core + yanshi-llm
 ├── src/
 │   └── main.rs              # RunGitLogNode + ClassifyAndRenderNode +
 │                            # 2-node Flow + CLI parse
@@ -87,7 +87,7 @@ changelog-writer/
 
 ```bash
 cd examples/applications/changelog-writer
-# MOONSHOT_API_KEY auto-loaded from ~/.agentflow/.env
+# MOONSHOT_API_KEY auto-loaded from ~/.yanshi/.env
 
 # Write to a file:
 cargo run --release -- \
@@ -114,13 +114,13 @@ cargo run --release -- \
   prompt's spec — graceful "do more than asked" rather than "ignore
   the spec". Bullets render cleanly, categorization respects scope
   parenthesis (e.g. `feat(cli):` stays grouped under Features).
-- **Truncation**: 4096 max_tokens (Moonshot default in agentflow's
+- **Truncation**: 4096 max_tokens (Moonshot default in yanshi's
   models.yml) capped the output mid-hash on the 119th line. See
   [A7 Findings finding #18](../../../EXAMPLES_TODOs.md#a7--changelog-writer)
   — for ranges with > ~100 commits, bump `max_tokens` in models.yml
   or split per-category.
 
-## What this validates in AgentFlow
+## What this validates in Yanshi
 
 - Multi-node `Flow` with custom AsyncNode wrapping
   `std::process::Command::new("git")` — proves the "shell out from
@@ -139,6 +139,6 @@ cargo run --release -- \
 See [`EXAMPLES_TODOs.md` § A7 Findings](../../../EXAMPLES_TODOs.md#a7--changelog-writer)
 for the live list (8 new findings this run, including the
 skill-form rejection rationale, the LLM input substitution failure
-mode, agentflow-llm registry lag behind Moonshot's `/v1/models`, the
+mode, yanshi-llm registry lag behind Moonshot's `/v1/models`, the
 config/models/*.yml vs templates/default_models.yml lookup
 precedence surprise, and the kimi-k2.6 mandatory `temperature=1.0`).

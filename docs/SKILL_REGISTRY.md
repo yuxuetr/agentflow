@@ -38,7 +38,7 @@ Fields:
 - `skills[].path`: skill directory. Relative paths are resolved from the index
   file directory.
 - `skills[].manifest`: optional manifest path relative to the skill directory.
-  When omitted, AgentFlow detects `skill.toml` first, then `SKILL.md`.
+  When omitted, Yanshi detects `skill.toml` first, then `SKILL.md`.
 - `skills[].manifest_sha256`: optional SHA-256 lock for the manifest file. The
   value can be raw hex or prefixed with `sha256:`.
 - `skills[].aliases`: optional alternate names accepted by `resolve` and
@@ -77,18 +77,18 @@ MCP servers, or referenced knowledge files.
 Validate and inspect an index:
 
 ```bash
-cargo run -p agentflow-cli -- skill index validate agentflow-skills/examples/skills.index.toml
-cargo run -p agentflow-cli -- skill index list agentflow-skills/examples/skills.index.toml
-cargo run -p agentflow-cli -- skill index resolve agentflow-skills/examples/skills.index.toml mcp-demo
+cargo run -p yanshi-cli -- skill index validate yanshi-skills/examples/skills.index.toml
+cargo run -p yanshi-cli -- skill index list yanshi-skills/examples/skills.index.toml
+cargo run -p yanshi-cli -- skill index resolve yanshi-skills/examples/skills.index.toml mcp-demo
 ```
 
 Install a resolved skill into a local skills directory:
 
 ```bash
-cargo run -p agentflow-cli -- skill install agentflow-skills/examples/skills.index.toml mcp-demo \
-  --dir /tmp/agentflow-skills
-cargo run -p agentflow-cli -- skill validate /tmp/agentflow-skills/mcp-basic
-cargo run -p agentflow-cli -- skill list-tools /tmp/agentflow-skills/mcp-basic
+cargo run -p yanshi-cli -- skill install yanshi-skills/examples/skills.index.toml mcp-demo \
+  --dir /tmp/yanshi-skills
+cargo run -p yanshi-cli -- skill validate /tmp/yanshi-skills/mcp-basic
+cargo run -p yanshi-cli -- skill list-tools /tmp/yanshi-skills/mcp-basic
 ```
 
 `skill install` copies the resolved local directory to `<target>/<skill-name>`.
@@ -132,7 +132,7 @@ or Skill-catalog-backed distribution.
 A marketplace manifest is a Skill catalog that groups one or more registry
 indexes into a browsable list. It does not replace `skills.index.toml`; instead it points at local,
 organization, or future remote indexes and lets the CLI show install commands
-that still use `agentflow skill install <index_file> <skill>`.
+that still use `yanshi skill install <index_file> <skill>`.
 
 Use `marketplace.toml` as the conventional file name:
 
@@ -140,7 +140,7 @@ Use `marketplace.toml` as the conventional file name:
 schema_version = 1
 name = "team-marketplace"
 description = "Curated skills approved for this team."
-homepage = "https://example.com/agentflow/skills"
+homepage = "https://example.com/yanshi/skills"
 
 [[indexes]]
 name = "team"
@@ -173,12 +173,12 @@ Marketplace fields:
 CLI flow:
 
 ```bash
-cargo run -p agentflow-cli -- skill marketplace validate agentflow-skills/examples/marketplace.toml
-cargo run -p agentflow-cli -- skill marketplace list agentflow-skills/examples/marketplace.toml
-cargo run -p agentflow-cli -- skill marketplace resolve agentflow-skills/examples/marketplace.toml mcp-demo
+cargo run -p yanshi-cli -- skill marketplace validate yanshi-skills/examples/marketplace.toml
+cargo run -p yanshi-cli -- skill marketplace list yanshi-skills/examples/marketplace.toml
+cargo run -p yanshi-cli -- skill marketplace resolve yanshi-skills/examples/marketplace.toml mcp-demo
 ```
 
-`marketplace resolve` prints the exact `agentflow skill install ...` command.
+`marketplace resolve` prints the exact `yanshi skill install ...` command.
 The install path remains unchanged, so marketplace browsing does not add a new
 trust or overwrite model. This is not a general plugin marketplace; it catalogs
 Skills only.

@@ -1,5 +1,5 @@
 # Empty [workspace] tells cargo "this manifest is NOT a member of any
-# enclosing workspace" — required because the agentflow workspace at the
+# enclosing workspace" — required because the yanshi workspace at the
 # repo root has explicit `members` and would otherwise complain about
 # discovering this Cargo.toml.
 [workspace]
@@ -9,17 +9,17 @@ name = "blog-to-podcast"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "AgentFlow application: blog → two-speaker podcast (Plan A thin wrapper)"
+description = "Yanshi application: blog → two-speaker podcast (Plan A thin wrapper)"
 
-# Standalone Cargo project — NOT a workspace member of the agentflow workspace.
+# Standalone Cargo project — NOT a workspace member of the yanshi workspace.
 # Each application under examples/applications/ owns its dependency graph so
-# that adding phonon (a 14-crate workspace) does not bloat the agentflow
+# that adding phonon (a 14-crate workspace) does not bloat the yanshi
 # workspace's Cargo.lock. Shared target dir lives at $HOME/.target via the
 # user-level ~/.cargo/config.toml.
 
 [dependencies]
-# AgentFlow primitives — path deps into the parent workspace.
-agentflow-core = { path = "../../../agentflow-core" }
+# Yanshi primitives — path deps into the parent workspace.
+yanshi-core = { path = "../../../yanshi-core" }
 
 # phonon — path deps into the sibling workspace.
 phonon-ai      = { path = "../../../../../rustspace/phonon/phonon-ai" }

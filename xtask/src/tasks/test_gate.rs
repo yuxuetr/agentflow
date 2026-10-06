@@ -59,7 +59,7 @@ struct TestTimingBaseline {
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   notes: Vec<String>,
   /// Per-crate timings. The key is the workspace member name
-  /// (`agentflow-core`, etc.); the value is the captured wall-clock
+  /// (`yanshi-core`, etc.); the value is the captured wall-clock
   /// + best-effort test count parsed from `cargo test` stdout.
   timings: std::collections::BTreeMap<String, TestTimingEntry>,
 }
@@ -576,13 +576,13 @@ mod test_gate_tests {
   fn compare_flags_crates_at_or_above_threshold() {
     // Exactly at the threshold (1.5×) is a regression — the gate is
     // `>=`, not `>`. Just below threshold (1.49×) is `ok`.
-    let base = baseline(&[("agentflow-core", 1_000_000_000)]);
-    let curr = current(&[("agentflow-core", 1_500_000_000)]);
+    let base = baseline(&[("yanshi-core", 1_000_000_000)]);
+    let curr = current(&[("yanshi-core", 1_500_000_000)]);
     let report = compare_test_timings(&base, &curr, 1.5);
     assert_eq!(report.regressions.len(), 1, "1.5× must be a regression");
-    assert_eq!(report.regressions[0].krate, "agentflow-core");
+    assert_eq!(report.regressions[0].krate, "yanshi-core");
 
-    let curr_under = current(&[("agentflow-core", 1_490_000_000)]);
+    let curr_under = current(&[("yanshi-core", 1_490_000_000)]);
     let report_under = compare_test_timings(&base, &curr_under, 1.5);
     assert_eq!(
       report_under.regressions.len(),
@@ -595,8 +595,8 @@ mod test_gate_tests {
   fn compare_reports_zero_regressions_when_current_is_faster() {
     // Faster current must never count as a regression, regardless of
     // ratio (i.e. 0.5× / 0.01× — these are wins, not problems).
-    let base = baseline(&[("agentflow-core", 5_000_000_000)]);
-    let curr = current(&[("agentflow-core", 1_000_000_000)]);
+    let base = baseline(&[("yanshi-core", 5_000_000_000)]);
+    let curr = current(&[("yanshi-core", 1_000_000_000)]);
     let report = compare_test_timings(&base, &curr, 1.5);
     assert_eq!(report.regressions.len(), 0);
   }
@@ -617,20 +617,20 @@ mod test_gate_tests {
   #[test]
   fn compare_separates_missing_in_current_and_baseline() {
     let base = baseline(&[
-      ("agentflow-core", 1_000_000_000),
-      ("agentflow-llm", 2_000_000_000),
+      ("yanshi-core", 1_000_000_000),
+      ("yanshi-llm", 2_000_000_000),
     ]);
     let curr = current(&[
-      ("agentflow-core", 1_100_000_000),
-      ("agentflow-newcrate", 500_000_000),
+      ("yanshi-core", 1_100_000_000),
+      ("yanshi-newcrate", 500_000_000),
     ]);
     let report = compare_test_timings(&base, &curr, 1.5);
     assert_eq!(report.compared, 1);
     assert_eq!(report.regressions.len(), 0);
-    assert_eq!(report.missing_in_current, vec!["agentflow-llm".to_string()]);
+    assert_eq!(report.missing_in_current, vec!["yanshi-llm".to_string()]);
     assert_eq!(
       report.missing_in_baseline,
-      vec!["agentflow-newcrate".to_string()]
+      vec!["yanshi-newcrate".to_string()]
     );
   }
 
@@ -656,7 +656,7 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
   fn parse_test_count_returns_none_when_no_summary_line() {
     // Compile failure / empty crate / harness disabled — no test
     // result lines at all.
-    let stdout = "Compiling agentflow-core\nerror: something blew up\n";
+    let stdout = "Compiling yanshi-core\nerror: something blew up\n";
     assert_eq!(parse_test_count_from_output(stdout), None);
   }
 
@@ -674,14 +674,14 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
   fn baseline_file_roundtrips_through_serde() {
     let mut timings = BTreeMap::new();
     timings.insert(
-      "agentflow-core".to_string(),
+      "yanshi-core".to_string(),
       TestTimingEntry {
         wall_clock_ns: 12_345_678_900,
         test_count: Some(139),
       },
     );
     timings.insert(
-      "agentflow-tools".to_string(),
+      "yanshi-tools".to_string(),
       TestTimingEntry {
         wall_clock_ns: 3_000_000_000,
         test_count: None,
@@ -713,8 +713,8 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
       "xtask must be excluded: {crates:?}"
     );
     assert!(
-      crates.contains(&"agentflow-core".to_string()),
-      "agentflow-core must remain: {crates:?}"
+      crates.contains(&"yanshi-core".to_string()),
+      "yanshi-core must remain: {crates:?}"
     );
   }
 
@@ -723,13 +723,13 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
     let workspace_root = crate::workspace_root();
     let crates = select_test_gate_crates(
       &workspace_root,
-      &["agentflow-core".to_string(), "agentflow-tools".to_string()],
+      &["yanshi-core".to_string(), "yanshi-tools".to_string()],
       &[],
     )
     .unwrap();
     assert_eq!(
       crates,
-      vec!["agentflow-core".to_string(), "agentflow-tools".to_string()]
+      vec!["yanshi-core".to_string(), "yanshi-tools".to_string()]
     );
   }
 
@@ -737,9 +737,9 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
   fn select_crates_respects_exclude_filter() {
     let workspace_root = crate::workspace_root();
     let crates =
-      select_test_gate_crates(&workspace_root, &[], &["agentflow-core".to_string()]).unwrap();
-    assert!(!crates.contains(&"agentflow-core".to_string()));
-    assert!(crates.contains(&"agentflow-tools".to_string()));
+      select_test_gate_crates(&workspace_root, &[], &["yanshi-core".to_string()]).unwrap();
+    assert!(!crates.contains(&"yanshi-core".to_string()));
+    assert!(crates.contains(&"yanshi-tools".to_string()));
   }
 
   #[test]
@@ -757,7 +757,7 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
       },
       notes: vec![],
       timings: BTreeMap::from([(
-        "agentflow-core".to_string(),
+        "yanshi-core".to_string(),
         TestTimingEntry {
           wall_clock_ns: 1_000_000,
           test_count: Some(7),
@@ -821,7 +821,7 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
       },
       notes: vec![],
       timings: BTreeMap::from([(
-        "agentflow-core".to_string(),
+        "yanshi-core".to_string(),
         TestTimingEntry {
           wall_clock_ns: 1_000_000_000,
           test_count: Some(100),
@@ -832,7 +832,7 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
       host: baseline.host.clone(),
       notes: vec![],
       timings: BTreeMap::from([(
-        "agentflow-core".to_string(),
+        "yanshi-core".to_string(),
         TestTimingEntry {
           wall_clock_ns: 800_000_000,
           test_count: Some(100),
@@ -851,7 +851,7 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
         "--input".into(),
         input_path.to_string_lossy().into_owned(),
         "--include".into(),
-        "agentflow-core".into(),
+        "yanshi-core".into(),
       ],
       &mut out,
       &mut err,
@@ -863,7 +863,7 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
       String::from_utf8_lossy(&err)
     );
     let stdout = String::from_utf8_lossy(&out);
-    assert!(stdout.contains("agentflow-core"));
+    assert!(stdout.contains("yanshi-core"));
     assert!(stdout.contains("ratio=0.80×"));
   }
 
@@ -883,7 +883,7 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
       },
       notes: vec![],
       timings: BTreeMap::from([(
-        "agentflow-core".to_string(),
+        "yanshi-core".to_string(),
         TestTimingEntry {
           wall_clock_ns: 1_000_000_000,
           test_count: None,
@@ -895,7 +895,7 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
       host: baseline.host.clone(),
       notes: vec![],
       timings: BTreeMap::from([(
-        "agentflow-core".to_string(),
+        "yanshi-core".to_string(),
         TestTimingEntry {
           wall_clock_ns: 2_000_000_000,
           test_count: None,
@@ -914,7 +914,7 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
         "--input".into(),
         input_path.to_string_lossy().into_owned(),
         "--include".into(),
-        "agentflow-core".into(),
+        "yanshi-core".into(),
       ],
       &mut out,
       &mut err,
@@ -922,7 +922,7 @@ test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
     assert!(res.is_err(), "2.0× must fail at the 1.5× threshold");
     let stderr = String::from_utf8_lossy(&err);
     assert!(
-      stderr.contains("agentflow-core"),
+      stderr.contains("yanshi-core"),
       "diagnostic must name the regressed crate: {stderr}"
     );
     assert!(

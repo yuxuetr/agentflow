@@ -1,0 +1,131 @@
+# U1.2: YANSHI_SECURITY_PROFILE for the gateway process. Defaults to
+# `local` so existing installs keep their current (permissive) behavior
+# on `helm upgrade`.
+#
+# V3.1: a missing bearer token now fails startup (CrashLoopBackOff)
+# under EVERY profile, not just `production` — a pod's containerPort is
+# never loopback-only, so the gateway refuses to run unauthenticated
+# regardless of `securityProfile`. Set `secretEnv.YANSHI_API_TOKEN`
+# (or `existingSecret` with an `YANSHI_API_TOKEN` key) below before
+# installing; see docs/DEPLOYMENT.md § Security profile.
+#
+# PRODUCTION DEPLOYMENTS SHOULD STILL SET THIS TO `production` EXPLICITLY
+# (`--set securityProfile=production`) for the rest of its fail-closed
+# posture, which the token check alone does not cover:
+#   - CORS stays permissive instead of an explicit origin allow-list;
+#   - if you also enable a worker gRPC control plane, worker admission
+#     policy is NOT fail-closed under `local`.
+# See docs/DEPLOYMENT.md § Security profile and docs/SECURITY_PROFILES.md
+# for the full defaults table.
+securityProfile: local
+
+replicaCount: 1
+
+# W4.2a: guarded — the chart refuses to render replicaCount > 1 (or
+# autoscaling.minReplicas > 1) unless this is explicitly set true.
+# `yanshi-server` today keeps several pieces of state process-local:
+# SSE event fan-out (a run's live events only reach subscribers on the
+# same pod that's executing it), per-tenant run-admission concurrency
+# and rate limits (each pod enforces its own independent counter, so N
+# replicas silently multiply the effective limit by N), and harness
+# approval/cancellation routing (a decide/cancel HTTP request landing on
+# a different pod than the one running the session either 404s or
+# silently no-ops while still reporting success). None of this is fixed
+# yet — see TODOs.md W4.2 for the tracked externalization work. Only
+# set this true if you've read that and accept the gaps.
+allowMultiReplica: false
+
+image:
+  repository: yanshi
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 80
+
+containerPort: 3000
+
+env:
+  RUST_LOG: info
+  PORT: "3000"
+
+secretEnv:
+  DATABASE_URL: ""
+  # V3.1: required unless `existingSecret` supplies an
+  # YANSHI_API_TOKEN key instead — see the `securityProfile` comment
+  # above.
+  YANSHI_API_TOKEN: ""
+
+existingSecret: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# HPA is opt-in (enabled: false) to preserve the prior single-replica
+# behavior for existing installs; enabling it ignores replicaCount.
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+
+# U3.2: PodDisruptionBudget, opt-in (enabled: false) — like autoscaling
+# above, and for the same single-replica-by-default reason: with
+# replicaCount: 1, a PDB requiring minAvailable: 1 blocks voluntary
+# eviction entirely (node drains for maintenance/upgrades would stall
+# waiting for a PDB that can never be satisfied while giving up the
+# only replica). Only enable this for deployments actually running
+# more than one replica (replicaCount > 1, or autoscaling.enabled with
+# minReplicas > 1) — see docs/DEPLOYMENT.md § PodDisruptionBudget.
+podDisruptionBudget:
+  enabled: false
+  # Set exactly one of minAvailable / maxUnavailable; minAvailable
+  # takes precedence if both are set. Accepts an integer or a
+  # percentage string (e.g. "50%").
+  minAvailable: 1
+  maxUnavailable: ""
+
+livenessProbe:
+  path: /health/live
+  initialDelaySeconds: 10
+  periodSeconds: 10
+
+readinessProbe:
+  path: /health/ready
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

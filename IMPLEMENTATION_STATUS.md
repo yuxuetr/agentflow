@@ -1,4 +1,4 @@
-# AgentFlow Project - Current Implementation Status
+# Yanshi Project - Current Implementation Status
 
 > Archived historical reference (snapshot dated 2025-10-25). For the
 > maintained current status, see `docs/CURRENT_STATUS.md`, which is the
@@ -11,25 +11,25 @@
 
 ## Executive Summary
 
-AgentFlow is a Rust-based workflow orchestration platform with comprehensive LLM integration support. The project is structured as a workspace with 6 core crates, providing both SDK (code-first) and CLI (configuration-first) interfaces. The implementation is mature in core areas (workflow execution, LLM providers, built-in nodes) while MCP/RAG features documented in CLAUDE.md remain in early planning stages.
+Yanshi is a Rust-based workflow orchestration platform with comprehensive LLM integration support. The project is structured as a workspace with 6 core crates, providing both SDK (code-first) and CLI (configuration-first) interfaces. The implementation is mature in core areas (workflow execution, LLM providers, built-in nodes) while MCP/RAG features documented in CLAUDE.md remain in early planning stages.
 
 ## Workspace Structure
 
 The project is organized as a Cargo workspace with the following members:
 
 ```
-agentflow/
-├── agentflow-core/      - Core workflow execution engine
-├── agentflow-nodes/     - Built-in node implementations
-├── agentflow-llm/       - Unified LLM provider interface
-├── agentflow-cli/       - Command-line interface and runner
-├── agentflow-mcp/       - Model Context Protocol integration (early stage)
-└── agentflow-agents/    - Reusable AI agent applications
+yanshi/
+├── yanshi-core/      - Core workflow execution engine
+├── yanshi-nodes/     - Built-in node implementations
+├── yanshi-llm/       - Unified LLM provider interface
+├── yanshi-cli/       - Command-line interface and runner
+├── yanshi-mcp/       - Model Context Protocol integration (early stage)
+└── yanshi-agents/    - Reusable AI agent applications
 ```
 
 ## Crate Implementation Status
 
-### 1. agentflow-core (Core Engine)
+### 1. yanshi-core (Core Engine)
 
 **Status: IMPLEMENTED & MATURE**
 
@@ -50,7 +50,7 @@ agentflow/
 - ✅ While nodes (conditional loops with max iteration protection)
 - ✅ Conditional execution (run_if expressions)
 - ✅ Input mapping between nodes using template syntax
-- ✅ State persistence to ~/.agentflow/runs/<run_id>/
+- ✅ State persistence to ~/.yanshi/runs/<run_id>/
 - ✅ FlowValue abstraction (JSON, File, URL types)
 - ✅ Observability with tracing support
 
@@ -71,7 +71,7 @@ pub enum NodeType {
 
 ---
 
-### 2. agentflow-nodes (Built-in Node Implementations)
+### 2. yanshi-nodes (Built-in Node Implementations)
 
 **Status: IMPLEMENTED & FUNCTIONAL**
 
@@ -114,7 +114,7 @@ pub enum NodeType {
 
 **File Structure**:
 ```
-agentflow-nodes/src/
+yanshi-nodes/src/
 ├── lib.rs
 ├── error.rs
 ├── factory_traits.rs
@@ -143,7 +143,7 @@ agentflow-nodes/src/
 
 ---
 
-### 3. agentflow-llm (LLM Integration)
+### 3. yanshi-llm (LLM Integration)
 
 **Status: IMPLEMENTED & COMPREHENSIVE**
 
@@ -170,13 +170,13 @@ agentflow-nodes/src/
 - **ModelTypes** (`model_types.rs`, 15.7KB) - Model capabilities and metadata
 
 **Configuration System**:
-- Built-in defaults in `agentflow-llm/templates/default_models.yml`
+- Built-in defaults in `yanshi-llm/templates/default_models.yml`
   (authoritative; embedded via `include_str!`)
-- User config: `~/.agentflow/models.yml` (takes precedence over
+- User config: `~/.yanshi/models.yml` (takes precedence over
   built-in when present; auto-generated on first use)
 
 **Features**:
-- ✅ Unified LLM interface (AgentFlow fluent API)
+- ✅ Unified LLM interface (Yanshi fluent API)
 - ✅ Streaming response handling
 - ✅ Multimodal support (text + images)
 - ✅ Model registry with auto-discovery
@@ -187,8 +187,8 @@ agentflow-nodes/src/
 
 **Example Usage**:
 ```rust
-AgentFlow::init().await?;
-let response = AgentFlow::model("gpt-4o")
+Yanshi::init().await?;
+let response = Yanshi::model("gpt-4o")
     .prompt("Hello, world!")
     .temperature(0.7)
     .max_tokens(1000)
@@ -197,7 +197,7 @@ let response = AgentFlow::model("gpt-4o")
 
 ---
 
-### 4. agentflow-cli (Command-Line Interface)
+### 4. yanshi-cli (Command-Line Interface)
 
 **Status: IMPLEMENTED & FUNCTIONAL**
 
@@ -206,7 +206,7 @@ let response = AgentFlow::model("gpt-4o")
 **Command Structure** (`src/main.rs`, 6.7KB):
 
 ```
-agentflow
+yanshi
 ├── workflow
 │   └── run <file> [--watch] [--output] [--input KEY VALUE] [--dry-run] [--timeout] [--max-retries]
 ├── llm
@@ -256,11 +256,11 @@ agentflow
 
 **Configuration** (`src/config/`):
 - `mod.rs` - Configuration loading and management
-- `~/.agentflow/config.yml` - User configuration file
+- `~/.yanshi/config.yml` - User configuration file
 
 ---
 
-### 5. agentflow-mcp (Model Context Protocol)
+### 5. yanshi-mcp (Model Context Protocol)
 
 **Status: EARLY STAGE / PLANNING**
 
@@ -277,7 +277,7 @@ agentflow
 **Current Status**:
 - ⚠️ Basic framework in place but NOT feature-complete
 - ⚠️ No official Rust MCP SDK yet (commented in Cargo.toml)
-- ⚠️ MCPToolNode referenced in agentflow-agents but uses undefined SharedState
+- ⚠️ MCPToolNode referenced in yanshi-agents but uses undefined SharedState
 - ⚠️ Stdio transport partially implemented
 - ⚠️ HTTP transport NOT implemented
 
@@ -294,7 +294,7 @@ agentflow
 
 ---
 
-### 6. agentflow-agents (AI Agent Applications)
+### 6. yanshi-agents (AI Agent Applications)
 
 **Status: FRAMEWORK STAGE**
 
@@ -325,17 +325,17 @@ agentflow
 **Test Types**:
 
 ### Unit Tests
-- **agentflow-core** (`src/*.rs`): Inline tests in modules
+- **yanshi-core** (`src/*.rs`): Inline tests in modules
   - `async_node.rs` - AsyncNode trait tests
   - `flow.rs` - Map and While node tests
 
 ### Integration Tests
-- **agentflow-core** (`tests/workflow_integration_tests.rs`, 100+ lines)
+- **yanshi-core** (`tests/workflow_integration_tests.rs`, 100+ lines)
   - `test_simple_two_step_llm_workflow` - Sequential LLM execution
   - `test_conditional_workflow_runs` - Conditional node execution
   - Requires STEPFUN_API_KEY environment variable
 
-- **agentflow-cli** (`tests/workflow_tests.rs`)
+- **yanshi-cli** (`tests/workflow_tests.rs`)
   - `test_parallel_map_workflow` - Parallel node execution
   - `test_stateful_while_loop_workflow` - Loop state management
 
@@ -345,7 +345,7 @@ agentflow
 
 ## Workflow Templates & Examples
 
-**Template Workflows** (`agentflow-cli/templates/`):
+**Template Workflows** (`yanshi-cli/templates/`):
 
 1. **simple.yml** - Basic single-node workflow
 2. **llm-chain.yml** - Multi-step LLM chaining
@@ -359,7 +359,7 @@ agentflow
 10. **tera-filters-example.yml** - Tera filter demonstrations
 11. **tera-complex-report-example.yml** - Complex report generation
 
-**Complex Example** (`agentflow-cli/examples/ai_research_assistant.yml`):
+**Complex Example** (`yanshi-cli/examples/ai_research_assistant.yml`):
 - Multi-step research workflow with:
   - While loop for arXiv paper search
   - LLM summarization
@@ -433,7 +433,7 @@ agentflow
 - ❌ **RAG (Retrieval-Augmented Generation)**
   - No implementation started
   - Vector store abstractions planned but not coded
-  - Would require: agentflow-rag crate, vector DB integrations
+  - Would require: yanshi-rag crate, vector DB integrations
 
 - ❌ **MCP-First LLM Context**
   - Auto-discovery of MCP tools
@@ -458,7 +458,7 @@ agentflow
 - Well-documented public APIs with doc comments
 
 ### Error Handling
-- Custom error types per crate (AgentFlowError, NodeError, LLMError, MCPError)
+- Custom error types per crate (YanshiError, NodeError, LLMError, MCPError)
 - Using `thiserror` for error derivation
 - Comprehensive error variants with contextual information
 
@@ -519,7 +519,7 @@ agentflow
    - Actual: Basic framework, no working implementation
 
 2. **RAG Integration**
-   - Documented: agentflow-rag crate, vector store abstractions
+   - Documented: yanshi-rag crate, vector store abstractions
    - Actual: No RAG crate, no implementations
 
 3. **MCPNode & RAGNode**
@@ -555,7 +555,7 @@ agentflow
 4. Integration with LLMNode for tool discovery
 
 ### Priority 3: RAG Integration
-1. Create agentflow-rag crate
+1. Create yanshi-rag crate
 2. Implement vector store abstractions
 3. Add popular vector DB integrations (Pinecone, Weaviate, Qdrant)
 4. Create RAGNode for retrieval

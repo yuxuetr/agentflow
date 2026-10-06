@@ -2,7 +2,7 @@
 """mdBook preprocessor: send links that leave the book to GitHub.
 
 Pages under docs/ are written to be read on GitHub, so they link with relative
-paths to source files (../agentflow-core/src/flow.rs) and to docs that are
+paths to source files (../yanshi-core/src/flow.rs) and to docs that are
 deliberately not chapters (archive/, dated evaluations). Rendered as-is those
 links 404 on the site. Every relative link whose target is not a chapter (or a
 non-Markdown file mdBook copies alongside the pages) is rewritten to the file's

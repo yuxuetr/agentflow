@@ -1,6 +1,6 @@
 ## Review summary
 
-该 commit 实现了 A1 blog-to-podcast Plan A 薄壳封装示例：在 `examples/applications/blog-to-podcast/` 下新建独立 Cargo 项目，通过自定义 `PodcastNode`（`AsyncNode`）将 phonon-podcast 的完整 pipeline（脚本生成 → TTS → 音频拼装 → SRT）接入 AgentFlow 的 2 节点 DAG。代码质量整体良好：错误映射清晰、测试策略分层（hermetic CLI + `#[ignore]` live smoke）、tracing 完善、clippy/fmt clean。但 Cargo.toml 中的跨 workspace path dependency 结构存在严重的可移植性问题。
+该 commit 实现了 A1 blog-to-podcast Plan A 薄壳封装示例：在 `examples/applications/blog-to-podcast/` 下新建独立 Cargo 项目，通过自定义 `PodcastNode`（`AsyncNode`）将 phonon-podcast 的完整 pipeline（脚本生成 → TTS → 音频拼装 → SRT）接入 Yanshi 的 2 节点 DAG。代码质量整体良好：错误映射清晰、测试策略分层（hermetic CLI + `#[ignore]` live smoke）、tracing 完善、clippy/fmt clean。但 Cargo.toml 中的跨 workspace path dependency 结构存在严重的可移植性问题。
 
 ## Issues
 
@@ -26,7 +26,7 @@
 ## Strengths
 
 - 测试策略合理：3 个 hermetic CLI smoke 保证基础行为，1 个 `#[ignore]` live test 在有 API key 时才跑，CI 无 key 也不会阻塞。
-- 错误映射完整：phonon 的 `PodcastError` 被显式映射到 `AgentFlowError::{Configuration, AsyncExecution}`，缺 env var 时提示清晰。
+- 错误映射完整：phonon 的 `PodcastError` 被显式映射到 `YanshiError::{Configuration, AsyncExecution}`，缺 env var 时提示清晰。
 - tracing 埋点到位：`#[instrument]` 在 node execute 上覆盖了 backend、target_segments、language 等字段，便于运维排查。
 - `TtsBackend::with_edge_tts()` 提供了零成本的免费 fallback 路径，降低了新用户上手门槛。
 

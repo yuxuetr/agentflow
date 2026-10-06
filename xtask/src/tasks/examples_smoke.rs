@@ -30,42 +30,42 @@ struct SmokeExample {
 const SMOKE_EXAMPLES: &[SmokeExample] = &[
   // Tool policy + sandbox demo (P3.1 row #12). Pure offline; no LLM.
   SmokeExample {
-    package: "agentflow-tools",
+    package: "yanshi-tools",
     example: "tool_policy_sandbox_demo",
     features: &[],
     timeout: Duration::from_secs(20),
   },
   // Simple tracing demo (P3.1 row #11). JSONL writer, no LLM.
   SmokeExample {
-    package: "agentflow-tracing",
+    package: "yanshi-tracing",
     example: "simple_tracing",
     features: &[],
     timeout: Duration::from_secs(20),
   },
   // Core DAG fixed-shape walkthrough. No LLM.
   SmokeExample {
-    package: "agentflow-core",
+    package: "yanshi-core",
     example: "fixed_dag_workflow",
     features: &[],
     timeout: Duration::from_secs(20),
   },
   // ReAct agent (P3.1 row #3). Mock LLM, ~5s.
   SmokeExample {
-    package: "agentflow-agents",
+    package: "yanshi-agents",
     example: "agent_native_react",
     features: &[],
     timeout: Duration::from_secs(45),
   },
   // Plan-execute agent (P3.1 row #4). Mock LLM, ~5s.
   SmokeExample {
-    package: "agentflow-agents",
+    package: "yanshi-agents",
     example: "plan_execute_agent",
     features: &[],
     timeout: Duration::from_secs(45),
   },
   // Hybrid workflow embedding an AgentNode (P3.1 row #2). Mock LLM.
   SmokeExample {
-    package: "agentflow-agents",
+    package: "yanshi-agents",
     example: "hybrid_workflow_agent",
     features: &[],
     timeout: Duration::from_secs(60),
@@ -73,7 +73,7 @@ const SMOKE_EXAMPLES: &[SmokeExample] = &[
   // Dynamic-workflow vertical-slice spike (P-A1.6): an agent generates a Flow
   // at runtime and core executes it. Pure offline, no LLM.
   SmokeExample {
-    package: "agentflow-agents",
+    package: "yanshi-agents",
     example: "dynamic_workflow_spike",
     features: &[],
     timeout: Duration::from_secs(10),
@@ -81,7 +81,7 @@ const SMOKE_EXAMPLES: &[SmokeExample] = &[
   // Dynamic workflow from a declarative JSON plan (P-A4.4): plan -> Flow of real
   // tool calls, executed in parallel. Pure offline, no LLM.
   SmokeExample {
-    package: "agentflow-agents",
+    package: "yanshi-agents",
     example: "dynamic_workflow_plan",
     features: &[],
     timeout: Duration::from_secs(10),
@@ -89,7 +89,7 @@ const SMOKE_EXAMPLES: &[SmokeExample] = &[
   // SkillBuilder direct API (P3.1 row #8). Spawns a real MCP demo
   // subprocess so it's a touch slower than the mock-only examples.
   SmokeExample {
-    package: "agentflow-skills",
+    package: "yanshi-skills",
     example: "skill_calls_mcp_tool",
     features: &[],
     timeout: Duration::from_secs(60),

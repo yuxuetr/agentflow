@@ -1,28 +1,28 @@
 # Deployment
 
-AgentFlow currently has two runnable binaries:
+Yanshi currently has two runnable binaries:
 
-- `agentflow-server`: long-running Axum gateway service. This is the primary container and Helm target.
-- `agentflow`: CLI workflow, skill, MCP, trace, and configuration utility. It can be built from the same Dockerfile by changing build args, but it is not the default Kubernetes workload.
+- `yanshi-server`: long-running Axum gateway service. This is the primary container and Helm target.
+- `yanshi`: CLI workflow, skill, MCP, trace, and configuration utility. It can be built from the same Dockerfile by changing build args, but it is not the default Kubernetes workload.
 
 ## Docker Image
 
 Build the server image:
 
 ```bash
-docker build -t agentflow:server .
+docker build -t yanshi:server .
 ```
 
 Build the CLI image:
 
 ```bash
 docker build \
-  --build-arg PACKAGE=agentflow-cli \
-  --build-arg BIN=agentflow \
-  -t agentflow:cli .
+  --build-arg PACKAGE=yanshi-cli \
+  --build-arg BIN=yanshi \
+  -t yanshi:cli .
 ```
 
-The image runs as a non-root user and exposes port `3000` for `agentflow-server`.
+The image runs as a non-root user and exposes port `3000` for `yanshi-server`.
 
 ## Docker Compose
 
@@ -37,13 +37,13 @@ curl http://localhost:3000/health/ready
 
 Compose sets:
 
-- `DATABASE_URL=postgres://agentflow:agentflow@postgres:5432/agentflow`
+- `DATABASE_URL=postgres://yanshi:yanshi@postgres:5432/yanshi`
 - `PORT=3000`
-- `AGENTFLOW_API_TOKEN=local-dev-change-me` (V3.1 — see below)
-- `AGENTFLOW_RUN_DIR=/data/runs` can be set to control workflow artifact storage.
+- `YANSHI_API_TOKEN=local-dev-change-me` (V3.1 — see below)
+- `YANSHI_RUN_DIR=/data/runs` can be set to control workflow artifact storage.
 - `RUST_LOG=info`
 
-`AGENTFLOW_SECURITY_PROFILE` is left unset (defaults to `local`) — see
+`YANSHI_SECURITY_PROFILE` is left unset (defaults to `local`) — see
 [§ Security profile](#security-profile-u12) below for what that means
 and what to set for anything beyond local development.
 
@@ -51,7 +51,7 @@ and what to set for anything beyond local development.
 loopback-only), the gateway now refuses to start under *any* profile
 if no bearer token is configured — see [§ PORT and PaaS-style public
 binding](#port-and-paas-style-public-binding-v31). The shipped
-`AGENTFLOW_API_TOKEN` value above is a well-known placeholder, not a
+`YANSHI_API_TOKEN` value above is a well-known placeholder, not a
 secret; it exists only so `docker compose up --build` keeps working
 out of the box for a local trial. Replace it with a private value
 before this stack (or its published `3000:3000` port) is reachable by
@@ -62,22 +62,22 @@ anyone else.
 Install with an existing PostgreSQL connection secret:
 
 ```bash
-kubectl create secret generic agentflow-db \
-  --from-literal=DATABASE_URL='postgres://user:password@postgres:5432/agentflow'
+kubectl create secret generic yanshi-db \
+  --from-literal=DATABASE_URL='postgres://user:password@postgres:5432/yanshi'
 
-helm install agentflow charts/agentflow \
-  --set image.repository=agentflow \
+helm install yanshi charts/yanshi \
+  --set image.repository=yanshi \
   --set image.tag=server \
-  --set existingSecret=agentflow-db
+  --set existingSecret=yanshi-db
 ```
 
 For local development only, Helm can create the secret from values:
 
 ```bash
-helm install agentflow charts/agentflow \
-  --set image.repository=agentflow \
+helm install yanshi charts/yanshi \
+  --set image.repository=yanshi \
   --set image.tag=server \
-  --set secretEnv.DATABASE_URL='postgres://user:password@postgres:5432/agentflow'
+  --set secretEnv.DATABASE_URL='postgres://user:password@postgres:5432/yanshi'
 ```
 
 Prefer `existingSecret` in shared environments so credentials do not live in Helm release values.
@@ -87,21 +87,21 @@ Prefer `existingSecret` in shared environments so credentials do not live in Hel
 `values.yaml` ships `securityProfile: local` by default so existing
 installs keep their current behavior across `helm upgrade`.
 
-**V3.1:** a missing `AGENTFLOW_API_TOKEN` now fails startup
+**V3.1:** a missing `YANSHI_API_TOKEN` now fails startup
 (`CrashLoopBackOff`) under *every* profile, not just `production` — a
 pod's `containerPort` is never loopback-only, so an unauthenticated
 gateway is refused regardless of `securityProfile`. Set a token before
 installing, the same way `DATABASE_URL` is already wired:
 
 ```bash
-kubectl create secret generic agentflow-db \
-  --from-literal=DATABASE_URL='postgres://user:password@postgres:5432/agentflow' \
-  --from-literal=AGENTFLOW_API_TOKEN='replace-with-a-real-secret'
+kubectl create secret generic yanshi-db \
+  --from-literal=DATABASE_URL='postgres://user:password@postgres:5432/yanshi' \
+  --from-literal=YANSHI_API_TOKEN='replace-with-a-real-secret'
 
-helm install agentflow charts/agentflow \
-  --set image.repository=agentflow \
+helm install yanshi charts/yanshi \
+  --set image.repository=yanshi \
   --set image.tag=server \
-  --set existingSecret=agentflow-db
+  --set existingSecret=yanshi-db
 ```
 
 Or, for local development only, let Helm create the secret from values
@@ -109,11 +109,11 @@ Or, for local development only, let Helm create the secret from values
 shared environments so credentials don't live in Helm release values):
 
 ```bash
-helm install agentflow charts/agentflow \
-  --set image.repository=agentflow \
+helm install yanshi charts/yanshi \
+  --set image.repository=yanshi \
   --set image.tag=server \
-  --set secretEnv.DATABASE_URL='postgres://user:password@postgres:5432/agentflow' \
-  --set secretEnv.AGENTFLOW_API_TOKEN='replace-with-a-real-secret'
+  --set secretEnv.DATABASE_URL='postgres://user:password@postgres:5432/yanshi' \
+  --set secretEnv.YANSHI_API_TOKEN='replace-with-a-real-secret'
 ```
 
 A configured token satisfies the new startup check under every
@@ -122,15 +122,15 @@ fully trust should still set `production` explicitly for the rest of
 its fail-closed posture, which the token check alone does not cover:
 
 ```bash
-helm install agentflow charts/agentflow \
-  --set image.repository=agentflow \
+helm install yanshi charts/yanshi \
+  --set image.repository=yanshi \
   --set image.tag=server \
-  --set existingSecret=agentflow-db \
+  --set existingSecret=yanshi-db \
   --set securityProfile=production
 ```
 
 Under `production`: CORS defaults to an explicit origin allow-list
-instead of permissive (see `AGENTFLOW_CORS_ALLOWED_ORIGINS` above);
+instead of permissive (see `YANSHI_CORS_ALLOWED_ORIGINS` above);
 and if you also enable the worker gRPC control plane (T1.2,
 `--worker-grpc`), worker admission becomes fail-closed. See
 `docs/SECURITY_PROFILES.md` for the full per-profile defaults table.
@@ -142,31 +142,31 @@ unconditional priority, always binding `0.0.0.0:$PORT` when it's set —
 the standard convention PaaS platforms (Heroku/Render/Railway/Cloud Run
 and similar) use to tell a process which port to listen on for public
 traffic. Because that bind is never loopback-only, the gateway now
-refuses to start (exit code 2, or a `Fail` readiness under `agentflow
+refuses to start (exit code 2, or a `Fail` readiness under `yanshi
 serve --check`) if no bearer token is configured, **regardless of
-`AGENTFLOW_SECURITY_PROFILE`** — `local`/`dev`'s historical
+`YANSHI_SECURITY_PROFILE`** — `local`/`dev`'s historical
 no-token-required posture only ever excused a missing token when the
 socket was loopback-only (`127.0.0.1`/`::1`), and that exemption never
 applied to a public bind in the first place; it just wasn't enforced
-before V3.1. To satisfy the check: set `AGENTFLOW_API_TOKEN` (or
-`AGENTFLOW_API_TOKEN_TENANTS`), bind to a loopback address instead
-(unset `PORT`, set `AGENTFLOW_SERVE_BIND=127.0.0.1:<port>`), or set
-`AGENTFLOW_SECURITY_PROFILE=production` with a token configured.
+before V3.1. To satisfy the check: set `YANSHI_API_TOKEN` (or
+`YANSHI_API_TOKEN_TENANTS`), bind to a loopback address instead
+(unset `PORT`, set `YANSHI_SERVE_BIND=127.0.0.1:<port>`), or set
+`YANSHI_SECURITY_PROFILE=production` with a token configured.
 
-Caveat: `agentflow-cli`'s `agentflow serve --bind <addr>` spawns the
-`agentflow-server` binary as a child process and sets
-`AGENTFLOW_SERVE_BIND` on it, but does not clear an `PORT` inherited
+Caveat: `yanshi-cli`'s `yanshi serve --bind <addr>` spawns the
+`yanshi-server` binary as a child process and sets
+`YANSHI_SERVE_BIND` on it, but does not clear an `PORT` inherited
 from the parent shell — since `resolve_bind()` checks `PORT` first,
 an inherited `PORT` still wins over an explicit `--bind 127.0.0.1:...`
-flag. If you're launching `agentflow serve` from an environment that
+flag. If you're launching `yanshi serve` from an environment that
 already has `PORT` set (common when a process manager or PaaS buildpack
-exports it globally), unset it first or rely on `AGENTFLOW_SERVE_BIND`
+exports it globally), unset it first or rely on `YANSHI_SERVE_BIND`
 being what you actually want bound.
 
 ### Resource requests/limits and autoscaling (T4.3)
 
 `values.yaml` ships default CPU/memory requests and limits on the
-`agentflow-server` container (`resources.requests` = 100m CPU / 128Mi
+`yanshi-server` container (`resources.requests` = 100m CPU / 128Mi
 memory, `resources.limits` = 500m CPU / 512Mi memory); override with
 `--set resources.requests.cpu=...` or a values override file for
 production sizing.
@@ -175,8 +175,8 @@ A `HorizontalPodAutoscaler` template is available but disabled by
 default (`autoscaling.enabled: false`) to keep the prior single-replica
 behavior for existing installs unchanged.
 
-**W4.2a — running more than one `agentflow-server` replica is not yet
-safe.** `agentflow-server` keeps several pieces of state process-local:
+**W4.2a — running more than one `yanshi-server` replica is not yet
+safe.** `yanshi-server` keeps several pieces of state process-local:
 SSE event fan-out (a run's live events only reach subscribers on the
 same pod that's executing it), per-tenant run-admission concurrency and
 rate limits (each pod enforces its own independent counter, so N
@@ -195,10 +195,10 @@ Once you've read that and decided to proceed, enable HPA to scale on
 CPU (and optionally memory) utilization:
 
 ```bash
-helm install agentflow charts/agentflow \
-  --set image.repository=agentflow \
+helm install yanshi charts/yanshi \
+  --set image.repository=yanshi \
   --set image.tag=server \
-  --set existingSecret=agentflow-db \
+  --set existingSecret=yanshi-db \
   --set allowMultiReplica=true \
   --set autoscaling.enabled=true \
   --set autoscaling.minReplicas=2 \
@@ -225,10 +225,10 @@ drains for maintenance/upgrades stall indefinitely instead of
 respecting `terminationGracePeriodSeconds`).
 
 ```bash
-helm install agentflow charts/agentflow \
-  --set image.repository=agentflow \
+helm install yanshi charts/yanshi \
+  --set image.repository=yanshi \
   --set image.tag=server \
-  --set existingSecret=agentflow-db \
+  --set existingSecret=yanshi-db \
   --set autoscaling.enabled=true \
   --set autoscaling.minReplicas=2 \
   --set podDisruptionBudget.enabled=true \
@@ -243,7 +243,7 @@ default (PDB omitted entirely) and with it explicitly enabled.
 
 ## Health Checks
 
-`agentflow-server` exposes:
+`yanshi-server` exposes:
 
 - `/health`: basic service health.
 - `/health/live`: liveness probe.
@@ -255,14 +255,14 @@ The Helm chart wires liveness and readiness probes to those endpoints. The curre
 
 - The server requires `DATABASE_URL`.
 - LLM provider keys and tool credentials should be provided through Kubernetes Secrets or external secret injection, not image layers.
-- CLI containers that need `~/.agentflow` can mount it as a volume at `/home/agentflow/.agentflow`.
+- CLI containers that need `~/.yanshi` can mount it as a volume at `/home/yanshi/.yanshi`.
 - Trace files should be backed by a persistent volume only when using file-backed trace storage.
 
 ### File-backed trace dir is opt-in and not garbage-collected
 
-Setting `AGENTFLOW_TRACE_DIR=<path>` opts the gateway in to writing one
+Setting `YANSHI_TRACE_DIR=<path>` opts the gateway in to writing one
 `<run_id>.json` file per `POST /v1/runs` execution (so operators can
-inspect via `agentflow trace tui <run_id> --dir <path>`). The Postgres
+inspect via `yanshi trace tui <run_id> --dir <path>`). The Postgres
 event log remains the source of truth either way.
 
 ### Persistent harness conversation memory (resume)
@@ -270,12 +270,12 @@ event log remains the source of truth either way.
 By default the live harness executor runs each session on an in-process
 conversation memory, so `POST /v1/harness/sessions/{id}:resume` restores the
 **event log** but not the agent's prior conversation. Set
-`AGENTFLOW_HARNESS_MEMORY_DB=<path>` to back the harness agent with a
+`YANSHI_HARNESS_MEMORY_DB=<path>` to back the harness agent with a
 persistent SQLite store keyed by `session_id` — then a resumed session reads
 its prior turns back across restarts (long-lived sessions). It is opt-in
 because a shared SQLite file assumes a single gateway node; multi-node
 deployments should front conversation memory with their own backend. The CLI
-(`agentflow harness run --session <id>`, `--model` path) persists under the
+(`yanshi harness run --session <id>`, `--model` path) persists under the
 run-dir automatically.
 
 The cleanup sweep documented under "Per-run retention overrides" deletes
@@ -288,26 +288,26 @@ no trace files are produced, no cleanup needed.
 
 ## v0.3.0 N8: Control-plane HTTP surface
 
-The gateway applies its `agentflow-db` migrations on startup
+The gateway applies its `yanshi-db` migrations on startup
 (`connect_and_migrate`). Six tables back the platform: `runs`, `steps`,
 `events`, `artifacts`, `skill_installs`, `mcp_sessions`. To verify the
 schema is up:
 
 ```bash
-docker compose up -d postgres agentflow-server
-docker compose exec postgres psql -U agentflow -d agentflow \
+docker compose up -d postgres yanshi-server
+docker compose exec postgres psql -U yanshi -d yanshi \
   -c "\dt"
 ```
 
 ### Authentication
 
 Every `/v1/*` route requires `Authorization: Bearer <token>` when
-`AGENTFLOW_API_TOKEN` and/or `AGENTFLOW_API_TOKEN_TENANTS` is set. With
+`YANSHI_API_TOKEN` and/or `YANSHI_API_TOKEN_TENANTS` is set. With
 neither set the server runs open (useful for local dev — startup logs a
 warning).
 
 ```bash
-export AGENTFLOW_API_TOKEN="dev-secret"
+export YANSHI_API_TOKEN="dev-secret"
 curl -H "Authorization: Bearer dev-secret" http://localhost:3000/v1/whoami
 ```
 
@@ -316,29 +316,29 @@ load balancers / kubelet probes work without secrets.
 
 #### Multi-tenant deployments: bind tokens to tenants (U1.1)
 
-`AGENTFLOW_API_TOKEN` is a single **unbound** token: any request
+`YANSHI_API_TOKEN` is a single **unbound** token: any request
 authenticated with it can claim to act as *any* tenant via the
-`X-Agentflow-Tenant` header, because nothing ties the token to a specific
+`X-Yanshi-Tenant` header, because nothing ties the token to a specific
 tenant. That's fine for a single-tenant deployment, but it means a
 multi-tenant deployment sharing one token has **no real tenant
 isolation** — the header is a self-reported claim, not a credential.
 
 For genuine isolation, issue one token per tenant via
-`AGENTFLOW_API_TOKEN_TENANTS` — comma-separated `token:tenant_id` pairs:
+`YANSHI_API_TOKEN_TENANTS` — comma-separated `token:tenant_id` pairs:
 
 ```bash
-export AGENTFLOW_API_TOKEN_TENANTS="tokA:tenant-acme,tokB:tenant-globex"
+export YANSHI_API_TOKEN_TENANTS="tokA:tenant-acme,tokB:tenant-globex"
 ```
 
 A request authenticated with `tokA` always acts as `tenant-acme`,
-regardless of what `X-Agentflow-Tenant` it sends — a header naming a
+regardless of what `X-Yanshi-Tenant` it sends — a header naming a
 *different* tenant is rejected (`403 tenant_mismatch`), not silently
-honored. `AGENTFLOW_API_TOKEN` can be set alongside
-`AGENTFLOW_API_TOKEN_TENANTS` (the legacy token keeps trusting the
+honored. `YANSHI_API_TOKEN` can be set alongside
+`YANSHI_API_TOKEN_TENANTS` (the legacy token keeps trusting the
 header, for callers that don't need per-tenant isolation — e.g. an
 internal ops tool) or omitted entirely (pure per-tenant-token mode). A
 token cannot appear in both variables — that's a startup config error.
-See `agentflow-server/src/auth.rs` module doc for the full precedence
+See `yanshi-server/src/auth.rs` module doc for the full precedence
 rule.
 
 ### Read-replica routing (P10.15.2)
@@ -351,18 +351,18 @@ deletes) continue to hit the primary.
 
 ```bash
 # Primary URL for writes + migrations:
-export DATABASE_URL="postgres://gw:secret@primary.db.internal/agentflow"
+export DATABASE_URL="postgres://gw:secret@primary.db.internal/yanshi"
 # Replica URL for SELECTs:
-export AGENTFLOW_DATABASE_READ_URL="postgres://gw:secret@replica.db.internal/agentflow"
+export YANSHI_DATABASE_READ_URL="postgres://gw:secret@replica.db.internal/yanshi"
 
-agentflow serve
+yanshi serve
 # Or via the CLI flag:
-agentflow serve \
+yanshi serve \
   --database-url "$DATABASE_URL" \
-  --database-read-url "$AGENTFLOW_DATABASE_READ_URL"
+  --database-read-url "$YANSHI_DATABASE_READ_URL"
 ```
 
-When `AGENTFLOW_DATABASE_READ_URL` is unset (the default),
+When `YANSHI_DATABASE_READ_URL` is unset (the default),
 reads fall back to the primary — that's the single-node
 deployment behavior and is fully backwards-compatible.
 
@@ -387,14 +387,14 @@ deployment behavior and is fully backwards-compatible.
 ### Submit and inspect a run
 
 `POST /v1/runs` executes config-first workflow YAML through
-`agentflow-core::Flow`. The server persists the queued row immediately,
+`yanshi-core::Flow`. The server persists the queued row immediately,
 switches it to `running` in the background, stores workflow events in the
 `events` table, streams them over SSE, and sets the terminal status to
 `succeeded` or `failed`.
 
-Run artifacts are written under `AGENTFLOW_RUN_DIR/<run_id>` when
-`AGENTFLOW_RUN_DIR` is set; otherwise the default is
-`~/.agentflow/runs/<run_id>` (or a temp directory if the home directory cannot
+Run artifacts are written under `YANSHI_RUN_DIR/<run_id>` when
+`YANSHI_RUN_DIR` is set; otherwise the default is
+`~/.yanshi/runs/<run_id>` (or a temp directory if the home directory cannot
 be resolved). The chosen per-run path is returned as `run_dir` from
 `GET /v1/runs/{id}`.
 
@@ -447,7 +447,7 @@ defaults.
 
 To inspect run status (the previously-documented
 `/v1/runs/{id}/graph` endpoint was removed in P10.13.1 along with
-the `agentflow-viz` crate; use the SSE event stream or the run
+the `yanshi-viz` crate; use the SSE event stream or the run
 detail endpoint instead):
 
 ```bash
@@ -476,7 +476,7 @@ curl -N -H "Authorization: Bearer dev-secret" \
 
 ### Skills
 
-Mount a `skills.index.toml` and point `AGENTFLOW_SKILLS_INDEX` at it. Then:
+Mount a `skills.index.toml` and point `YANSHI_SKILLS_INDEX` at it. Then:
 
 ```bash
 curl -s -H "Authorization: Bearer dev-secret" http://localhost:3000/v1/skills | jq .
@@ -501,12 +501,12 @@ change between releases.
 
 ### Postgres test database for development
 
-`agentflow-db` integration tests are gated by `AGENTFLOW_DATABASE_TEST_URL`
+`yanshi-db` integration tests are gated by `YANSHI_DATABASE_TEST_URL`
 to keep `cargo test --workspace` hermetic. To run them locally against the
 docker-compose Postgres:
 
 ```bash
 docker compose up -d postgres
-export AGENTFLOW_DATABASE_TEST_URL=postgres://agentflow:agentflow@localhost:5432/agentflow
-cargo test -p agentflow-db -p agentflow-server
+export YANSHI_DATABASE_TEST_URL=postgres://yanshi:yanshi@localhost:5432/yanshi
+cargo test -p yanshi-db -p yanshi-server
 ```

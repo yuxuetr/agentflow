@@ -1,4 +1,4 @@
-# AgentFlow — Agent Guide
+# Yanshi — Agent Guide
 
 This file is the tool-agnostic counterpart to `CLAUDE.md` (Claude Code
 reads that one; other agent runners read this one). Both describe the
@@ -9,10 +9,10 @@ summary.
 
 ## Project Overview
 
-AgentFlow is a Rust workspace that supports both deterministic DAG
+Yanshi is a Rust workspace that supports both deterministic DAG
 workflows and agent-native autonomous loops, with full LLM, MCP, RAG,
 Skill, and tracing support. The workspace has 23 Rust crates plus 1 Web
-UI crate (`agentflow-ui`, a Vite-built React SPA embedded by the server).
+UI crate (`yanshi-ui`, a Vite-built React SPA embedded by the server).
 
 A narrow-waist **contract kernel** (L0) was extracted so the runtimes
 never depend on each other, only on shared contracts, enforced by
@@ -24,10 +24,10 @@ DAG / native agent loop / harness / dynamic workflow) live in
 Two complementary execution styles compose via `AgentNode` (agent
 embedded in a DAG) and `WorkflowTool` (a DAG exposed as an agent tool):
 
-- **DAG workflows** via `agentflow-core::Flow` — explicit I/O,
+- **DAG workflows** via `yanshi-core::Flow` — explicit I/O,
   checkpoints, retry, timeout, conditional execution, and a
   dependency-ready concurrent scheduler.
-- **Agent-native loops** via `agentflow-agents::AgentRuntime` (ReAct,
+- **Agent-native loops** via `yanshi-agents::AgentRuntime` (ReAct,
   Plan-Execute, Reflection, multi-agent supervisors) with structured
   `AgentStep` / `AgentEvent` / `AgentStopReason`, tool calling, memory,
   and cancellation.
@@ -38,16 +38,16 @@ Config-first YAML supports `agent` / `skill_agent` node types.
 
 | Layer | Role | Crates |
 | --- | --- | --- |
-| **L0 Contract Kernel** | narrow waist — shared types only, zero runtime logic | `agentflow-value` (`FlowValue`), `agentflow-graph` (`Flow` IR / `AsyncNode` / `expr` / `AgentFlowError`), `agentflow-store-spi` (`MemoryStore` + `KnowledgeBackend`), `agentflow-agent-spi` (`AgentRuntime` façade + `Capability` lowering + HITL interrupt/resume), `agentflow-async-util` (retry/timeout/`race_with_limits`), `agentflow-tool` (the `Tool` contract: trait, `ToolRegistry`, `ToolMetadata`, `Capability`, `ToolPolicy`, `SecurityProfile`, `SandboxBackend`) |
-| **L1 Execution Core** | the executor that runs the L0 `Flow` IR | `agentflow-core` (scheduler, checkpoint, retry-executor, resource manager, health, events, exposed via `FlowExt::run()`) |
-| **L2 Capability Adapters** | tool-tier + capability-backed node implementations | `agentflow-nodes` (tool-tier), `agentflow-nodes-ai` (capability-backed), `agentflow-llm`, `agentflow-tools` (builtin tools + concrete OS-sandbox backends), `agentflow-mcp`, `agentflow-rag`, `agentflow-memory` |
-| **L3 Agent / Orchestration** | agent runtimes, skills, harness, config assembly | `agentflow-agents` (incl. `dynamic` — LLM-authored plan → compiled `Flow`), `agentflow-skills`, `agentflow-harness` (approval/hooks/HITL/background tasks), `agentflow-config` (YAML schema + executor + diagnostics, shared by CLI and server), `agentflow-cli` |
-| **L4 Operations / Productization** | observability and platform surfaces | `agentflow-tracing`, `agentflow-server`, `agentflow-db`, `agentflow-worker`, `agentflow-ui` |
+| **L0 Contract Kernel** | narrow waist — shared types only, zero runtime logic | `yanshi-value` (`FlowValue`), `yanshi-graph` (`Flow` IR / `AsyncNode` / `expr` / `YanshiError`), `yanshi-store-spi` (`MemoryStore` + `KnowledgeBackend`), `yanshi-agent-spi` (`AgentRuntime` façade + `Capability` lowering + HITL interrupt/resume), `yanshi-async-util` (retry/timeout/`race_with_limits`), `yanshi-tool` (the `Tool` contract: trait, `ToolRegistry`, `ToolMetadata`, `Capability`, `ToolPolicy`, `SecurityProfile`, `SandboxBackend`) |
+| **L1 Execution Core** | the executor that runs the L0 `Flow` IR | `yanshi-core` (scheduler, checkpoint, retry-executor, resource manager, health, events, exposed via `FlowExt::run()`) |
+| **L2 Capability Adapters** | tool-tier + capability-backed node implementations | `yanshi-nodes` (tool-tier), `yanshi-nodes-ai` (capability-backed), `yanshi-llm`, `yanshi-tools` (builtin tools + concrete OS-sandbox backends), `yanshi-mcp`, `yanshi-rag`, `yanshi-memory` |
+| **L3 Agent / Orchestration** | agent runtimes, skills, harness, config assembly | `yanshi-agents` (incl. `dynamic` — LLM-authored plan → compiled `Flow`), `yanshi-skills`, `yanshi-harness` (approval/hooks/HITL/background tasks), `yanshi-config` (YAML schema + executor + diagnostics, shared by CLI and server), `yanshi-cli` |
+| **L4 Operations / Productization** | observability and platform surfaces | `yanshi-tracing`, `yanshi-server`, `yanshi-db`, `yanshi-worker`, `yanshi-ui` |
 
-Runtimes (`agentflow-agents`, `agentflow-harness`) depend on
-`agentflow-tool` directly, never on `agentflow-tools` — that split (T3.3,
+Runtimes (`yanshi-agents`, `yanshi-harness`) depend on
+`yanshi-tool` directly, never on `yanshi-tools` — that split (T3.3,
 `docs/RFC_TOOL_CONTRACT_SPLIT.md`) keeps concrete OS-sandbox backends out
-of the kernel. `agentflow-nodes` / `agentflow-nodes-ai` were split (P-A4.0)
+of the kernel. `yanshi-nodes` / `yanshi-nodes-ai` were split (P-A4.0)
 so the tool tier carries no capability dependencies.
 
 ## What's Implemented
@@ -83,10 +83,10 @@ so the tool tier carries no capability dependencies.
   propagation, first-party OTLP/HTTP+JSON exporter (`otlp-http` feature,
   `OtlpHttpSpanSink`) — gRPC transport still deferred, bring your own
   `OtelSpanSink` for that.
-- **Platform** — `agentflow-server` Axum gateway (`/v1/runs`, SSE,
-  skills, Harness sessions/approvals), Postgres-backed `agentflow-db`
+- **Platform** — `yanshi-server` Axum gateway (`/v1/runs`, SSE,
+  skills, Harness sessions/approvals), Postgres-backed `yanshi-db`
   (9 tables / 9 repos), per-tenant run admission control, distributed
-  `agentflow-worker` (gRPC `WorkerProtocol`, 7 node payload types), and
+  `yanshi-worker` (gRPC `WorkerProtocol`, 7 node payload types), and
   a React/Vite Web UI embedded at `/ui`.
 - **Plugins & marketplace** — subprocess JSON-RPC plugin runtime,
   signed manifests (Ed25519), remote registry client.
@@ -111,22 +111,22 @@ what's active vs. closed.
   (project → user → built-in defaults); runtime validation.
 
 ### Adding a new LLM provider
-1. Provider module in `agentflow-llm/src/providers/`.
+1. Provider module in `yanshi-llm/src/providers/`.
 2. Implement the provider trait (auth + API calls).
-3. Register in `agentflow-llm/config/models/`.
-4. Update the model registry (`agentflow-llm/src/registry/`).
+3. Register in `yanshi-llm/config/models/`.
+4. Update the model registry (`yanshi-llm/src/registry/`).
 5. Add examples and tests.
 
 ### Adding a new node type
-1. Node module in `agentflow-nodes/src/nodes/` (tool-tier) or
-   `agentflow-nodes-ai/src/nodes/` (capability-backed).
-2. Implement `AsyncNode` from `agentflow-core`.
+1. Node module in `yanshi-nodes/src/nodes/` (tool-tier) or
+   `yanshi-nodes-ai/src/nodes/` (capability-backed).
+2. Implement `AsyncNode` from `yanshi-core`.
 3. Register the `type:` string in
-   `agentflow-config/src/executor/factory.rs`.
+   `yanshi-config/src/executor/factory.rs`.
 4. Add config parsing, validation, examples, and tests.
 
 ### Adding a new CLI command
-1. Define the command in `agentflow-cli/src/main.rs`.
+1. Define the command in `yanshi-cli/src/main.rs`.
 2. Implement the handler in the matching `commands/` module.
 3. Add output formatting, error handling, examples, and docs.
 
@@ -155,7 +155,7 @@ what's active vs. closed.
   under `Production` by default; see `docs/SECURITY_PROFILES.md`.
 - `HttpTool` pins DNS resolution per-request to close TOCTOU
   DNS-rebinding gaps and normalizes IPv4-mapped IPv6 before SSRF
-  classification — see `agentflow-tools/src/builtin/http.rs`.
+  classification — see `yanshi-tools/src/builtin/http.rs`.
 
 ## Where to look next
 
@@ -171,9 +171,9 @@ what's active vs. closed.
 **Last Updated**: 2026-08-08 (V4.1 — regenerated from `CLAUDE.md` +
 `docs/CURRENT_STATUS.md`; the previous version dated 2026-05-03 had
 drifted badly: it described 14 crates instead of the current 25-member
-workspace, called `agentflow-server`/`agentflow-db` empty scaffolds
+workspace, called `yanshi-server`/`yanshi-db` empty scaffolds
 (now a 19.5K-LOC gateway and a 9-table/9-repo persistence layer), never
-mentioned `agentflow-harness`/`agentflow-config`/`agentflow-value`/
-`agentflow-graph`/`agentflow-store-spi`/`agentflow-agent-spi`/
-`agentflow-worker`/`agentflow-ui`, and cited a stale "479 tests" figure
+mentioned `yanshi-harness`/`yanshi-config`/`yanshi-value`/
+`yanshi-graph`/`yanshi-store-spi`/`yanshi-agent-spi`/
+`yanshi-worker`/`yanshi-ui`, and cited a stale "479 tests" figure
 against an actual count in the thousands).

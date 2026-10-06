@@ -1,0 +1,39 @@
+[package]
+name = "yanshi-config"
+version = "0.1.0"
+description = "Shared config schema + config-driven workflow assembly (YAML -> Flow) for the Yanshi CLI and server"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+default = []
+# The capability nodes (and their mcp/rag features) moved to
+# `yanshi-nodes-ai` (P-A nodes split); forward to it.
+mcp = ["yanshi-nodes-ai/mcp"]
+rag = ["yanshi-nodes-ai/rag"]
+plugin = ["yanshi-core/plugin", "dep:yanshi-tracing"]
+
+[dependencies]
+yanshi-core = { path = "../yanshi-core", version = "0.2" }
+yanshi-agents = { path = "../yanshi-agents", version = "0.2" }
+yanshi-llm = { path = "../yanshi-llm", version = "0.2" }
+yanshi-nodes = { path = "../yanshi-nodes", version = "0.2" }
+yanshi-nodes-ai = { path = "../yanshi-nodes-ai", version = "0.2" }
+yanshi-skills = { path = "../yanshi-skills", version = "0.1" }
+yanshi-tools = { path = "../yanshi-tools", version = "0.1" }
+yanshi-tracing = { path = "../yanshi-tracing", version = "0.1", optional = true }
+
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+async-trait = "0.1"
+# Used by the diagnostics report builder (doctor): `dirs`/`which` for path +
+# command probes, `reqwest` for the optional server health probe.
+dirs = "5.0"
+which = "6.0"
+reqwest = { workspace = true }
+tokio = { workspace = true, features = ["process", "sync", "rt", "macros", "time"] }

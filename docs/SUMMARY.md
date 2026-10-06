@@ -1,7 +1,7 @@
 # Summary
 
 <!--
-  Table of contents for the AgentFlow manual (built by `mdbook build site`,
+  Table of contents for the Yanshi manual (built by `mdbook build site`,
   published to GitHub Pages by .github/workflows/docs.yml). Only files listed
   here are rendered; links from a chapter to anything else (source files,
   archive/, dated evaluations) are rewritten to GitHub URLs by
@@ -81,7 +81,7 @@
 - [Backup and Restore](SERVER_BACKUP_RESTORE.md)
 - [Operations Handbook (中文)](OPERATIONS_HANDBOOK.md)
 
-# Extending AgentFlow
+# Extending Yanshi
 
 - [Agent SDK](AGENT_SDK.md)
 - [Extensibility Model](EXTENSIBILITY_MODEL.md)

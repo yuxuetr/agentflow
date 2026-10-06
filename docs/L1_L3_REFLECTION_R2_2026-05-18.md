@@ -3,7 +3,7 @@
 **Date**: 2026-05-18 (same day as R1, later in the session)
 **Superseded by**: [R3](L1_L3_REFLECTION_R3_2026-05-18.md) for the
 action queue only — R3 records the sweep that closed all 8
-agentflow-side R2 findings. R2 stays authoritative for the L1↔L3
+yanshi-side R2 findings. R2 stays authoritative for the L1↔L3
 selection rule, the per-application matrix, and the original
 40-finding inventory.
 **Supersedes**: [R1](L1_L3_REFLECTION_2026-05-18.md) for the action queue and
@@ -122,7 +122,7 @@ all pipeline, A7 is pass-through + one-shot LLM).
 
 - **L1 wall clock is dominated by the work, not by overhead**. A1's
   12 TTS calls take most of its 19s; A7's one 354k-char LLM call takes
-  most of its 117s. The agentflow `Flow` orchestration adds milliseconds.
+  most of its 117s. The yanshi `Flow` orchestration adds milliseconds.
 - **L3 wall clock is dominated by LLM thinking per decision turn**.
   A1.5's 7 turns × ~5s each ≈ 35s. A2's 2-3 turns × 30-80s each ≈ 200s
   (longer per turn because each turn processes a 1166-line diff in
@@ -134,7 +134,7 @@ all pipeline, A7 is pass-through + one-shot LLM).
 R1 deferred L2 with the reasoning "L1+L3 covered all observed
 scenarios; L2 saves milliseconds out of seconds". R2 confirms with
 4 applications instead of 2: **still zero scenarios surfaced** that
-need L2 (agentflow `Tool` trait wrap for in-process LLM-driven tool
+need L2 (yanshi `Tool` trait wrap for in-process LLM-driven tool
 calling).
 
 A2 was the most likely candidate — same-process, agent decides — but
@@ -160,13 +160,13 @@ If none of (a)/(b)/(c) hold simultaneously, prefer L1 or L3.
 
 Combining R1's 20 + R2's 20.
 
-### 5.1 agentflow code changes (now 7 items, 3 DONE since R1)
+### 5.1 yanshi code changes (now 7 items, 3 DONE since R1)
 
 | ID | Source | Status | Summary | Pri |
 | --- | --- | --- | --- | --- |
 | F-AF-1 | R1 A1 | **DONE P9.1** | `skill validate` swallowed underlying error; switched main to `{:#}` Display | — |
 | F-AF-2 | R1 A1.5 | TODO P9.4 | SKILL.md `model:` silently ignored | M |
-| F-AF-3 | R1 A1 | **DONE P9.3** | Auto-load `~/.agentflow/.env` in CLI entry | — |
+| F-AF-3 | R1 A1 | **DONE P9.3** | Auto-load `~/.yanshi/.env` in CLI entry | — |
 | F-AF-4 | R1 | TODO | Crisper Moonshot/Anthropic init error on fresh hosts | L |
 | **F-A2-1** | R2 A2 | **DONE 2026-05-18** | Actual root cause was different: when `max_tokens` truncates LLM response mid-JSON, parser falls to Malformed and shows the raw `{"thought":..,"answer":..` envelope. Fix: best-effort `answer` field extraction in `react/parser.rs` + `warn!` log hinting at `max_tokens`. 6 new tests. | — |
 | **F-A7-2** | R2 A7 | **DONE 2026-05-18** | Honesty-note path (not full factory add): permission report's shell branch now emits "not wired into the CLI workflow factory" note so authors don't see misleading "→ exec" classification and assume YAML will run. Full ShellNode factory add deferred — no real need surfaced. | — |
@@ -188,14 +188,14 @@ Combining R1's 20 + R2's 20.
 | F-DOC-2 | R1 A1 | TODO P9.5 | `FlowValue` field reference in docs/AGENT_SDK.md | L |
 | F-DOC-3 | R1 A1 | TODO P9.8 | `target_segments` is a hint, not a cap — doc tightening | L |
 | F-DOC-4 | R1 A1.5 | TODO | Bump phonon-mcp build instructions to prominent "Pre-flight" section | L |
-| **F-A7-4** | R2 A7 | **NEW TODO** | `~/.agentflow/models.yml` silently overrides built-in; `doctor` should report active config source | M |
-| **F-A7-5** | R2 A7 | **NEW TODO** | kimi-k2.6 requires `temperature: 1.0` — document in agentflow-llm provider docs | L |
+| **F-A7-4** | R2 A7 | **NEW TODO** | `~/.yanshi/models.yml` silently overrides built-in; `doctor` should report active config source | M |
+| **F-A7-5** | R2 A7 | **NEW TODO** | kimi-k2.6 requires `temperature: 1.0` — document in yanshi-llm provider docs | L |
 
 ### 5.4 Provider config changes (now 2 items, 0 DONE)
 
 | ID | Source | Status | Summary | Pri |
 | --- | --- | --- | --- | --- |
-| **F-A7-6** | R2 A7 | partial: added kimi-k2.5/2.6 in this session | agentflow-llm registry lags Moonshot's `/v1/models`; consider `agentflow llm models --refresh-from-api` | L |
+| **F-A7-6** | R2 A7 | partial: added kimi-k2.5/2.6 in this session | yanshi-llm registry lags Moonshot's `/v1/models`; consider `yanshi llm models --refresh-from-api` | L |
 | **F-A7-8** | R2 A7 | **DONE 2026-05-18** | Bumped 94 text models in `templates/default_models.yml` from `max_tokens: 4096` → `32768` (multimodal 12 + tts 1 left at 4096 — vision outputs short, tts max_tokens semantics differ) | — |
 
 ### 5.5 Example / skill conventions (now 4 items, 0 DONE)
@@ -203,7 +203,7 @@ Combining R1's 20 + R2's 20.
 | ID | Source | Status | Summary | Pri |
 | --- | --- | --- | --- | --- |
 | F-EX-1 | R1 A1.5 | TODO P9.7 | A1.5 persona: add "re-measure LUFS before save" step | L |
-| **F-A7-7** | R2 A7 | **NEW TODO** | `dotenvy::from_path("~/.agentflow/.env")` snippet duplicated across standalone application binaries; extract helper crate or document the canonical snippet | L |
+| **F-A7-7** | R2 A7 | **NEW TODO** | `dotenvy::from_path("~/.yanshi/.env")` snippet duplicated across standalone application binaries; extract helper crate or document the canonical snippet | L |
 | **F-A2-6** | R2 A2 | **NEW TODO** | `--trace` mixes human format + JSON on stdout; add `--output json` mode like harness | M |
 | **F-A2-5** | R2 A2 | **NEW (no code fix)** | LLM-based code review is non-deterministic — 2 runs caught completely different issue sets. Document the practice: run multiple times, union the findings; or persona "systematic per-file walk" | M |
 
@@ -215,8 +215,8 @@ Combining R1's 20 + R2's 20.
 | F-NA-2 | R1 A1 | model name fixed in-app, no further action |
 | F-NA-3 | R1 A1 | `ConsoleListener` unit struct OK |
 | **F-A2-9** | R2 A2 | ✅ CLOSED 2026-05-18 via `examples/applications/code-reviewer-write/` — Harness approval gate validated end-to-end (2× `approval_requested` + 2× `approval_decided` events with correct params, risk, scope) |
-| **F-A2-10** | R2 A2 | A2's "no real GitHub PR in agentflow repo to test against" — meta-observation, dogfooding on another repo is a future option |
-| **F-A2-11** | R2 A2 follow-up | `agentflow harness run` CLI doesn't wrap registry with HookedTool — only HTTP gateway does. Hand-rolled binaries are the only way to dogfood Harness Mode from CLI today |
+| **F-A2-10** | R2 A2 | A2's "no real GitHub PR in yanshi repo to test against" — meta-observation, dogfooding on another repo is a future option |
+| **F-A2-11** | R2 A2 follow-up | `yanshi harness run` CLI doesn't wrap registry with HookedTool — only HTTP gateway does. Hand-rolled binaries are the only way to dogfood Harness Mode from CLI today |
 | **F-A2-12** | R2 A2 follow-up | `HarnessProfile::Local` (default) silently auto-allows NonIdempotent calls; need `Production` profile or explicit pre-hook to fire the approval gate |
 | **F-A2-13** | R2 A2 follow-up | `moonshot-v1-128k` hallucinates commit hashes when commit value lives in user prompt (inline into persona to fix); also loops on identical tool calls without dispatching to step 2 — ReAct could add an "identical call detected" steering hook |
 
@@ -261,33 +261,33 @@ finding set:
 
 | Pri | ID | Action | Owner |
 | --- | --- | --- | --- |
-| ~~H~~ DONE | F-A2-1 | ~~Populate `AgentRunResult.answer` from `final_answer` event~~ — actual fix was parser truncated-JSON best-effort recovery in `react/parser.rs` (root cause was different from the original framing). Landed 2026-05-18. | agentflow-agents |
-| ~~M~~ DONE | F-A7-2 | Honesty-note path landed 2026-05-18. Permission report tells the truth about shell-not-in-factory. | agentflow-cli |
-| ~~M~~ DONE | F-A7-8 | Bumped 94 text models 4096 → 32768 in templates/default_models.yml; vision (12) + tts (1) left at 4096. Landed 2026-05-18. | agentflow-llm |
-| ~~M~~ DONE | F-A7-4 | `agentflow doctor` now leads its Config section with a human-readable source label (e.g. `"/Users/x/.agentflow/models.yml (overrides built-in)"`) plus a stable `models_config_source_kind` JSON enum (`user_models_yml` / `user_models_yaml` / `env_override` / `built_in_default`). The legacy Rust-debug `models_config_source` field is kept for back-compat. 3 new doctor unit tests lock the shadowing-suffix invariant. Landed 2026-05-18. | agentflow-cli |
-| ~~M~~ DONE | F-AF-2 (P9.4) | SKILL.md frontmatter `model:` field now honoured: `SkillMdFrontmatter` gained the field, `SkillMd` carries it through, `into_manifest()` populates `ModelConfig.name`. Empty/whitespace strings collapse to `None` so `resolved_model()` falls through to `gpt-4o`. 3 new unit tests lock present-vs-absent-vs-empty cases. Landed 2026-05-18. | agentflow-skills |
-| ~~M~~ DONE | F-A2-6 | `agentflow skill run --output {text,json}` flag landed (default text for back-compat). JSON mode emits a single stdout object `{skill, model, session_id, answer, stop_reason, elapsed_ms, trace?}` with the same redaction the text path applies. Warnings still go to stderr. 2 new integration tests assert (a) the parsed JSON shape and (b) `--trace` opt-in. Landed 2026-05-18. | agentflow-cli |
+| ~~H~~ DONE | F-A2-1 | ~~Populate `AgentRunResult.answer` from `final_answer` event~~ — actual fix was parser truncated-JSON best-effort recovery in `react/parser.rs` (root cause was different from the original framing). Landed 2026-05-18. | yanshi-agents |
+| ~~M~~ DONE | F-A7-2 | Honesty-note path landed 2026-05-18. Permission report tells the truth about shell-not-in-factory. | yanshi-cli |
+| ~~M~~ DONE | F-A7-8 | Bumped 94 text models 4096 → 32768 in templates/default_models.yml; vision (12) + tts (1) left at 4096. Landed 2026-05-18. | yanshi-llm |
+| ~~M~~ DONE | F-A7-4 | `yanshi doctor` now leads its Config section with a human-readable source label (e.g. `"/Users/x/.yanshi/models.yml (overrides built-in)"`) plus a stable `models_config_source_kind` JSON enum (`user_models_yml` / `user_models_yaml` / `env_override` / `built_in_default`). The legacy Rust-debug `models_config_source` field is kept for back-compat. 3 new doctor unit tests lock the shadowing-suffix invariant. Landed 2026-05-18. | yanshi-cli |
+| ~~M~~ DONE | F-AF-2 (P9.4) | SKILL.md frontmatter `model:` field now honoured: `SkillMdFrontmatter` gained the field, `SkillMd` carries it through, `into_manifest()` populates `ModelConfig.name`. Empty/whitespace strings collapse to `None` so `resolved_model()` falls through to `gpt-4o`. 3 new unit tests lock present-vs-absent-vs-empty cases. Landed 2026-05-18. | yanshi-skills |
+| ~~M~~ DONE | F-A2-6 | `yanshi skill run --output {text,json}` flag landed (default text for back-compat). JSON mode emits a single stdout object `{skill, model, session_id, answer, stop_reason, elapsed_ms, trace?}` with the same redaction the text path applies. Warnings still go to stderr. 2 new integration tests assert (a) the parsed JSON shape and (b) `--trace` opt-in. Landed 2026-05-18. | yanshi-cli |
 | ~~M~~ DONE | F-A2-5 | Documented in `examples/applications/code-reviewer/README.md` § Operating practice (concrete finding-set table from the 2 dogfooding runs + 3-5-runs-and-union recommendation + quorum guidance for automated gates), and a cross-cutting bullet in `examples/README.md` § Conventions covering all LLM-judgement examples (not just code review). Landed 2026-05-18. | examples conventions |
-| ~~M~~ DONE | F-A7-3 | Deleted 6 dead `config/models/*.yml` files + updated 4 misdirecting docs. Landed 2026-05-18. | agentflow-llm |
-| ~~H~~ DONE | F-A2-9 | Harness Mode approval gate validated end-to-end via `examples/applications/code-reviewer-write/`. Spawned 3 follow-ups (F-A2-11/12/13). Landed 2026-05-18. | examples + agentflow-harness |
-| ~~M~~ DONE | F-A2-11 | `agentflow harness run` now wraps the agent's tool registry with `HookConfig + ApprovalProvider` when `--approve {cli,auto-allow,auto-deny}` is passed; default `--approve none` preserves the pre-existing zero-friction CLI path. Combined with `--profile production` the gate auto-escalates every NonIdempotent call. New `ReActAgent::with_tools` helper lets the CLI swap the registry after `SkillBuilder::build` without duplicating manifest wiring. 3 new CLI tests; live-tested against the `code-reviewer` skill end-to-end. Landed 2026-05-18. | agentflow-cli + agentflow-agents |
-| ~~M~~ DONE | F-A2-12 | Docstring `HarnessProfile::{Local,Dev,Production}` + `HookConfig::new` + `with_profile` call out the silent-allow-by-default footgun; `docs/HARNESS_MODE.md` got an explicit footgun callout in the `wrap_registry` section + an inline comment in the snippet + a pointer to `code-reviewer-write` as a reference binary. Landed 2026-05-18. | agentflow-harness docs |
-| ~~L~~ DONE | F-A2-13 | `ReActAgent::run_with_context` now tracks `last_tool_call: Option<(String, serde_json::Value)>` and, when iteration N+1's `(tool, params)` exactly matches iteration N, appends a steering note to the tool-result memory message: `"[agentflow steering note (F-A2-13): this is your 2nd consecutive call to tool `X` with identical parameters … (a) draw conclusions, (b) call a different tool, or (c) call `X` with materially different parameters]"`. Trace-side `AgentStepKind::ToolResult` carries the raw observation unchanged so replay/audit stay faithful. Tool still runs (steering is advisory, not a block) so legitimate retries / polling aren't broken. New unit test `repeat_tool_call_appends_steering_note_to_memory` asserts both the memory augmentation and the trace cleanliness. Landed 2026-05-18. | agentflow-agents |
+| ~~M~~ DONE | F-A7-3 | Deleted 6 dead `config/models/*.yml` files + updated 4 misdirecting docs. Landed 2026-05-18. | yanshi-llm |
+| ~~H~~ DONE | F-A2-9 | Harness Mode approval gate validated end-to-end via `examples/applications/code-reviewer-write/`. Spawned 3 follow-ups (F-A2-11/12/13). Landed 2026-05-18. | examples + yanshi-harness |
+| ~~M~~ DONE | F-A2-11 | `yanshi harness run` now wraps the agent's tool registry with `HookConfig + ApprovalProvider` when `--approve {cli,auto-allow,auto-deny}` is passed; default `--approve none` preserves the pre-existing zero-friction CLI path. Combined with `--profile production` the gate auto-escalates every NonIdempotent call. New `ReActAgent::with_tools` helper lets the CLI swap the registry after `SkillBuilder::build` without duplicating manifest wiring. 3 new CLI tests; live-tested against the `code-reviewer` skill end-to-end. Landed 2026-05-18. | yanshi-cli + yanshi-agents |
+| ~~M~~ DONE | F-A2-12 | Docstring `HarnessProfile::{Local,Dev,Production}` + `HookConfig::new` + `with_profile` call out the silent-allow-by-default footgun; `docs/HARNESS_MODE.md` got an explicit footgun callout in the `wrap_registry` section + an inline comment in the snippet + a pointer to `code-reviewer-write` as a reference binary. Landed 2026-05-18. | yanshi-harness docs |
+| ~~L~~ DONE | F-A2-13 | `ReActAgent::run_with_context` now tracks `last_tool_call: Option<(String, serde_json::Value)>` and, when iteration N+1's `(tool, params)` exactly matches iteration N, appends a steering note to the tool-result memory message: `"[yanshi steering note (F-A2-13): this is your 2nd consecutive call to tool `X` with identical parameters … (a) draw conclusions, (b) call a different tool, or (c) call `X` with materially different parameters]"`. Trace-side `AgentStepKind::ToolResult` carries the raw observation unchanged so replay/audit stay faithful. Tool still runs (steering is advisory, not a block) so legitimate retries / polling aren't broken. New unit test `repeat_tool_call_appends_steering_note_to_memory` asserts both the memory augmentation and the trace cleanliness. Landed 2026-05-18. | yanshi-agents |
 | M | F-PH-1 | Truncate long `#[instrument(fields(...))]` values | phonon |
 | M | F-PH-2 | `PodcastPipeline::generate` returns per-segment durations | phonon |
-| ~~L~~ DONE | F-DOC-2 (P9.5) | Added "FlowValue field reference" section to `docs/AGENT_SDK.md` enumerating exact field names per variant (`Json` / `File { path, mime_type }` / `Url { url, mime_type }`). Landed 2026-05-19. | agentflow docs |
+| ~~L~~ DONE | F-DOC-2 (P9.5) | Added "FlowValue field reference" section to `docs/AGENT_SDK.md` enumerating exact field names per variant (`Json` / `File { path, mime_type }` / `Url { url, mime_type }`). Landed 2026-05-19. | yanshi docs |
 | L | F-DOC-3 (P9.8) | `target_segments` doc tightening | phonon + examples |
 | L | F-DOC-4 | Bump phonon-mcp pre-flight prominence | examples |
 | ~~L~~ DONE | F-EX-1 (P9.7) | A1.5 persona now requires `audio_loudness` re-measure between fade and save; step 6 inserted, step 8 (汇报) asserts "use the **实测** final LUFS, not the target param". Landed 2026-05-19. | examples |
-| ~~L~~ DONE | F-A7-5 | `agentflow-llm/README.md` § Moonshot now documents the kimi-k2.6 `temperature: 1.0` constraint with the exact Moonshot 400 error message + the bundled-config note. Org-concurrency-3 also mentioned with a link to F-A6-1. Landed 2026-05-19. | agentflow-llm |
-| ~~L~~ DONE | F-A7-6 | `agentflow llm models --refresh-from-api` flag ships. Live-queries each OpenAI-compatible provider's `/v1/models` endpoint (openai/moonshot/stepfun/dashscope; google/anthropic skipped with a clear message), diffs against the local config, and prints `new` (provider-side additions to add to models.yml) + `only_local` (deprecated/typo/private) + `shared` (count). Read-only — doesn't write models.yml. Respects `--provider <name>` filter. User-configured `base_url` overrides default (for proxy/on-prem). 5 new unit tests on URL construction + truncation. Live-verified against Moonshot: 9 shared + 3 only_local entries surfaced (account-tier gated). Landed 2026-05-19. | agentflow-llm + agentflow-cli |
-| ~~L~~ DONE | F-A7-7 | `docs/AGENT_SDK.md` § "Loading `~/.agentflow/.env` from standalone binaries" ships the canonical 6-line snippet used by every standalone example in this repo. Future `agentflow-dotenv` helper crate left as ergonomics-debt with a pointer; the snippet is the contract until then. Landed 2026-05-19. | examples / agentflow-cli |
-| ~~L~~ DONE | F-AF-4 | `LLMError::MissingApiKey` now renders an actionable one-liner: names the provider-specific env var (`MOONSHOT_API_KEY (or MOONSHOT_KEY)`, etc.), points at `~/.agentflow/.env`, suggests `agentflow config init` to generate the template, and references the README docs section for alternatives. New `env_var_hint(provider)` helper has table coverage for 6 providers (openai/anthropic/google/moonshot/stepfun/dashscope) with a generic fallback. 3 new unit tests assert the message shape + coverage. Landed 2026-05-19. | agentflow-llm |
+| ~~L~~ DONE | F-A7-5 | `yanshi-llm/README.md` § Moonshot now documents the kimi-k2.6 `temperature: 1.0` constraint with the exact Moonshot 400 error message + the bundled-config note. Org-concurrency-3 also mentioned with a link to F-A6-1. Landed 2026-05-19. | yanshi-llm |
+| ~~L~~ DONE | F-A7-6 | `yanshi llm models --refresh-from-api` flag ships. Live-queries each OpenAI-compatible provider's `/v1/models` endpoint (openai/moonshot/stepfun/dashscope; google/anthropic skipped with a clear message), diffs against the local config, and prints `new` (provider-side additions to add to models.yml) + `only_local` (deprecated/typo/private) + `shared` (count). Read-only — doesn't write models.yml. Respects `--provider <name>` filter. User-configured `base_url` overrides default (for proxy/on-prem). 5 new unit tests on URL construction + truncation. Live-verified against Moonshot: 9 shared + 3 only_local entries surfaced (account-tier gated). Landed 2026-05-19. | yanshi-llm + yanshi-cli |
+| ~~L~~ DONE | F-A7-7 | `docs/AGENT_SDK.md` § "Loading `~/.yanshi/.env` from standalone binaries" ships the canonical 6-line snippet used by every standalone example in this repo. Future `yanshi-dotenv` helper crate left as ergonomics-debt with a pointer; the snippet is the contract until then. Landed 2026-05-19. | examples / yanshi-cli |
+| ~~L~~ DONE | F-AF-4 | `LLMError::MissingApiKey` now renders an actionable one-liner: names the provider-specific env var (`MOONSHOT_API_KEY (or MOONSHOT_KEY)`, etc.), points at `~/.yanshi/.env`, suggests `yanshi config init` to generate the template, and references the README docs section for alternatives. New `env_var_hint(provider)` helper has table coverage for 6 providers (openai/anthropic/google/moonshot/stepfun/dashscope) with a generic fallback. 3 new unit tests assert the message shape + coverage. Landed 2026-05-19. | yanshi-llm |
 | L | F-PH-3 | phonon-mcp `audio_info.resampled_from` | phonon |
 
 15 open items (was 16): F-A2-5 closed.
 0 High, 5 Medium, 10 Low. None require a core refactor; all are
-surface / docs / config / convention scope. **All agentflow-side
+surface / docs / config / convention scope. **All yanshi-side
 findings from R2 are now resolved.** The remaining M items
 (F-PH-1/2) are phonon-external; remaining L items are minor docs,
 LLM tooling polish, and phonon-side work — none block any
@@ -341,8 +341,8 @@ apply by default:
 - Apply the L1↔L3 tier-selection rule (§2 above) BEFORE writing
   code. A7 wasted ~30 min on the wrong tier.
 - **L1 binary template**: copy A1's `Cargo.toml` shape (empty
-  `[workspace]`, path deps to agentflow-core + needed crates,
-  `dotenvy::from_path("~/.agentflow/.env")` in main).
+  `[workspace]`, path deps to yanshi-core + needed crates,
+  `dotenvy::from_path("~/.yanshi/.env")` in main).
 - **L3 skill template**: copy A1.5's skill.toml shape
   (persona + model + `[security] mcp_command_allowlist` if using
   native MCP binary).
@@ -361,7 +361,7 @@ apply by default:
 ### 8.5 Findings discipline
 
 - Number findings F-<app>-N for easy cross-reference.
-- Categorise: agentflow code / phonon code / docs / convention /
+- Categorise: yanshi code / phonon code / docs / convention /
   positive validation / no-action / perf data.
 - One reflection update per 2-3 new applications (instead of after
   every application — too noisy).
@@ -370,7 +370,7 @@ apply by default:
 
 Order matters because dependencies cascade:
 
-1. **Land F-A2-1** (high pri agentflow bug). One PR, ~1-2 hours.
+1. **Land F-A2-1** (high pri yanshi bug). One PR, ~1-2 hours.
    After this, every L3 skill becomes usable from `skill run` output
    directly without trace extraction. Top of queue.
 2. **Land F-A7-8 + F-A7-2 + F-A7-3** (medium pri, all small).
@@ -380,7 +380,7 @@ Order matters because dependencies cascade:
    `arxiv` node + RAG + memory layers + scheduled run. Touches
    areas A1/A1.5/A7/A2 didn't.
 4. **A2 follow-up: Harness Mode approval gate**. Add write-side
-   `add_review_comment` tool; route through `agentflow harness run`
+   `add_review_comment` tool; route through `yanshi harness run`
    instead of `skill run`. Validates the third pillar of A2's
    original spec (F-A2-9).
 5. **Then** another reflection round (R3) after A3 + A2-follow-up
@@ -389,7 +389,7 @@ Order matters because dependencies cascade:
 Parallel work (no dependency):
 
 - Phonon-side action items (F-PH-1, F-PH-2, F-PH-3) batched as a
-  phonon `v0.7.x` patch. Doesn't block agentflow work.
+  phonon `v0.7.x` patch. Doesn't block yanshi work.
 - F-EX-1 (A1.5 persona) — 5 minute fix, can land anytime.
 
 Not on the queue (recap):

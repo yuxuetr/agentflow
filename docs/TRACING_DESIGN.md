@@ -1,4 +1,4 @@
-# AgentFlow 工作流追踪系统设计
+# Yanshi 工作流追踪系统设计
 
 **日期**: 2025-11-23
 **版本**: v1.0
@@ -22,9 +22,9 @@
    - 支持实时追踪和历史回溯
 
 3. **架构原则**
-   - ❌ 不污染 agentflow-core
+   - ❌ 不污染 yanshi-core
    - ✅ 通过事件系统集成
-   - ✅ 独立的 crate（agentflow-tracing）
+   - ✅ 独立的 crate（yanshi-tracing）
    - ✅ 可选使用，零开销（如果不启用）
 
 ---
@@ -37,13 +37,13 @@
 ┌─────────────────────────────────────────────────────────────┐
 │                    Application Layer                        │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │ agentflow-cli│  │agentflow-web │  │  Custom App  │      │
+│  │ yanshi-cli│  │yanshi-web │  │  Custom App  │      │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘      │
 └─────────┼──────────────────┼──────────────────┼─────────────┘
           │                  │                  │
           │                  │                  │
 ┌─────────▼──────────────────▼──────────────────▼─────────────┐
-│              agentflow-tracing (NEW)                         │
+│              yanshi-tracing (NEW)                         │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │         TraceCollector (EventListener)              │    │
 │  │  - Structured trace collection                      │    │
@@ -60,7 +60,7 @@
                            │ EventListener trait
                            │
 ┌──────────────────────────▼───────────────────────────────────┐
-│                 agentflow-core                               │
+│                 yanshi-core                               │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │              events.rs (已存在)                      │    │
 │  │  - WorkflowEvent 定义                                │    │
@@ -72,12 +72,12 @@
 
 ### 三层设计
 
-#### 1. Core 层 (agentflow-core)
+#### 1. Core 层 (yanshi-core)
 **职责**: 定义事件，触发事件
 **不包含**: 任何日志/追踪实现
 
 ```rust
-// agentflow-core/src/events.rs (已存在)
+// yanshi-core/src/events.rs (已存在)
 pub enum WorkflowEvent {
     NodeStarted {
         workflow_id: String,
@@ -123,11 +123,11 @@ pub struct TokenUsage {
 }
 ```
 
-#### 2. Tracing 层 (agentflow-tracing - 新建)
+#### 2. Tracing 层 (yanshi-tracing - 新建)
 **职责**: 实现 EventListener，收集和存储追踪数据
 
 ```rust
-// agentflow-tracing/src/lib.rs
+// yanshi-tracing/src/lib.rs
 pub mod collector;    // TraceCollector - 核心收集器
 pub mod storage;      // Storage trait 和实现
 pub mod query;        // 查询接口
@@ -142,11 +142,11 @@ pub mod exporters;    // 导出器（OpenTelemetry, Jaeger, etc.）
 
 ## 🔧 核心组件设计
 
-### 1. TraceCollector (agentflow-tracing)
+### 1. TraceCollector (yanshi-tracing)
 
 ```rust
-// agentflow-tracing/src/collector.rs
-use agentflow_core::events::{WorkflowEvent, EventListener};
+// yanshi-tracing/src/collector.rs
+use yanshi_core::events::{WorkflowEvent, EventListener};
 use serde::{Serialize, Deserialize};
 use std::sync::Arc;
 
@@ -425,10 +425,10 @@ impl Default for TraceConfig {
 }
 ```
 
-### 2. Storage 抽象 (agentflow-tracing)
+### 2. Storage 抽象 (yanshi-tracing)
 
 ```rust
-// agentflow-tracing/src/storage.rs
+// yanshi-tracing/src/storage.rs
 use async_trait::async_trait;
 
 /// 追踪存储 trait
@@ -575,7 +575,7 @@ impl FileTraceStorage {
 // ============ 实现 2: PostgreSQL (生产环境) — 历史设计草稿，未落地 ============
 //
 // W4.4 核实：以下代码从未实现，且与实际的 DDL schema 不一致——
-// `agentflow-tracing::storage::schema::POSTGRES_TRACE_SCHEMA` 是
+// `yanshi-tracing::storage::schema::POSTGRES_TRACE_SCHEMA` 是
 // `trace_runs`/`trace_steps`/`trace_events`/`trace_tool_calls`/
 // `trace_mcp_calls` 五表规范化设计，不是下面这种单表 `execution_traces`
 // + JSONB 列的方案。当年支撑这个草稿的 `postgres` Cargo feature（挂了
@@ -744,7 +744,7 @@ impl TraceStorage for PostgresTraceStorage {
 ### 3. 查询和导出接口
 
 ```rust
-// agentflow-tracing/src/query.rs
+// yanshi-tracing/src/query.rs
 
 /// 人类可读格式输出
 pub fn format_trace_human_readable(trace: &ExecutionTrace) -> String {
@@ -814,20 +814,20 @@ pub fn export_trace_otel(trace: &ExecutionTrace) -> Result<Vec<u8>> {
 
 ### W3C Trace Context 出站传播 (v0.3.0+)
 
-**问题**：OTel exporter 把 AgentFlow 内部 trace 转成 span 树（workflow →
+**问题**：OTel exporter 把 Yanshi 内部 trace 转成 span 树（workflow →
 node → agent → tool / LLM），但 LLM HTTP 一跳是出站调用 —— 接收方
 （OpenAI / Anthropic / 自建 LLM gateway）创建的 span 与发送方的 trace 不
 共享 trace_id，导致 trace 在 LLM 边界断裂。
 
 **解法**：W3C Trace Context（`traceparent` header）是 OTel 跨服务传播
-的标准。AgentFlow 现在在每个 LLM HTTP 出站请求上自动注入：
+的标准。Yanshi 现在在每个 LLM HTTP 出站请求上自动注入：
 
 ```text
 traceparent: 00-{trace_id}-{span_id}-{flags}
 ```
 
 **Wiring**：
-- `agentflow_llm::trace_context::LlmTraceContext { trace_id, span_id, flags, tracestate }` 是 W3C 包装。
+- `yanshi_llm::trace_context::LlmTraceContext { trace_id, span_id, flags, tracestate }` 是 W3C 包装。
 - tokio `task_local!` 持有当前 context；`scope(ctx, fut).await` 安装。
 - 每个 provider 的 `build_headers` 末尾调用 `inject_into_headers(&mut headers)`，读取 task-local 写出 traceparent。
 - `LLMClient::with_trace_context(ctx)` 让显式 LLM 调用安装 context。
@@ -845,14 +845,14 @@ traceparent: 00-{trace_id}-{span_id}-{flags}
 ### 方式 1: CLI 使用（开发环境）
 
 ```rust
-// agentflow-cli/src/main.rs
-use agentflow_tracing::{TraceCollector, FileTraceStorage, TraceConfig};
+// yanshi-cli/src/main.rs
+use yanshi_tracing::{TraceCollector, FileTraceStorage, TraceConfig};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // 1. 创建存储
     let storage = Arc::new(FileTraceStorage::new(
-        PathBuf::from("~/.agentflow/traces")
+        PathBuf::from("~/.yanshi/traces")
     )?);
 
     // 2. 创建追踪收集器
@@ -883,8 +883,8 @@ async fn main() -> Result<()> {
 ### 方式 2: Web 服务使用（生产环境）
 
 ```rust
-// agentflow-web/src/main.rs
-use agentflow_tracing::{TraceCollector, PostgresTraceStorage, TraceConfig};
+// yanshi-web/src/main.rs
+use yanshi_tracing::{TraceCollector, PostgresTraceStorage, TraceConfig};
 use axum::{routing::get, Router, Json};
 
 #[tokio::main]
@@ -974,7 +974,7 @@ async fn list_traces(
 
 ## 📝 Core 中需要新增的事件
 
-### 更新 agentflow-core/src/events.rs
+### 更新 yanshi-core/src/events.rs
 
 ```rust
 // 只需要添加新的事件变体，不改变架构
@@ -1040,7 +1040,7 @@ pub struct TokenUsage {
 ### 在 LLM Node 中触发事件
 
 ```rust
-// agentflow-llm/src/client.rs (或 LLMNode 实现)
+// yanshi-llm/src/client.rs (或 LLMNode 实现)
 
 impl LLMNode {
     async fn execute(&mut self, context: &mut ExecutionContext) -> Result<Value> {
@@ -1163,11 +1163,11 @@ POST   /api/traces/query              # 高级查询
 ### Phase 1: 基础追踪 (3-4 天)
 
 **Week 1**:
-- [ ] 创建 `agentflow-tracing` crate
+- [ ] 创建 `yanshi-tracing` crate
 - [ ] 实现 `TraceCollector` 和 `ExecutionTrace` 结构
 - [ ] 实现 `FileTraceStorage`
-- [ ] 更新 `agentflow-core/events.rs` 添加新事件
-- [ ] 在 `agentflow-llm` 中触发 LLM 事件
+- [ ] 更新 `yanshi-core/events.rs` 添加新事件
+- [ ] 在 `yanshi-llm` 中触发 LLM 事件
 
 **Week 2**:
 - [ ] 在 CLI 中集成追踪系统

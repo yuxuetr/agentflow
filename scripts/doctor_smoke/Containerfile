@@ -2,8 +2,8 @@
 #
 # Multi-stage build:
 #   1. `builder` — `rust:1-slim-bookworm` mounts the workspace, builds
-#      a release `agentflow` binary.
-#   2. `smoke`   — fresh `ubuntu:24.04` with **zero** `~/.agentflow/`
+#      a release `yanshi` binary.
+#   2. `smoke`   — fresh `ubuntu:24.04` with **zero** `~/.yanshi/`
 #      state; the binary is copied in, doctor runs as the entrypoint.
 #
 # The smoke image's CMD is `doctor --profile production --backup-check
@@ -13,10 +13,10 @@
 # exit with the doctor's own status code.
 #
 # Build:
-#   container build --tag agentflow-doctor-smoke \
+#   container build --tag yanshi-doctor-smoke \
 #       --file scripts/doctor_smoke/Containerfile .
 # Run:
-#   container run --rm agentflow-doctor-smoke
+#   container run --rm yanshi-doctor-smoke
 #
 # The driver script `scripts/doctor_smoke/run.sh` automates both and
 # captures the output to `scripts/doctor_smoke/last-run.json`.
@@ -37,10 +37,10 @@ WORKDIR /src
 COPY . .
 
 # Build only the CLI binary to keep build time short. Default features
-# include llm + http + file + template — everything `agentflow doctor`
+# include llm + http + file + template — everything `yanshi doctor`
 # inspects. Skip plugin / rag — they're feature-gated and would pull
 # heavier deps without changing the doctor surface.
-RUN cargo build --release -p agentflow-cli --bin agentflow
+RUN cargo build --release -p yanshi-cli --bin yanshi
 
 # ── Stage 2: smoke against fresh Ubuntu 24.04 ────────────────────────────────
 FROM ubuntu:24.04 AS smoke
@@ -53,9 +53,9 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates tzdata \
   && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /src/target/release/agentflow /usr/local/bin/agentflow
+COPY --from=builder /src/target/release/yanshi /usr/local/bin/yanshi
 
-# Document what `container run agentflow-doctor-smoke` does without
+# Document what `container run yanshi-doctor-smoke` does without
 # arguments: the canonical P10.0.5 invocation. Operators can override
-# via `container run agentflow-doctor-smoke agentflow doctor ...`.
-CMD ["agentflow", "doctor", "--profile", "production", "--backup-check", "--format", "json"]
+# via `container run yanshi-doctor-smoke yanshi doctor ...`.
+CMD ["yanshi", "doctor", "--profile", "production", "--backup-check", "--format", "json"]

@@ -2,9 +2,9 @@
 
 - Status: **Decided** — adopted as the design basis for the S0 quick-fix wave.
 - Parent: 2026-07-23 sandbox review (conversational code walkthrough, not a
-  full audit). Scope of the review: `agentflow-tools/src/sandbox/*` +
-  `builtin/{shell,script,file}.rs` + `agentflow-skills/src/builder.rs` +
-  `agentflow-agents/src/dynamic.rs`.
+  full audit). Scope of the review: `yanshi-tools/src/sandbox/*` +
+  `builtin/{shell,script,file}.rs` + `yanshi-skills/src/builder.rs` +
+  `yanshi-agents/src/dynamic.rs`.
 - Tracking: `TODOs.md` §S0–S4. S0 items cite this RFC (`Refs S0.x`) in their
   commits; S1–S4 build on the model defined here.
 - Scope: threat model + design principle only. Concrete remediations are
@@ -13,8 +13,8 @@
 
 ## Problem
 
-`agentflow-tools`' sandbox has two real layers today — the in-process
-[`SandboxPolicy`](../agentflow-tools/src/sandbox/policy.rs) (allow-lists +
+`yanshi-tools`' sandbox has two real layers today — the in-process
+[`SandboxPolicy`](../yanshi-tools/src/sandbox/policy.rs) (allow-lists +
 deny-by-default checks) and the OS-level `SandboxBackend`
 (`sandbox-exec` / seccomp, opt-in via `os_sandbox`). Both layers answer the
 question **"what is this tool allowed to touch?"** Neither layer answers a
@@ -32,7 +32,7 @@ though those are completely different risk profiles. The allow-list keeps
 you inside a directory; it says nothing about what's allowed to land there
 and then be interpreted as code.
 
-Concretely, `agentflow-skills::builder::build_tool_registry` merges every
+Concretely, `yanshi-skills::builder::build_tool_registry` merges every
 declared tool's constraints into **one shared `Arc<SandboxPolicy>`**
 (`build_sandbox_policy`, `builder.rs:535`), and when a skill declares a
 `script` tool, that merge step injects two script-specific defaults into the
@@ -142,7 +142,7 @@ Two corollaries this RFC uses to judge every fix in S0–S4:
 | Item | What it fixes, in this vocabulary |
 |---|---|
 | S0.2 | Stop `script`'s own defaults (interpreters, `scripts/`) from populating the policy object `file`/`shell` read; `file` additionally never gets `scripts/` even from explicit config, since an LLM writing there always breaks the author-signed invariant regardless of who configured the allow-list. |
-| S0.3 | Confirm the dynamic-workflow tool registry (LLM-authored plan, `agentflow-agents::dynamic`) has no llm-generated → execution path today (no `script`/`shell`/MCP tool registered by the shipped CLI surface), and pin that as a regression test rather than an incidental fact. |
+| S0.3 | Confirm the dynamic-workflow tool registry (LLM-authored plan, `yanshi-agents::dynamic`) has no llm-generated → execution path today (no `script`/`shell`/MCP tool registered by the shipped CLI surface), and pin that as a regression test rather than an incidental fact. |
 | S1 | Replace "any file under `scripts_dir`" with "a file listed, by content hash, in the manifest at install time" — turns the approximate path-based boundary into an exact author-signed boundary. |
 | S2 | Per-skill dependency environments are still author-signed content (declared in the manifest, materialized at install time) — same trust level as S1, different concern (environment isolation, not content provenance). |
 | S3 | OS-backend hardening raises the cost of a successful escape *after* something at the wrong trust level got executed; it's defense in depth, not a substitute for keeping llm-generated content out of the execution channel in the first place. |

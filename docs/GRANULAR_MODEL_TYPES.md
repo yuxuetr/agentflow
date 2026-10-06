@@ -1,6 +1,6 @@
 # Granular Model Type System
 
-AgentFlow now supports a granular model type classification system that provides specific input/output type requirements for different AI model capabilities. This system enables automatic validation, better error handling, and clearer model selection.
+Yanshi now supports a granular model type classification system that provides specific input/output type requirements for different AI model capabilities. This system enables automatic validation, better error handling, and clearer model selection.
 
 ## Overview
 
@@ -189,10 +189,10 @@ models:
 
 ### Automatic Type Detection
 ```rust
-use agentflow_llm::{AgentFlow, ModelType, MultimodalMessage};
+use yanshi_llm::{Yanshi, ModelType, MultimodalMessage};
 
 // The system automatically validates input types against model capabilities
-let response = AgentFlow::model("step-1o-turbo-vision")  // imageunderstand type
+let response = Yanshi::model("step-1o-turbo-vision")  // imageunderstand type
     .text_and_image(
         "Describe this image",
         "https://example.com/image.jpg"
@@ -202,7 +202,7 @@ let response = AgentFlow::model("step-1o-turbo-vision")  // imageunderstand type
 
 ### Capability Inspection
 ```rust
-use agentflow_llm::ModelRegistry;
+use yanshi_llm::ModelRegistry;
 
 let registry = ModelRegistry::global();
 let config = registry.get_model("step-1o-turbo-vision")?;
@@ -220,7 +220,7 @@ println!("Is multimodal: {}", granular_type.is_multimodal());
 // This will automatically fail if you try to send images to a text-only model
 let message = MultimodalMessage::text_and_image("user", "Describe", "image.jpg");
 
-let result = AgentFlow::model("step-1-8k")  // text type - doesn't support images
+let result = Yanshi::model("step-1-8k")  // text type - doesn't support images
     .multimodal_prompt(message)
     .execute().await;
 
@@ -229,7 +229,7 @@ let result = AgentFlow::model("step-1-8k")  // text type - doesn't support image
 
 ### Model Selection Based on Capabilities
 ```rust
-use agentflow_llm::{ModelRegistry, InputType};
+use yanshi_llm::{ModelRegistry, InputType};
 
 fn find_models_supporting_images() -> Vec<String> {
     let registry = ModelRegistry::global();
@@ -343,5 +343,5 @@ The granular type system is designed to accommodate future AI model types:
 
 For more examples and detailed usage, see:
 - `examples/granular_types_demo.rs` - Comprehensive examples
-- `agentflow-llm/templates/default_models.yml` - authoritative model
+- `yanshi-llm/templates/default_models.yml` - authoritative model
   registry with `type:` per model (text / multimodal / tts / etc.)

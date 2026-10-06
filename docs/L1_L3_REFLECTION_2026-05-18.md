@@ -19,14 +19,14 @@ action queue.
 ## 1. What we set out to validate
 
 The 3-tier integration architecture proposed when we asked "how should
-agentflow consume phonon?" (see commit history for the original
+yanshi consume phonon?" (see commit history for the original
 discussion):
 
 | Tier | What | Validation vehicle |
 | --- | --- | --- |
-| **L1** | agentflow consumes phonon as a Rust library (path dep), uses it inside custom `AsyncNode` impls | A1 blog-to-podcast |
-| **L2** | agentflow wraps phonon functions as `Tool` trait impls so an in-process agent can drive them via native tool calling | (intentionally deferred — see § 4) |
-| **L3** | agentflow drives phonon-mcp as a separate subprocess via stdio JSON-RPC, agent uses the auto-exposed `mcp_phonon_*` tools | A1.5 podcast-mastering |
+| **L1** | yanshi consumes phonon as a Rust library (path dep), uses it inside custom `AsyncNode` impls | A1 blog-to-podcast |
+| **L2** | yanshi wraps phonon functions as `Tool` trait impls so an in-process agent can drive them via native tool calling | (intentionally deferred — see § 4) |
+| **L3** | yanshi drives phonon-mcp as a separate subprocess via stdio JSON-RPC, agent uses the auto-exposed `mcp_phonon_*` tools | A1.5 podcast-mastering |
 
 L1 and L3 both reached "agent successfully produces correct audio
 output end-to-end" — see EXAMPLES_TODOs.md A1 / A1.5 entries for
@@ -56,14 +56,14 @@ step"**.
 
 20 findings total (10 from A1, 10 from A1.5). Categorized by who fixes:
 
-### 3.1 agentflow code changes (4 items)
+### 3.1 yanshi code changes (4 items)
 
 | ID | Finding | Action | Priority |
 | --- | --- | --- | --- |
-| F-AF-1 | `agentflow skill validate` swallows `SkillError::ValidationError.message`, user sees only "Validation failed" | Surface the underlying message in `agentflow-cli/src/commands/skill/validate.rs`. Check the `with_context` chain didn't override an `anyhow::Error`'s root cause display. | **High** — blocks new skill authors |
+| F-AF-1 | `yanshi skill validate` swallows `SkillError::ValidationError.message`, user sees only "Validation failed" | Surface the underlying message in `yanshi-cli/src/commands/skill/validate.rs`. Check the `with_context` chain didn't override an `anyhow::Error`'s root cause display. | **High** — blocks new skill authors |
 | F-AF-2 | SKILL.md frontmatter `model:` field is silently ignored (`SkillMd::into_manifest` always sets `model: Default::default()`) | Either (a) parse `model.name` from frontmatter, or (b) warn at parse time when a `model` field is present in SKILL.md frontmatter | Medium — surprising, but skill.toml is the workaround |
-| F-AF-3 | `.env` auto-load from `~/.agentflow/.env` should be a built-in convention for `agentflow skill run` / `workflow run` / etc., not just per-example boilerplate | Add `dotenvy::from_path` call early in `agentflow-cli/src/main.rs` (silent no-op when missing). Respect existing env vars (dotenvy default). | Medium — reduces friction for every CLI invocation |
-| F-AF-4 | `agentflow-llm::AgentFlow::init()` requires either workspace config or `~/.agentflow/models.yml` to discover Moonshot, and the error path is not always crisp | Already mostly fine; add an explicit error message hint pointing at the docs section when init fails | Low — only hit on fresh hosts |
+| F-AF-3 | `.env` auto-load from `~/.yanshi/.env` should be a built-in convention for `yanshi skill run` / `workflow run` / etc., not just per-example boilerplate | Add `dotenvy::from_path` call early in `yanshi-cli/src/main.rs` (silent no-op when missing). Respect existing env vars (dotenvy default). | Medium — reduces friction for every CLI invocation |
+| F-AF-4 | `yanshi-llm::Yanshi::init()` requires either workspace config or `~/.yanshi/models.yml` to discover Moonshot, and the error path is not always crisp | Already mostly fine; add an explicit error message hint pointing at the docs section when init fails | Low — only hit on fresh hosts |
 
 ### 3.2 phonon code changes (3 items)
 
@@ -100,16 +100,16 @@ step"**.
 
 | ID | Finding |
 | --- | --- |
-| F-OK-1 | agentflow `ConsoleListener` emits per-node trace events with timing visible immediately (`read_blog: 189µs`, `produce_podcast: 18.78s`) |
+| F-OK-1 | yanshi `ConsoleListener` emits per-node trace events with timing visible immediately (`read_blog: 189µs`, `produce_podcast: 18.78s`) |
 | F-OK-2 | `mcp_<server_name>_<tool_name>` auto-naming convention is clean and predictable |
 | F-OK-3 | Moonshot native tool calling worked first-shot through `moonshot-v1-128k`; honoured persona's step-by-step instructions across 6 tools |
 | F-OK-4 | phonon-mcp's `AssetRegistry` (UUID handle) pattern survived multi-step agent workflow without leaks or wrong-handle bugs |
-| F-OK-5 | `agentflow skill run --trace` JSON output (plan / tool_call / tool_result / final_answer per index + timestamp) is genuinely useful for dogfooding/debug |
-| F-OK-6 | `dotenvy::from_path` pattern for `~/.agentflow/.env` works cleanly in standalone application binaries (precedent for F-AF-3 promotion) |
+| F-OK-5 | `yanshi skill run --trace` JSON output (plan / tool_call / tool_result / final_answer per index + timestamp) is genuinely useful for dogfooding/debug |
+| F-OK-6 | `dotenvy::from_path` pattern for `~/.yanshi/.env` works cleanly in standalone application binaries (precedent for F-AF-3 promotion) |
 
 ## 4. L2 verdict
 
-**L2 (agentflow `Tool` trait wrapping phonon functions for in-process,
+**L2 (yanshi `Tool` trait wrapping phonon functions for in-process,
 LLM-driven tool calling) is deferred indefinitely.**
 
 Evidence:
@@ -163,20 +163,20 @@ they can be archived without disruption.
 
 | Pri | ID | Action | Owner | Tracking |
 | --- | --- | --- | --- | --- |
-| 1 | F-AF-1 | Surface `SkillError::ValidationError.message` in `skill validate` | agentflow | Add as `P9.1` in TODOs.md (or pick another segment) |
-| 2 | F-DOC-1 | Document `security.mcp_command_allowlist` default + how to opt-in compiled binaries | agentflow docs | Add as `P9.2` |
-| 3 | F-AF-3 | `dotenvy::from_path("~/.agentflow/.env")` in agentflow CLI entrypoint | agentflow | `P9.3` |
+| 1 | F-AF-1 | Surface `SkillError::ValidationError.message` in `skill validate` | yanshi | Add as `P9.1` in TODOs.md (or pick another segment) |
+| 2 | F-DOC-1 | Document `security.mcp_command_allowlist` default + how to opt-in compiled binaries | yanshi docs | Add as `P9.2` |
+| 3 | F-AF-3 | `dotenvy::from_path("~/.yanshi/.env")` in yanshi CLI entrypoint | yanshi | `P9.3` |
 | 4 | F-PH-1 | Truncate long values in phonon `#[instrument(fields(...))]` | phonon | phonon Todos.md |
 | 5 | F-PH-2 | `PodcastPipeline::generate` returns per-segment durations | phonon | phonon Todos.md |
-| 6 | F-AF-2 | SKILL.md `model:` either honour or warn | agentflow | `P9.4` |
-| 7 | F-EX-1 | A1.5 persona: add "re-measure LUFS before save" step | agentflow examples | EXAMPLES_TODOs.md A1.5 |
+| 6 | F-AF-2 | SKILL.md `model:` either honour or warn | yanshi | `P9.4` |
+| 7 | F-EX-1 | A1.5 persona: add "re-measure LUFS before save" step | yanshi examples | EXAMPLES_TODOs.md A1.5 |
 | 8 | F-PH-3 | phonon-mcp `audio_info` surfaces `resampled_from` | phonon | phonon Todos.md |
-| 9 | F-DOC-2 | `FlowValue` field reference in `docs/AGENT_SDK.md` | agentflow docs | `P9.5` |
-| 10 | F-DOC-3 | Tighten `target_segments` docstring + A1 README | phonon + agentflow examples | small |
-| 11 | F-DOC-4 | Bump phonon-mcp build instruction prominence in A1.5 README | agentflow examples | small |
-| - | F-AF-4 | Crisper Moonshot/Anthropic init error path on fresh hosts | agentflow | low pri |
+| 9 | F-DOC-2 | `FlowValue` field reference in `docs/AGENT_SDK.md` | yanshi docs | `P9.5` |
+| 10 | F-DOC-3 | Tighten `target_segments` docstring + A1 README | phonon + yanshi examples | small |
+| 11 | F-DOC-4 | Bump phonon-mcp build instruction prominence in A1.5 README | yanshi examples | small |
+| - | F-AF-4 | Crisper Moonshot/Anthropic init error path on fresh hosts | yanshi | low pri |
 
-**No high-priority refactor of either core (phonon-core / phonon-podcast / agentflow-core / agentflow-agents).** Every action is documentation, error-message, or peripheral-fix scope.
+**No high-priority refactor of either core (phonon-core / phonon-podcast / yanshi-core / yanshi-agents).** Every action is documentation, error-message, or peripheral-fix scope.
 
 ## 7. Next dogfooding steps
 
@@ -185,7 +185,7 @@ In rough order of value:
 1. **Land the top-3 priority actions** (F-AF-1, F-DOC-1, F-AF-3) —
    these directly affect every future skill author. ~2-4 hours total.
 2. **A7 changelog-writer** — zero-external-dep app exercising shell
-   node + OS sandbox + LLM (agentflow eats its own dogfood). Should
+   node + OS sandbox + LLM (yanshi eats its own dogfood). Should
    surface another batch of findings about shell admission + sandbox
    actually working as documented.
 3. **A2 code-reviewer** — real ReAct agent + MCP integration (GitHub
@@ -193,7 +193,7 @@ In rough order of value:
    (`add_review_comment`) which exercises Harness Mode approval gate
    for the first time outside synthetic tests.
 4. **Phonon-side action items** (F-PH-1, F-PH-2, F-PH-3) — batch
-   into a single phonon `v0.7.x` patch release. None block agentflow
+   into a single phonon `v0.7.x` patch release. None block yanshi
    work.
 5. **Continue dogfooding without a fixed schedule.** Add findings to
    EXAMPLES_TODOs.md as they accumulate. Open another reflection
@@ -214,6 +214,6 @@ In rough order of value:
 ## Status
 
 This reflection itself does not change any code or schedule. The
-action items above become tasks in `TODOs.md` (agentflow side) or
+action items above become tasks in `TODOs.md` (yanshi side) or
 `/Users/hal/rustspace/phonon/Todos.md` (phonon side) in the next
 commit cycle.

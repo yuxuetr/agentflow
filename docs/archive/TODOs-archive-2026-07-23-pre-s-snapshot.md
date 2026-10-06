@@ -1,4 +1,4 @@
-# AgentFlow TODOs
+# Yanshi TODOs
 
 Last updated: 2026-06-20
 
@@ -50,7 +50,7 @@ Current focus: **Q-段（2026-05-24 审计修复）已全闭环并外迁** → �
 ## H — Harness Mode follow-ups (post loop-ownership + chat)
 
 > 来源：`docs/RFC_HARNESS_LOOP_OWNERSHIP.md`（已实现并合并，PR #2）+
-> `agentflow harness chat`（已实现并合并，PR #3）。**核心已生产可用、全绿、进
+> `yanshi harness chat`（已实现并合并，PR #3）。**核心已生产可用、全绿、进
 > main**；以下都是收尾打磨或主动推迟项，**无任何生产阻断**。状态：`TODO` =
 > 可做的收尾增强；`DEFERRED` = 需设计或属 RoadMap non-goal。
 
@@ -111,7 +111,7 @@ Current focus: **Q-段（2026-05-24 审计修复）已全闭环并外迁** → �
 ### H.6 — 服务端多节点共享 memory backend（DEFERRED）
 
 - DEFERRED H.6.1 跨节点的 harness 对话记忆
-  - 现状:`AGENTFLOW_HARNESS_MEMORY_DB` opt-in 用共享 SQLite 文件(单节点假设),
+  - 现状:`YANSHI_HARNESS_MEMORY_DB` opt-in 用共享 SQLite 文件(单节点假设),
     已写进 `docs/DEPLOYMENT.md`。
   - 推迟原因:多节点部署需要 Postgres-backed 或外部 `MemoryStore`,属架构决策,
     待真实多节点需求出现再设计(对应 `docs/ROADMAP_v2.md` Theme B/C)。
@@ -155,7 +155,7 @@ Current focus: **Q-段（2026-05-24 审计修复）已全闭环并外迁** → �
 > - `harness→llm`(仅 tokenizer) / `mcp→tracing`(仅 traceparent) / `memory→rag`
 >   (仅 EmbeddingProvider) 是"薄理由胖依赖"，折叠进 `value`/`agent-spi`/`store-spi`，
 >   不另起微 crate（R6）。
-> - `agentflow-nodes` 是横跨 tool/capability/runtime 三层的胖 crate → 需显式拆分
+> - `yanshi-nodes` 是横跨 tool/capability/runtime 三层的胖 crate → 需显式拆分
 >   决策（R3，见 P-A0.5）。
 
 ### P-A0 — 立约 + 架构守卫
@@ -176,10 +176,10 @@ Current focus: **Q-段（2026-05-24 审计修复）已全闭环并外迁** → �
   要求移入 `ARCH_ALLOWLIST`，故清单只会变真或缩小。含 `evaluate_latent` 纯函数 +
   present/resolved/misfiled 单测 + 唯一性/与 allowlist 不相交 guard。提交 `3195ee3`。
   （`harness` 5 条 impl 边中 4 条 latent + 1 条 allowlist 均已显式追踪。）
-- DONE P-A0.5（R3）`agentflow-nodes` 拆分决策已定，见
+- DONE P-A0.5（R3）`yanshi-nodes` 拆分决策已定，见
   `docs/RFC_NODES_DECOMPOSITION.md`（提交 `8a366e5`）：按实测 per-file 能力导入分两
-  crate——`agentflow-nodes`（tool 层 7 个：template/file/http/batch/conditional/
-  arxiv/markmap，仅 `graph`+`tool`）+ 新 `agentflow-nodes-ai`（能力适配 10 个：
+  crate——`yanshi-nodes`（tool 层 7 个：template/file/http/batch/conditional/
+  arxiv/markmap，仅 `graph`+`tool`）+ 新 `yanshi-nodes-ai`（能力适配 10 个：
   llm/asr/tts/image*/rag/mcp）。否决 feature-gate（optional dep 仍是 check-arch 边）
   与分散到各能力 crate（碎片化 node factory）。**落地在 P-A4**（依赖 P-A1.3 graph
   拆分）；之后 `worker→nodes` 零能力负担，解锁 P2.8。
@@ -189,25 +189,25 @@ Current focus: **Q-段（2026-05-24 审计修复）已全闭环并外迁** → �
 > 执行顺序（评估修订）：**P-A1.5（value）→ P-A1.3（graph）→ P-A1.1/1.2（spi）→
 > P-A1.4（async-util）→ P-A1.6（spike）**。`value` 是 `graph` 的前置依赖，必须先抽。
 
-- DONE P-A1.5（R1，首抽）`agentflow-value` 叶子 crate 已抽出（提交 `e315849`）：
-  `FlowValue` + serde 转换从 `agentflow-core/src/value.rs` 移入零内部依赖的新 crate；
-  `core` 依赖并经 `pub use agentflow_value as value` re-export，`agentflow_core::value::
-  FlowValue` / `agentflow_core::FlowValue` 全部不变即编译通过（忠实绞杀，暂不 repoint
+- DONE P-A1.5（R1，首抽）`yanshi-value` 叶子 crate 已抽出（提交 `e315849`）：
+  `FlowValue` + serde 转换从 `yanshi-core/src/value.rs` 移入零内部依赖的新 crate；
+  `core` 依赖并经 `pub use yanshi_value as value` re-export，`yanshi_core::value::
+  FlowValue` / `yanshi_core::FlowValue` 全部不变即编译通过（忠实绞杀，暂不 repoint
   consumers——在 graph 拆分前 repoint 不消任何边）。验证：value 6 测试 + core 190+ 测试
   通过、`cargo check --workspace --all-targets` clean、check-arch green（17 members）、
   fmt/clippy clean。`nodes`/`agents` 的 repoint 留到 P-A1.3 graph 拆分时一并做。
-- DONE P-A1.3 从 `agentflow-core` 拆 `agentflow-graph`（IR），`core` 留执行引擎；
+- DONE P-A1.3 从 `yanshi-core` 拆 `yanshi-graph`（IR），`core` 留执行引擎；
   re-export 兼容。**IR ≠ executor 拆分已闭环**（提交 `0252972` / `caf4b04` /
   `4cc5067` / `c8a5323` / `be75e5c` / `56246e9` / `91c6604`）。决策（用户选定）：
   **FlowExt 扩展 trait 保留 `flow.run()`**，引擎在 core 的 `FlowExecutor<'a>(&Flow)`
   内联实现（orphan-rule 干净），`Flow`/`GraphNode`/`NodeType` 在 graph。
-  `agentflow_core::{Flow,GraphNode,NodeType,FlowExt}` re-export，调用方唯一变化是
-  `use agentflow_core::FlowExt`。验证：workspace build/clippy/fmt clean、core 184 +
+  `yanshi_core::{Flow,GraphNode,NodeType,FlowExt}` re-export，调用方唯一变化是
+  `use yanshi_core::FlowExt`。验证：workspace build/clippy/fmt clean、core 184 +
   graph 178 + agents + workspace doc 测试全过、check-arch green。**`agents→core` 已烧**
   （2d-ii/2d-iv 随 P-A2.1 FlowRunner 契约线落地，2026-06-23 审核确认空 allowlist）。
   分两步执行明细见下：
   - DONE **step 1/2**（提交 `0252972`）：纯 IR 叶子 `error`/`async_node`/`node`/`expr`
-    移入 `agentflow-graph`（仅依赖 `value`）；`core` 依赖 graph 并按原路径 re-export，
+    移入 `yanshi-graph`（仅依赖 `value`）；`core` 依赖 graph 并按原路径 re-export，
     全仓库不变即编译。graph 30+ / core 190+ 测试通过，check-arch green（18 members）。
   - step 2 拆成 2a–2d 四个绿色子步：
     - DONE **2a/2b**（提交 `caf4b04`）：`events`（EventListener/WorkflowEvent/listeners，
@@ -227,15 +227,15 @@ Current focus: **Q-段（2026-05-24 审计修复）已全闭环并外迁** → �
         （随 struct 迁 graph）。13 套测试通过。**至此执行引擎对 Flow 的耦合只剩 5 个 accessor
         + 私有 `checkpoint_manager()` helper。**
       - DONE **2d-ii**（core 内，独立可绿）：`struct FlowExecutor<'a>{ flow:&'a Flow }` 已落地
-        （`agentflow-core/src/flow.rs:35`）——引擎（私有 helper + execute_* 深层逻辑）从 `impl Flow`
+        （`yanshi-core/src/flow.rs:35`）——引擎（私有 helper + execute_* 深层逻辑）从 `impl Flow`
         迁入 `impl<'f> FlowExecutor<'f>`，Flow 的公开方法保留为薄委托。全程 core 内，无跨 crate。
         （随 P-A2.1 的 `FlowRunner` 契约线一并落地；2026-06-23 审核确认 core 99 单测 + 全集成测过。）
       - DONE **2d-iv**（原子移动）：`Flow`/`GraphNode`/`NodeType` + builder + accessor 已在
-        `agentflow-graph/src/flow.rs`（带 `with_checkpoint_config` 无校验 setter + 5 个 pub accessor）；
+        `yanshi-graph/src/flow.rs`（带 `with_checkpoint_config` 无校验 setter + 5 个 pub accessor）；
         7 个公开执行方法在 core 改为 `pub trait FlowExt`（`impl FlowExt for Flow` 委托 FlowExecutor），
         core lib re-export `Flow`/`GraphNode`/`NodeType` + prelude 含 `FlowExt`，call sites（agents 等）
-        改 `use agentflow_core::FlowExt`。**`agents→core` 已烧**：agents 实依赖 `agentflow-graph`（IR）
-        + `FlowRunner` 契约，`agentflow-core` 仅 dev-dep；`CoreFlowRunner` 由 surface 注入。check-arch
+        改 `use yanshi_core::FlowExt`。**`agents→core` 已烧**：agents 实依赖 `yanshi-graph`（IR）
+        + `FlowRunner` 契约，`yanshi-core` 仅 dev-dep；`CoreFlowRunner` 由 surface 注入。check-arch
         现 0 tracked / **空 allowlist**（2026-06-23 审核确认：build/test/check-arch 全绿）。
       - 历史分析（flow.rs 3246 行）：
       1. graph：`NodeType`/`GraphNode`/`Flow` struct（`checkpoint_manager:
@@ -249,15 +249,15 @@ Current focus: **Q-段（2026-05-24 审计修复）已全闭环并外迁** → �
          ~23 处 `self.<field>` 改走 accessor；`FlowExt::run()` 用 `checkpoint_config` 在
          运行时 `CheckpointManager::new(cfg)`。
       3. core lib.rs re-export `Flow`/`GraphNode`/`NodeType`/`NodeStatus` from graph；
-         加 prelude 含 `FlowExt`，call sites（`agentflow-agents` 10+ 文件等）加
-         `use agentflow_core::FlowExt`（或 prelude glob）。
+         加 prelude 含 `FlowExt`，call sites（`yanshi-agents` 10+ 文件等）加
+         `use yanshi_core::FlowExt`（或 prelude glob）。
       4. flow.rs 测试（行 1490–3246，~1756 行）跟执行逻辑迁到 core。
       完成后 `agents→graph` 干净、烧掉 allowlist 第 1 条（agents→core）。
-- P-A1.1 `agentflow-agent-spi`（依赖 P-A1.2 store-spi 已解锁）分两步：
+- P-A1.1 `yanshi-agent-spi`（依赖 P-A1.2 store-spi 已解锁）分两步：
   - DONE **1/2 运行时契约**（提交 `2abf420`）：`runtime.rs` 整体（AgentRuntime /
     AgentEvent / AgentStep / AgentContext / RuntimeLimits / 取消令牌 / event+memory
-    hook / AgentRuntimeError）移入新 `agentflow-agent-spi`；`Message`/`MemoryStore`
-    指向 store-spi；agents 依赖 agent-spi 并按原 `agentflow_agents::runtime` 路径
+    hook / AgentRuntimeError）移入新 `yanshi-agent-spi`；`Message`/`MemoryStore`
+    指向 store-spi；agents 依赖 agent-spi 并按原 `yanshi_agents::runtime` 路径
     re-export——**消费方零改动**。react/reflection 仅是 intra-doc 链接，降级为普通
     code span。agent-spi 19 + agents 159 测试过、check-arch green（20 members）。
     `agent-spi→llm` 是过渡（仅为 `AgentContext.trace_context: LlmTraceContext`），
@@ -266,12 +266,12 @@ Current focus: **Q-段（2026-05-24 审计修复）已全闭环并外迁** → �
     payload 类型）/ `Approval*`（Request/Decision/Risk/Scope/Outcome + `ApprovalProvider`
     trait）/ `PreToolHook` / `PostToolHook` / `HarnessEventSink` trait / `ContextProvider`
     （+ `HarnessContext`/`HarnessProfile`/`HarnessRuntimeKind`/`ContextItem`/
-    `ContextPriority`）+ 共享的 `HarnessError` 整体移入新 `agentflow-agent-spi::harness`
+    `ContextPriority`）+ 共享的 `HarnessError` 整体移入新 `yanshi-agent-spi::harness`
     子模块。**忠实绞杀**：harness 的 `error`/`approval`/`context`/`hooks`/`event` 五个文件
-    降为 `pub use agentflow_agent_spi::harness::<mod>::*` re-export shim；`persistence.rs`
+    降为 `pub use yanshi_agent_spi::harness::<mod>::*` re-export shim；`persistence.rs`
     保留具体 sink 实现（Jsonl/Stdout/InMemory/SinkChain），仅 trait 移走并 re-export——
     **消费方（server/cli）零改动**。agent-spi **零新增依赖**（chrono/serde/async-trait/
-    thiserror/tools 全已在）。redaction（`params_summary.rs`→`agentflow_tracing`）刻意留
+    thiserror/tools 全已在）。redaction（`params_summary.rs`→`yanshi_tracing`）刻意留
     harness（契约类型只持已脱敏字符串、不调 redaction），故本步**不烧** `harness→tracing`
     边——那需把 redaction 下沉到 value/agent-spi，留后续。验证：agent-spi 38（含迁入的 19
     个契约测试）+ harness 74 + envelope_contract 6 + server 180 + cli 173 + agents 163
@@ -280,8 +280,8 @@ Current focus: **Q-段（2026-05-24 审计修复）已全闭环并外迁** → �
   - 拆出（留 P-A4.3）：RFC §2 的 `Capability`/`Lowered` trait 是推测性新设计，与
     skills 降解（P-A4.3 `Capability::lower`）强绑定——待有真实消费者时随 P-A4.3 落地，
     不在本契约抽取步里空写。
-- DONE P-A1.2 `agentflow-store-spi` 已抽出（提交 `be9a148`）：`MemoryStore` +
-  `Message`/`Role`/`TokenCounter` + `MemoryError` 从 `agentflow-memory` 移入新契约
+- DONE P-A1.2 `yanshi-store-spi` 已抽出（提交 `be9a148`）：`MemoryStore` +
+  `Message`/`Role`/`TokenCounter` + `MemoryError` 从 `yanshi-memory` 移入新契约
   crate；具体 store 实现（SessionMemory/SqliteMemory/SemanticMemory/preference/
   entity）留 memory，memory 依赖 store-spi 并按原路径 re-export——**消费方零改动**。
   这给 `Message` 一个契约家，解锁 P-A1.1（agent-spi 可依赖 store-spi::Message 而非
@@ -290,13 +290,13 @@ Current focus: **Q-段（2026-05-24 审计修复）已全闭环并外迁** → �
   **未做（留 follow-up）**：(a) `EmbeddingProvider`（R6，`memory→rag` 边）需先统一
   rag/memory 错误面再收进 store-spi；(b) `MemoryError` 目前把 `sqlx` 钉进契约 crate
   （orphan rule），后续可瘦身解耦；(c) `KnowledgeBackend` 是 P-A4 RAG 归位时新写。
-- DONE P-A1.4 `agentflow-async-util` 已抽出（提交 `d5b4f26`）：retry + timeout 组合子
-  从 core 移入新 crate，core re-export `agentflow_core::{retry,timeout}`——消费方零改动；
+- DONE P-A1.4 `yanshi-async-util` 已抽出（提交 `d5b4f26`）：retry + timeout 组合子
+  从 core 移入新 crate，core re-export `yanshi_core::{retry,timeout}`——消费方零改动；
   retry_executor 留 core。加 `observability` feature 并从 core 传播。async-util→graph
-  （AgentFlowError），待通用错误重构解耦。**五个新内核 crate 全部就位**（value / graph /
+  （YanshiError），待通用错误重构解耦。**五个新内核 crate 全部就位**（value / graph /
   store-spi / agent-spi / async-util）。与 agents 重复实现的合并是 P-A3.2。
 - DONE P-A1.6 dynamic-workflow 垂直切片 spike 已落地（提交见下）：
-  `agentflow-agents/examples/dynamic_workflow_spike.rs` 演示 toy planner 运行时
+  `yanshi-agents/examples/dynamic_workflow_spike.rs` 演示 toy planner 运行时
   生成 `Flow`（graph IR，shape 运行时定）→ core 经 `FlowExt` 执行，二者只经 graph
   契约相遇。已接入 examples-smoke CI gate。验证内核可承载 dynamic workflow；P-A4
   产品化（PlanExecuteAgent 产出真 Flow）。
@@ -313,17 +313,17 @@ Current focus: **Q-段（2026-05-24 审计修复）已全闭环并外迁** → �
   `stopped`，按 per-node result map 分类 completed/failed/timed-out）。工具治理走 registry seam:
   Flow 节点的 registry 经 `wrap_registry` + `HookConfig`(共享 runtime 的 seq_counter + sinks)
   包裹后,approval/hook/audit 事件与信封交织在同一单调流上。新增 `HarnessRuntimeKind::Flow` 变体 +
-  `InnerRuntime::None`。新增 harness→agentflow-graph 依赖(runtime→contract,executor 经 FlowRunner
+  `InnerRuntime::None`。新增 harness→yanshi-graph 依赖(runtime→contract,executor 经 FlowRunner
   留外,check-arch 绿)。2 集成测(信封 + AutoDeny 阻断节点工具调用并 fail run)+ harness 74 测全绿,
   clippy(-D)/fmt/全 workspace build 绿。
 - DONE P-A2.2-FU1 节点级 `step_started` 事件已落地（分支 `feat/p-a2.2-flow-node-events`）：
-  `run_flow` 给 flow 挂 `agentflow-graph::EventListener`，把每个节点的 NodeStarted（node_id）
+  `run_flow` 给 flow 挂 `yanshi-graph::EventListener`，把每个节点的 NodeStarted（node_id）
   经 channel 转出，与 run 并发 drain（biased `select!`），实时发 `step_started`
   （`step_type = "node:<id>"`），与工具/审批事件在 `session_started`↔`stopped` 间实时交错。
   经现有 `Flow::with_event_listener` seam 观测，零 executor 耦合。+1 集成测（2 节点→2 step_started，
   seq gap-free）。
 - DONE P-A2.2-FU2 CLI surface 已落地（分支 `feat/p-a2.2-harness-flow-cli`）：新子命令
-  `agentflow harness run-flow <workflow.yaml>` —— build_flow_from_yaml → `HarnessRuntime::run_flow`
+  `yanshi harness run-flow <workflow.yaml>` —— build_flow_from_yaml → `HarnessRuntime::run_flow`
   + `CoreFlowRunner`,把 Harness 信封(session_started runtime=flow → 每节点 step_started → stopped)
   按 agent session 一样持久化为 JSONL。flag:`--input k=v`(可重复)/`--model`/`--profile`/`--output
   text|json|stream-json|json-envelope`/`--workspace`/`--run-dir`/`--timeout-ms`/`--session`/
@@ -344,10 +344,10 @@ Current focus: **Q-段（2026-05-24 审计修复）已全闭环并外迁** → �
   `FlowRunner` 在确定性引擎执行,返回带 Observe→Plan→逐节点 ToolCall/ToolResult→FinalAnswer
   trace 的 `AgentRunResult`(节点失败→`AgentStopReason::Error`)。复用既有 call_planner/parse_plan/
   memory 私有 helper,不动 sequential 路径(零回归);同一 cancel/timeout/token/step/tool-call 预算。
-  `PlanExecuteError` 加 `Flow(#[from] AgentFlowError)`。+1 mock-LLM e2e(plan→compile→execute→answer)
+  `PlanExecuteError` 加 `Flow(#[from] YanshiError)`。+1 mock-LLM e2e(plan→compile→execute→answer)
   + 179 agents 测全绿。clippy(-D)/fmt/check-arch/全 workspace build 绿。
-- DONE P-A2.2-FU3b-e2e `run_as_flow` 端到端已落地（分支 `feat/p-a2.2-planexecute-emits-flow`+续）：`PlanExecuteAgent::run_as_flow(context, runner)` —— LLM 规划 → compile_plan_to_flow → 经注入 `FlowRunner` 在确定性引擎执行,返回带 Observe→Plan→逐节点 ToolCall/ToolResult→FinalAnswer trace 的 `AgentRunResult`(节点失败→`AgentStopReason::Error`)。复用既有 call_planner/parse_plan/memory 等私有 helper,不动 sequential 路径(零回归)。同一 cancel/timeout/token/step/tool-call 预算。`PlanExecuteError` 加 `Flow(#[from] AgentFlowError)`。+1 mock-LLM e2e(plan→compile→execute→answer)+ 179 agents 测全绿。
-- DONE P-A2.3 抽 `agentflow-worker-proto`，烧 `worker→server`（PR #25）。新 crate 收
+- DONE P-A2.2-FU3b-e2e `run_as_flow` 端到端已落地（分支 `feat/p-a2.2-planexecute-emits-flow`+续）：`PlanExecuteAgent::run_as_flow(context, runner)` —— LLM 规划 → compile_plan_to_flow → 经注入 `FlowRunner` 在确定性引擎执行,返回带 Observe→Plan→逐节点 ToolCall/ToolResult→FinalAnswer trace 的 `AgentRunResult`(节点失败→`AgentStopReason::Error`)。复用既有 call_planner/parse_plan/memory 等私有 helper,不动 sequential 路径(零回归)。同一 cancel/timeout/token/step/tool-call 预算。`PlanExecuteError` 加 `Flow(#[from] YanshiError)`。+1 mock-LLM e2e(plan→compile→execute→answer)+ 179 agents 测全绿。
+- DONE P-A2.3 抽 `yanshi-worker-proto`，烧 `worker→server`（PR #25）。新 crate 收
   WorkerProtocol 契约 + 全部 wire 类型 + SchedulerError + InMemoryWorkerProtocol +
   NodeExecutionPayload + GrpcWorkerProtocol(client) + proto↔domain 转换 + traceparent
   helpers + worker.proto codegen(build.rs+tonic-build→pb)。worker 依赖 worker-proto（server
@@ -358,51 +358,51 @@ Current focus: **Q-段（2026-05-24 审计修复）已全闭环并外迁** → �
   cross-hop e2e) / worker 16+集成。**P-A2 运行时解耦全段闭环。**。**已详细 scoping（2026-06-21）**：
   非简单搬迁，是 **gRPC codegen crate 迁移**。`worker` 用 `GrpcWorkerProtocol`/`InMemoryWorkerProtocol`/`WorkerId`。`scheduler/mod.rs`（1562 行）既是协议又是聚合器
   （`pub use admission/distributed/grpc`）；`grpc.rs` 的 `GrpcWorkerProtocol` 依赖
-  `build.rs` + `proto/agentflow/*.proto` + `tonic-build`/`prost` codegen。烧边需：
-  (a) 新建 `agentflow-worker-proto`，迁 `build.rs` + `.proto` + `tonic-build`/`prost` 依赖；
+  `build.rs` + `proto/yanshi/*.proto` + `tonic-build`/`prost` codegen。烧边需：
+  (a) 新建 `yanshi-worker-proto`，迁 `build.rs` + `.proto` + `tonic-build`/`prost` 依赖；
   (b) 从 mod.rs carve ~18 协议类型（WorkerProtocol trait + WorkerTask/WorkerTaskResult/
   WorkerHeartbeat/WorkerId/WorkerCapabilities/ClaimHints/SchedulerError/WorkerControlPlane/
   InMemoryWorkerProtocol/trace 类型）；(c) `admission/distributed/jwt` 留 server，从
   worker-proto 反向 import；(d) 解开 mod.rs 聚合 re-export。**大且涉 codegen，建议独立 fresh session。**
 - DONE(step 1/2) P-A2.4 抽共享 assembly，删 `server→cli`（PR #22 = step 1）：
-  新建 `agentflow-config` crate（config schema v2/schema + executor build_flow_from_yaml
-  + node factories），从 cli 外迁；cli `pub use agentflow_config::{config, executor}` 兼容
+  新建 `yanshi-config` crate（config schema v2/schema + executor build_flow_from_yaml
+  + node factories），从 cli 外迁；cli `pub use yanshi_config::{config, executor}` 兼容
   + feature 转发（plugin/rag/mcp）；server `runs.rs`(build_flow_from_yaml) + `scheduler::
-  distributed`(V2 schema) 改 import agentflow-config。**3 个 server→cli 用点已repoint 2 个**。
+  distributed`(V2 schema) 改 import yanshi-config。**3 个 server→cli 用点已repoint 2 个**。
   **剩余 step 2（烧边）**：doctor `build_report`（server `/diagnostics` 用）——需把 report
   builder 从 doctor 命令拆出（`execute` 耦合 cli `json_envelope`，故 build_report + report
-  model + DoctorProfile → agentflow-config 的 diagnostics 模块；execute/OutputFormat 留 cli），
+  model + DoctorProfile → yanshi-config 的 diagnostics 模块；execute/OutputFormat 留 cli），
   repoint server `diagnostics.rs`，然后从 ARCH_ALLOWLIST 移除 server→cli 烧边。
 - DONE(step 2/2 — 烧边完成) P-A2.4 server→cli 已烧（PR #23）：doctor report builder
   （build_report/DoctorProfile/DoctorReport+report model/print_text_report）移入
-  `agentflow_config::diagnostics`；execute（耦合 json_envelope）+ probe_top_level_mcp_config
+  `yanshi_config::diagnostics`；execute（耦合 json_envelope）+ probe_top_level_mcp_config
   （读 McpConfigFile）留 cli；build_report 加 `top_level_mcp` 参数由 caller 注入（cli 传真
-  probe，server 传空）——行为不变。server **完全不再依赖 agentflow-cli**（Cargo 移除 dep）。
+  probe，server 传空）——行为不变。server **完全不再依赖 yanshi-cli**（Cargo 移除 dep）。
   check-arch 从 ARCH_ALLOWLIST 删 server→cli，现 **2 tracked**（agents→core / worker→server），
-  测试断言已更新。cli `pub use agentflow_config::diagnostics::*` 兼容，doctor 命令不变。
+  测试断言已更新。cli `pub use yanshi_config::diagnostics::*` 兼容，doctor 命令不变。
   **P-A2.4 全闭环。** 剩余 P-A2 烧边：worker→server（P-A2.3 worker-proto，大、独立 session）。
 
 ### P-A3 — 可靠性合并 + 类型加固
 
-- DONE P-A3.1（前置）加厚 `agentflow-agents/src/react/agent.rs` 循环测试覆盖（PR #19）：
+- DONE P-A3.1（前置）加厚 `yanshi-agents/src/react/agent.rs` 循环测试覆盖（PR #19）：
   补齐 timeout/cancellation **racing** 路径——既有测试只覆盖 pre-signalled cancel +
   batch max-tool-calls，新增 4 个确定性测试覆盖 `run_turn_llm_call`/`run_turn_tool_call`
   的四臂 `select!`（LLM-call timeout / LLM-call cancel / tool-call timeout / tool-call
   cancel）。用"永不完成的慢操作"（10s sleep >> ~50ms deadline）保证结果确定、不依赖调度
   时序；tool-cancel 用 started 标志确保取消落在工具在飞行时。配套：Mock provider 认
-  `AGENTFLOW_MOCK_DELAY_MS` env（registry 路径可模拟慢往返）+ panic-safe `EnvVarGuard`。
+  `YANSHI_MOCK_DELAY_MS` env（registry 路径可模拟慢往返）+ panic-safe `EnvVarGuard`。
   **这是 P-A3.2（race_with_limits 抽取）的安全网前置**。
 - DONE(部分) P-A3.2 timeout×cancellation `select!` 抽 `async-util::race_with_limits`
   （PR #20）：新增 `race_with_limits(fut, remaining, cancel) -> RaceOutcome::{Completed,
   TimedOut, Cancelled}` 收敛四臂 `(Option<Duration>, Option<CancelSignal>)` 矩阵 + 双层
   `tokio::select!`；ReActAgent 的 LLM-call + tool-call 两个单调用点改为委托，重复的
-  timeout/cancel 分支各只写一次（LLM 点 88→38 行）。经 `agentflow_core::{race_with_limits,
+  timeout/cancel 分支各只写一次（LLM 点 88→38 行）。经 `yanshi_core::{race_with_limits,
   RaceOutcome}` re-export；async-util 加 tokio `macros` feature。行为不变——P-A3.1 racing
   测试不改即通过 + 6 个组合子单测。**batch follow-up 已闭环（PR #21）**：concurrent
   `join_all` + serial per-call 两个 batch 矩阵也改为委托 race_with_limits——先加 4 个
   batch racing 测试（concurrent/serial × timeout/cancel，characterize-then-repoint），
   ReActAgent 热路径已无任何 timeout/cancel select! 矩阵（4 处全收敛）。**剩余**：
-  `agentflow-core` shutdown 路径的 select!（不同语义，独立评估）——非本任务核心，按需再做。
+  `yanshi-core` shutdown 路径的 select!（不同语义，独立评估）——非本任务核心，按需再做。
 - DONE P-A3.3 `ReActLoopSession` consuming typestate（SessionFinished 提前到编译期，
   提交 `28e68f0`）：原 `next_turn(&mut self)` 带 `finished: bool`，finish 后再调返回运行时
   `ReActError::SessionFinished`。改为 `next_turn(self)` **consume session** 返回
@@ -445,7 +445,7 @@ Current focus: **Q-段（2026-05-24 审计修复）已全闭环并外迁** → �
 - DONE P-A3.7 契约 enum 加 `#[non_exhaustive]`（提交 `3e9ad0e`）：前向兼容硬化——给
   non-exhaustive enum 加变体不再强制下游每个 `match` 破裂。已标记：边界 error 枚举
   （thiserror 面）`MemoryError`(store-spi) / `ToolError`·`SecurityProfileError`·
-  `SandboxError`(tools)，加上既有的 `AgentFlowError`/`KnowledgeError`/`CapabilityError`/
+  `SandboxError`(tools)，加上既有的 `YanshiError`/`KnowledgeError`/`CapabilityError`/
   `AgentRuntimeError`/`HarnessError`（error 消费方用 `?`/to_string/通配，零 ripple）；
   观测事件枚举 `WorkflowEvent`(graph) + `AgentEvent`(agent-spi)。ripple 由通配 arm 修复
   且保持现行为：3 个 supervisor `rewrite_event_step_index` + ReAct resume offset 循环
@@ -459,26 +459,26 @@ Current focus: **Q-段（2026-05-24 审计修复）已全闭环并外迁** → �
 
 ### P-A4 — Dynamic workflow + RAG 归位（收口）
 
-- DONE P-A4.0（落地 P-A0.5/R3）`agentflow-nodes` 拆分完成（PR #28，分支
-  `feat/p-a-nodes-decomposition`）：tool 层 `agentflow-nodes`（7 个：template/file/
-  http/batch/conditional/arxiv/markmap，仅依赖 IR + `agentflow-tools`，去掉 llm/mcp/
-  rag deps 与 feature）+ 新 `agentflow-nodes-ai`（能力适配 9 个：llm/asr/tts/
+- DONE P-A4.0（落地 P-A0.5/R3）`yanshi-nodes` 拆分完成（PR #28，分支
+  `feat/p-a-nodes-decomposition`）：tool 层 `yanshi-nodes`（7 个：template/file/
+  http/batch/conditional/arxiv/markmap，仅依赖 IR + `yanshi-tools`，去掉 llm/mcp/
+  rag deps 与 feature）+ 新 `yanshi-nodes-ai`（能力适配 9 个：llm/asr/tts/
   text_to_image/image_to_image/image_understand/image_edit + mcp/rag feature-gated，
-  依赖 `agentflow-nodes` 复用 common/error）。dispatch 不变：`agentflow-config::
+  依赖 `yanshi-nodes` 复用 common/error）。dispatch 不变：`yanshi-config::
   executor::factory` 分别从两个 crate import；cli 把 mcp/rag 转发给 config；worker
   保留 tool 层、仅为 llm/mcp payload 拉 nodes-ai（带 mcp）。`nodes→{llm,mcp,rag}` 三条
   latent 边消解、从 `ARCH_LATENT_EDGES` 剪除（`nodes→core` 保留，留 core→graph repoint）。
   build/clippy(-D)/fmt/check-arch 全绿。
 - DONE(部分) P-A4.1 `rag` impl `KnowledgeBackend` + `rag_search` 工具已落地（分支
-  `feat/p-a4.1-rag-knowledge-backend`）：L0 `agentflow-store-spi` 新增 `KnowledgeBackend`
+  `feat/p-a4.1-rag-knowledge-backend`）：L0 `yanshi-store-spi` 新增 `KnowledgeBackend`
   trait + `KnowledgeChunk` + `KnowledgeError`（`#[non_exhaustive]`，与 `MemoryStore` 同层，
-  让 `skills`⟷`rag` 共享契约而不互依实现）。`agentflow-rag` 两个实现：`Bm25KnowledgeBackend`
+  让 `skills`⟷`rag` 共享契约而不互依实现）。`yanshi-rag` 两个实现：`Bm25KnowledgeBackend`
   （内存 BM25、可单测、bundled-files 层）+ `VectorStoreKnowledgeBackend`（任意 `VectorStore`
   + `RetrievalStrategy` 的语义检索层）；并暴露 `RagSearchTool`（`rag_search`，idempotent 只读，
   包 `Arc<dyn KnowledgeBackend>`）。rag 新增向下依赖 store-spi + tools（均 L0），check-arch OK。
   store-spi 2 测 + rag 9 测全绿，clippy(-D)/fmt/全 workspace build 绿。
 - DONE P-A4.1b `rag search/index/collections` CLI 降为运维子命令（分支
-  `feat/p-a4.1b-rag-ops-cli`，接在 #32 上）：三者移到 `agentflow rag ops <cmd>`（新
+  `feat/p-a4.1b-rag-ops-cli`，接在 #32 上）：三者移到 `yanshi rag ops <cmd>`（新
   `RagOpsCommands` enum + `RagCommands::Ops` 变体），`rag eval` 保留顶层（质量门）。
   agent 面向的检索路径是 Skill 暴露的 `rag_search` 工具,`ops` 仅供运维直连向量库。
   dispatch 改为 `Ops(ops) => match ops {...}`;help 文案说明降级原因。改了 1 个 assert_cmd
@@ -494,22 +494,22 @@ Current focus: **Q-段（2026-05-24 审计修复）已全闭环并外迁** → �
   112 skills 测全绿，clippy(-D)/fmt/check-arch 绿。docs/SKILLS.md 增补 backend 分层。每个 rag
   文件暂按整文件索引,细粒度 chunking 留作后续 refinement。
 - DONE P-A4.3 `Capability::lower` 已落地（分支 `feat/p-a4.3-capability-lower`，接在 #31 上）：
-  RFC §2 第二根契约 trait 进 `agentflow-agent-spi`——`Capability` trait + `Lowered { tools,
+  RFC §2 第二根契约 trait 进 `yanshi-agent-spi`——`Capability` trait + `Lowered { tools,
   context }` + `CapabilityError`（`#[non_exhaustive]`）。`Lowered.context` 复用既有 `ContextItem`
   （priority + token_estimate），直接接 harness/runtime 的 prompt 预算机制；`Lowered::merge` =
-  capability flatten 组合。与 OS-sandbox `agentflow_tools::Capability` enum（进程权限）同名不同
-  物，永不同位。`agentflow-skills` 落实现：`SkillCapability`（manifest + skill_dir）`lower()` →
+  capability flatten 组合。与 OS-sandbox `yanshi_tools::Capability` enum（进程权限）同名不同
+  物，永不同位。`yanshi-skills` 落实现：`SkillCapability`（manifest + skill_dir）`lower()` →
   build_registry 的工具（built-in + MCP + P-A4.2 rag_search）+ persona 作单个 Critical context
   fragment。新增 skills→agent-spi 直接 L0 依赖（capability→contract，check-arch 绿）。agent-spi
   2 测 + skills 2 测全绿，clippy(-D)/fmt/全 workspace build 绿。**剩余**：surface 全面采用
   （用 merge 替换直接 `SkillBuilder::build` 路径、多 capability 合并）留后续；契约+实现+组合原语
   本次落地。
-- DONE(部分) P-A4.4 plan→Flow 编译器已落地（提交 `4fa70df`）：`agentflow_agents::dynamic::
+- DONE(部分) P-A4.4 plan→Flow 编译器已落地（提交 `4fa70df`）：`yanshi_agents::dynamic::
   compile_plan_to_flow`——声明式 `WorkflowPlan`（LLM 产的 JSON：`{id,tool,params,depends_on}`）
   编译成真工具调用的 `Flow`，`depends_on`→图依赖（独立步并行、依赖步收 deps 输出）。校验
   重复 id/悬空依赖;环由拓扑排序兜。`dynamic_workflow_plan` 示例进 smoke gate;3 单测覆盖
   diamond DAG + 校验。**+ DynamicWorkflowAgent**（提交 `3e3b5ab`，PR #14）：`plan(goal)` 经 LLM 产 WorkflowPlan、`run(goal)` plan→compile→并行执行;mock-LLM 端到端测试过。docs reality-check 已更新（dynamic workflow = 真库路径）。**剩余 follow-up（P-A4.5）**：接 CLI surface + 支持 `AgentNode` 步 + `PlanExecuteAgent` 改产 Flow。
-- DONE P-A4.5 dynamic-workflow CLI surface 已落地：`agentflow workflow dynamic
+- DONE P-A4.5 dynamic-workflow CLI surface 已落地：`yanshi workflow dynamic
   --goal <G> --model <M> [--allow-path P]* [--allow-domain D]* [--approve none|cli|
   auto-allow|auto-deny] [--profile dev|production] [--dry-run] [--max-concurrency N]
   [--output text|json]`。复用库路径 `DynamicWorkflowAgent::plan` + `compile_plan_to_flow`
@@ -518,14 +518,14 @@ Current focus: **Q-段（2026-05-24 审计修复）已全闭环并外迁** → �
   路径/域名必须经 `--allow-path`/`--allow-domain` 显式授予；`--dry-run` 只打印 plan 不执行；
   `--approve != none` 时经 harness `wrap_registry` 把同一个 `Arc<ToolRegistry>`（planner 与
   compiler 共享）裹上审批/审计管线，**不需先做 P-A2.2**。新文件
-  `agentflow-cli/src/commands/workflow/dynamic.rs`（7 单测覆盖 policy/approve/渲染）+
+  `yanshi-cli/src/commands/workflow/dynamic.rs`（7 单测覆盖 policy/approve/渲染）+
   `tests/workflow_dynamic_tests.rs`（4 个 e2e：dry-run 不执行 / 未授权路径被 sandbox 拒
   且退出非零 / 授权后写入成功 / 缺 --model 报错）。fmt + clippy(-D warnings) + check-arch
   全绿（cli 仅复用既有 agents/harness/tools 依赖，零新边）。剩余 follow-up：plan 支持
   `AgentNode` 步 + 并行 verifier/收敛判定（归入 P-A4.6 文档与后续增强）。
 - DONE P-A4.6 文档已更新（分支 `feat/p-a4.6-docs`，接在 #33 上）：`docs/HYBRID_WORKFLOW.md`
   新增 "Dynamic Workflow" 章节（WorkflowPlan→compile_plan_to_flow→FlowRunner 流程图 +
-  `DynamicWorkflowAgent` + `agentflow workflow dynamic` CLI + sandbox/approval 治理）+ 改
+  `DynamicWorkflowAgent` + `yanshi workflow dynamic` CLI + sandbox/approval 治理）+ 改
   intro 三桥 + Current Boundaries。`docs/ARCHITECTURE.md` 四范式 reality-check 刷新（dynamic
   workflow ✅ library+CLI、契约层 ✅ 0 tracked edges、governance shell 正交 ✅）、gaps-map 表更新、
   契约内核图加 `KnowledgeBackend`/`Capability`、L2 加 `nodes-ai`、Axis 2 注明 `Capability` lowering
@@ -631,5 +631,5 @@ cargo test --workspace
   包过的 registry 即自动获得审批/sandbox 治理（经现有 `HookedTool` 组合，**不需先做 P-A2.2**）。
   cli 同时依赖 agents（DynamicWorkflowAgent）+ harness（wrap_registry），是治理化 dynamic
   workflow 的天然落点。
-- 建议：fresh session 做；`agentflow workflow dynamic --goal ... [--model M]`，默认用
+- 建议：fresh session 做；`yanshi workflow dynamic --goal ... [--model M]`，默认用
   harness-wrapped 内置工具表（shell 默认禁用）。

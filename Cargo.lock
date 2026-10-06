@@ -80,628 +80,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "agentflow-agent-spi"
-version = "0.1.0"
-dependencies = [
- "agentflow-store-spi",
- "agentflow-tool",
- "agentflow-value",
- "async-trait",
- "chrono",
- "jsonschema",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
-name = "agentflow-agents"
-version = "0.2.0"
-dependencies = [
- "agentflow-agent-spi",
- "agentflow-async-util",
- "agentflow-core",
- "agentflow-graph",
- "agentflow-llm",
- "agentflow-mcp",
- "agentflow-memory",
- "agentflow-tool",
- "agentflow-tools",
- "agentflow-value",
- "anyhow",
- "async-trait",
- "chrono",
- "futures",
- "regex",
- "reqwest 0.12.24",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-test",
- "toml 0.8.23",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "agentflow-async-util"
-version = "0.1.0"
-dependencies = [
- "agentflow-graph",
- "humantime-serde",
- "rand 0.8.5",
- "serde",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "agentflow-cli"
-version = "0.2.0"
-dependencies = [
- "agentflow-agents",
- "agentflow-config",
- "agentflow-core",
- "agentflow-db",
- "agentflow-harness",
- "agentflow-llm",
- "agentflow-mcp",
- "agentflow-memory",
- "agentflow-nodes",
- "agentflow-nodes-ai",
- "agentflow-rag",
- "agentflow-server",
- "agentflow-skills",
- "agentflow-tools",
- "agentflow-tools-ai",
- "agentflow-tracing",
- "anyhow",
- "assert_cmd",
- "async-trait",
- "axum",
- "base64 0.21.7",
- "chrono",
- "clap",
- "clap_complete",
- "colored 2.2.0",
- "config",
- "console",
- "dirs",
- "dotenvy",
- "ed25519-dalek",
- "flate2",
- "futures",
- "glob",
- "indicatif",
- "mime",
- "predicates",
- "reqwest 0.12.24",
- "rustyline",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "sqlx",
- "tar",
- "tempfile",
- "tera",
- "thiserror 1.0.69",
- "tokio",
- "toml 0.8.23",
- "tonic",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "walkdir",
- "which",
-]
-
-[[package]]
-name = "agentflow-config"
-version = "0.1.0"
-dependencies = [
- "agentflow-agents",
- "agentflow-core",
- "agentflow-llm",
- "agentflow-nodes",
- "agentflow-nodes-ai",
- "agentflow-skills",
- "agentflow-tools",
- "agentflow-tracing",
- "anyhow",
- "async-trait",
- "dirs",
- "reqwest 0.12.24",
- "serde",
- "serde_json",
- "serde_yaml",
- "tokio",
- "which",
-]
-
-[[package]]
-name = "agentflow-core"
-version = "0.2.0"
-dependencies = [
- "agentflow-async-util",
- "agentflow-graph",
- "agentflow-value",
- "anyhow",
- "async-trait",
- "chrono",
- "criterion",
- "dirs",
- "futures",
- "humantime-serde",
- "num_cpus",
- "pin-project-lite",
- "proptest",
- "rand 0.8.5",
- "regex",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "toml 0.8.23",
- "tracing",
- "tracing-subscriber",
- "tracing-test",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "agentflow-db"
-version = "0.1.0"
-dependencies = [
- "agentflow-agent-spi",
- "async-trait",
- "chrono",
- "serde",
- "serde_json",
- "sqlx",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "agentflow-graph"
-version = "0.1.0"
-dependencies = [
- "agentflow-value",
- "async-trait",
- "chrono",
- "dirs",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
-name = "agentflow-harness"
-version = "0.1.0"
-dependencies = [
- "agentflow-agent-spi",
- "agentflow-agents",
- "agentflow-core",
- "agentflow-graph",
- "agentflow-llm",
- "agentflow-memory",
- "agentflow-store-spi",
- "agentflow-tool",
- "agentflow-tools",
- "agentflow-tracing",
- "async-trait",
- "chrono",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "agentflow-llm"
-version = "0.2.0"
-dependencies = [
- "agentflow-value",
- "anyhow",
- "async-trait",
- "base64 0.21.7",
- "chrono",
- "criterion",
- "dirs",
- "dotenvy",
- "env_logger",
- "futures",
- "futures-util",
- "governor",
- "log",
- "mockito",
- "rand 0.8.5",
- "reqwest 0.12.24",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "thiserror 1.0.69",
- "tiktoken-rs",
- "tokio",
- "tokio-stream",
- "tracing",
- "tracing-subscriber",
- "tracing-test",
- "uuid",
-]
-
-[[package]]
-name = "agentflow-mcp"
-version = "0.2.0"
-dependencies = [
- "agentflow-tracing",
- "anyhow",
- "async-trait",
- "axum",
- "futures",
- "jsonschema",
- "proptest",
- "reqwest 0.12.24",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-test",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "agentflow-memory"
-version = "0.1.0"
-dependencies = [
- "age",
- "agentflow-rag",
- "agentflow-store-spi",
- "agentflow-tools",
- "async-trait",
- "base64 0.21.7",
- "chrono",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-test",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "agentflow-nodes"
-version = "0.2.0"
-dependencies = [
- "agentflow-core",
- "agentflow-tools",
- "anyhow",
- "async-trait",
- "base64 0.21.7",
- "chrono",
- "criterion",
- "flate2",
- "handlebars",
- "mime_guess",
- "regex",
- "reqwest 0.12.24",
- "serde",
- "serde_json",
- "serde_yaml",
- "tar",
- "tempfile",
- "tera",
- "thiserror 1.0.69",
- "tokio",
- "tokio-test",
- "tracing",
- "urlencoding",
- "uuid",
- "wiremock",
-]
-
-[[package]]
-name = "agentflow-nodes-ai"
-version = "0.2.0"
-dependencies = [
- "agentflow-core",
- "agentflow-llm",
- "agentflow-mcp",
- "agentflow-nodes",
- "agentflow-rag",
- "async-trait",
- "base64 0.21.7",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "agentflow-rag"
-version = "0.3.0-alpha"
-dependencies = [
- "agentflow-store-spi",
- "agentflow-tools",
- "anyhow",
- "async-trait",
- "chrono",
- "criterion",
- "csv",
- "futures",
- "governor",
- "ndarray 0.15.1",
- "nonzero_ext",
- "ort",
- "pdf-extract",
- "proc-macro2",
- "proptest",
- "qdrant-client",
- "regex",
- "reqwest 0.12.24",
- "scraper",
- "serde",
- "serde_json",
- "syn",
- "tempfile",
- "thiserror 1.0.69",
- "tokenizers",
- "tokio",
- "tokio-retry",
- "tokio-test",
- "tracing",
- "tracing-subscriber",
- "unicode-segmentation",
- "uuid",
-]
-
-[[package]]
-name = "agentflow-server"
-version = "0.1.0"
-dependencies = [
- "agentflow-agent-spi",
- "agentflow-agents",
- "agentflow-config",
- "agentflow-core",
- "agentflow-db",
- "agentflow-harness",
- "agentflow-llm",
- "agentflow-memory",
- "agentflow-skills",
- "agentflow-tools",
- "agentflow-tracing",
- "agentflow-worker",
- "agentflow-worker-proto",
- "anyhow",
- "async-trait",
- "axum",
- "chrono",
- "dirs",
- "dotenvy",
- "filetime",
- "futures",
- "jsonwebtoken",
- "metrics",
- "metrics-exporter-prometheus",
- "prost 0.13.5",
- "serde",
- "serde_json",
- "serde_yaml",
- "sqlx",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tonic",
- "tower 0.4.13",
- "tower-http 0.5.2",
- "tracing",
- "tracing-subscriber",
- "urlencoding",
- "uuid",
-]
-
-[[package]]
-name = "agentflow-skills"
-version = "0.1.0"
-dependencies = [
- "agentflow-agent-spi",
- "agentflow-agents",
- "agentflow-mcp",
- "agentflow-memory",
- "agentflow-rag",
- "agentflow-tools",
- "agentflow-tools-ai",
- "async-trait",
- "base64 0.21.7",
- "dirs",
- "ed25519-dalek",
- "flate2",
- "glob",
- "regex",
- "reqwest 0.12.24",
- "semver",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "tar",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-test",
- "toml 0.8.23",
- "tracing",
-]
-
-[[package]]
-name = "agentflow-store-spi"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 1.0.69",
- "uuid",
-]
-
-[[package]]
-name = "agentflow-tool"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "jsonschema",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
-]
-
-[[package]]
-name = "agentflow-tools"
-version = "0.1.0"
-dependencies = [
- "agentflow-tool",
- "async-trait",
- "jsonschema",
- "landlock",
- "libc",
- "reqwest 0.12.24",
- "seccompiler",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-test",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "agentflow-tools-ai"
-version = "0.1.0"
-dependencies = [
- "agentflow-llm",
- "agentflow-tool",
- "async-trait",
- "base64 0.21.7",
- "serde",
- "serde_json",
- "tokio",
- "tokio-test",
- "tracing",
-]
-
-[[package]]
-name = "agentflow-tracing"
-version = "0.1.0"
-dependencies = [
- "agentflow-core",
- "anyhow",
- "async-trait",
- "chrono",
- "criterion",
- "futures",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "rand 0.8.5",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-test",
- "tracing",
-]
-
-[[package]]
-name = "agentflow-value"
-version = "0.1.0"
-dependencies = [
- "proptest",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "agentflow-worker"
-version = "0.1.0"
-dependencies = [
- "agentflow-agents",
- "agentflow-core",
- "agentflow-llm",
- "agentflow-memory",
- "agentflow-nodes",
- "agentflow-nodes-ai",
- "agentflow-server",
- "agentflow-tools",
- "agentflow-worker-proto",
- "anyhow",
- "assert_cmd",
- "async-trait",
- "chrono",
- "predicates",
- "rand 0.8.5",
- "rcgen",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tonic",
- "uuid",
-]
-
-[[package]]
-name = "agentflow-worker-proto"
-version = "0.1.0"
-dependencies = [
- "agentflow-tracing",
- "agentflow-value",
- "async-trait",
- "chrono",
- "prost 0.13.5",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tonic",
- "tonic-build",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "ahash"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7697,6 +7075,628 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56c1936c4cc7a1c9ab21a1ebb602eb942ba868cbd44a99cb7cdc5892335e1c85"
 dependencies = [
  "linked-hash-map",
+]
+
+[[package]]
+name = "yanshi-agent-spi"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "jsonschema",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "yanshi-store-spi",
+ "yanshi-tool",
+ "yanshi-value",
+]
+
+[[package]]
+name = "yanshi-agents"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures",
+ "regex",
+ "reqwest 0.12.24",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "toml 0.8.23",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "yanshi-agent-spi",
+ "yanshi-async-util",
+ "yanshi-core",
+ "yanshi-graph",
+ "yanshi-llm",
+ "yanshi-mcp",
+ "yanshi-memory",
+ "yanshi-tool",
+ "yanshi-tools",
+ "yanshi-value",
+]
+
+[[package]]
+name = "yanshi-async-util"
+version = "0.1.0"
+dependencies = [
+ "humantime-serde",
+ "rand 0.8.5",
+ "serde",
+ "tokio",
+ "tracing",
+ "yanshi-graph",
+]
+
+[[package]]
+name = "yanshi-cli"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "async-trait",
+ "axum",
+ "base64 0.21.7",
+ "chrono",
+ "clap",
+ "clap_complete",
+ "colored 2.2.0",
+ "config",
+ "console",
+ "dirs",
+ "dotenvy",
+ "ed25519-dalek",
+ "flate2",
+ "futures",
+ "glob",
+ "indicatif",
+ "mime",
+ "predicates",
+ "reqwest 0.12.24",
+ "rustyline",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "sqlx",
+ "tar",
+ "tempfile",
+ "tera",
+ "thiserror 1.0.69",
+ "tokio",
+ "toml 0.8.23",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "walkdir",
+ "which",
+ "yanshi-agents",
+ "yanshi-config",
+ "yanshi-core",
+ "yanshi-db",
+ "yanshi-harness",
+ "yanshi-llm",
+ "yanshi-mcp",
+ "yanshi-memory",
+ "yanshi-nodes",
+ "yanshi-nodes-ai",
+ "yanshi-rag",
+ "yanshi-server",
+ "yanshi-skills",
+ "yanshi-tools",
+ "yanshi-tools-ai",
+ "yanshi-tracing",
+]
+
+[[package]]
+name = "yanshi-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "dirs",
+ "reqwest 0.12.24",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tokio",
+ "which",
+ "yanshi-agents",
+ "yanshi-core",
+ "yanshi-llm",
+ "yanshi-nodes",
+ "yanshi-nodes-ai",
+ "yanshi-skills",
+ "yanshi-tools",
+ "yanshi-tracing",
+]
+
+[[package]]
+name = "yanshi-core"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "criterion",
+ "dirs",
+ "futures",
+ "humantime-serde",
+ "num_cpus",
+ "pin-project-lite",
+ "proptest",
+ "rand 0.8.5",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
+ "tracing-subscriber",
+ "tracing-test",
+ "url",
+ "uuid",
+ "yanshi-async-util",
+ "yanshi-graph",
+ "yanshi-value",
+]
+
+[[package]]
+name = "yanshi-db"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+ "yanshi-agent-spi",
+]
+
+[[package]]
+name = "yanshi-graph"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "dirs",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "yanshi-value",
+]
+
+[[package]]
+name = "yanshi-harness"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+ "yanshi-agent-spi",
+ "yanshi-agents",
+ "yanshi-core",
+ "yanshi-graph",
+ "yanshi-llm",
+ "yanshi-memory",
+ "yanshi-store-spi",
+ "yanshi-tool",
+ "yanshi-tools",
+ "yanshi-tracing",
+]
+
+[[package]]
+name = "yanshi-llm"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.21.7",
+ "chrono",
+ "criterion",
+ "dirs",
+ "dotenvy",
+ "env_logger",
+ "futures",
+ "futures-util",
+ "governor",
+ "log",
+ "mockito",
+ "rand 0.8.5",
+ "reqwest 0.12.24",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tiktoken-rs",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "tracing-subscriber",
+ "tracing-test",
+ "uuid",
+ "yanshi-value",
+]
+
+[[package]]
+name = "yanshi-mcp"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "futures",
+ "jsonschema",
+ "proptest",
+ "reqwest 0.12.24",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "uuid",
+ "yanshi-tracing",
+]
+
+[[package]]
+name = "yanshi-memory"
+version = "0.1.0"
+dependencies = [
+ "age",
+ "async-trait",
+ "base64 0.21.7",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "uuid",
+ "yanshi-rag",
+ "yanshi-store-spi",
+ "yanshi-tools",
+]
+
+[[package]]
+name = "yanshi-nodes"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.21.7",
+ "chrono",
+ "criterion",
+ "flate2",
+ "handlebars",
+ "mime_guess",
+ "regex",
+ "reqwest 0.12.24",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tar",
+ "tempfile",
+ "tera",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "urlencoding",
+ "uuid",
+ "wiremock",
+ "yanshi-core",
+ "yanshi-tools",
+]
+
+[[package]]
+name = "yanshi-nodes-ai"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "base64 0.21.7",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "yanshi-core",
+ "yanshi-llm",
+ "yanshi-mcp",
+ "yanshi-nodes",
+ "yanshi-rag",
+]
+
+[[package]]
+name = "yanshi-rag"
+version = "0.3.0-alpha"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "criterion",
+ "csv",
+ "futures",
+ "governor",
+ "ndarray 0.15.1",
+ "nonzero_ext",
+ "ort",
+ "pdf-extract",
+ "proc-macro2",
+ "proptest",
+ "qdrant-client",
+ "regex",
+ "reqwest 0.12.24",
+ "scraper",
+ "serde",
+ "serde_json",
+ "syn",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokenizers",
+ "tokio",
+ "tokio-retry",
+ "tokio-test",
+ "tracing",
+ "tracing-subscriber",
+ "unicode-segmentation",
+ "uuid",
+ "yanshi-store-spi",
+ "yanshi-tools",
+]
+
+[[package]]
+name = "yanshi-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "chrono",
+ "dirs",
+ "dotenvy",
+ "filetime",
+ "futures",
+ "jsonwebtoken",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "prost 0.13.5",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sqlx",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tower 0.4.13",
+ "tower-http 0.5.2",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+ "uuid",
+ "yanshi-agent-spi",
+ "yanshi-agents",
+ "yanshi-config",
+ "yanshi-core",
+ "yanshi-db",
+ "yanshi-harness",
+ "yanshi-llm",
+ "yanshi-memory",
+ "yanshi-skills",
+ "yanshi-tools",
+ "yanshi-tracing",
+ "yanshi-worker",
+ "yanshi-worker-proto",
+]
+
+[[package]]
+name = "yanshi-skills"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.21.7",
+ "dirs",
+ "ed25519-dalek",
+ "flate2",
+ "glob",
+ "regex",
+ "reqwest 0.12.24",
+ "semver",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tar",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "toml 0.8.23",
+ "tracing",
+ "yanshi-agent-spi",
+ "yanshi-agents",
+ "yanshi-mcp",
+ "yanshi-memory",
+ "yanshi-rag",
+ "yanshi-tools",
+ "yanshi-tools-ai",
+]
+
+[[package]]
+name = "yanshi-store-spi"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 1.0.69",
+ "uuid",
+]
+
+[[package]]
+name = "yanshi-tool"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "jsonschema",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
+name = "yanshi-tools"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "jsonschema",
+ "landlock",
+ "libc",
+ "reqwest 0.12.24",
+ "seccompiler",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "url",
+ "yanshi-tool",
+]
+
+[[package]]
+name = "yanshi-tools-ai"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.21.7",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "yanshi-llm",
+ "yanshi-tool",
+]
+
+[[package]]
+name = "yanshi-tracing"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "criterion",
+ "futures",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "yanshi-core",
+]
+
+[[package]]
+name = "yanshi-value"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "yanshi-worker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "async-trait",
+ "chrono",
+ "predicates",
+ "rand 0.8.5",
+ "rcgen",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tonic",
+ "uuid",
+ "yanshi-agents",
+ "yanshi-core",
+ "yanshi-llm",
+ "yanshi-memory",
+ "yanshi-nodes",
+ "yanshi-nodes-ai",
+ "yanshi-server",
+ "yanshi-tools",
+ "yanshi-worker-proto",
+]
+
+[[package]]
+name = "yanshi-worker-proto"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "prost 0.13.5",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tonic",
+ "tonic-build",
+ "tracing",
+ "uuid",
+ "yanshi-tracing",
+ "yanshi-value",
 ]
 
 [[package]]

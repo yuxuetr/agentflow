@@ -5,8 +5,8 @@
 //! when the default 404s.
 //!
 //! Run `cargo xtask refresh-live-models` to validate the hard-coded text-model
-//! defaults in `agentflow-llm/tests/provider_consistency_live.rs` against each
-//! provider's live `/models` endpoint. Loads API keys from `~/.agentflow/.env`
+//! defaults in `yanshi-llm/tests/provider_consistency_live.rs` against each
+//! provider's live `/models` endpoint. Loads API keys from `~/.yanshi/.env`
 //! when present, falling back to the ambient environment (which is what the
 //! `llm-live.yml` workflow uses on CI). Providers whose key is missing
 //! self-skip with a clear message rather than fail the run.
@@ -16,7 +16,7 @@
 //!   - `ok`       — the hard-coded default appears in the provider's model list
 //!   - `missing`  — the default is NOT in the list; treat as a vendor-side
 //!     deprecation, copy a suggested replacement into the test
-//!     source or override via `AGENTFLOW_LIVE_<P>_TEXT_MODEL` in
+//!     source or override via `YANSHI_LIVE_<P>_TEXT_MODEL` in
 //!     `.github/workflows/llm-live.yml::env`
 //!   - `skipped`  — no API key found for this provider
 //!   - `error`    — HTTP request failed (network / auth / parse). Exit non-zero
@@ -69,7 +69,7 @@ const REFRESH_LIVE_MODELS_PROBES: &[LiveModelProbe] = &[
     key_envs: &["STEPFUN_API_KEY", "STEP_API_KEY"],
     // The whole step-1-*/step-2-* lineage was retired; step-3.5-flash is
     // the current text-reasoning default. Mirror the live test
-    // source-of-truth in `agentflow-llm/tests/provider_consistency_live.rs`.
+    // source-of-truth in `yanshi-llm/tests/provider_consistency_live.rs`.
     default_text_model: "step-3.5-flash",
     endpoint: LiveModelsEndpoint::OpenAICompat("https://api.stepfun.com/v1/models"),
   },
@@ -78,7 +78,7 @@ const REFRESH_LIVE_MODELS_PROBES: &[LiveModelProbe] = &[
     key_envs: &["GLM_API_KEY", "BIGMODEL_API_KEY", "ZHIPU_API_KEY"],
     // `glm-4.5-flash` was de-listed; `glm-5.1` is the current Zhipu
     // BigModel default. Mirror the live test source-of-truth in
-    // `agentflow-llm/tests/provider_consistency_live.rs`.
+    // `yanshi-llm/tests/provider_consistency_live.rs`.
     default_text_model: "glm-5.1",
     endpoint: LiveModelsEndpoint::OpenAICompat("https://open.bigmodel.cn/api/paas/v4/models"),
   },
@@ -168,13 +168,13 @@ pub fn refresh_live_models_from_args(
     }
   }
 
-  // Load ~/.agentflow/.env into the process environment, mirroring the
-  // existing `AgentFlow::init()` convention. Silent no-op when the file
+  // Load ~/.yanshi/.env into the process environment, mirroring the
+  // existing `Yanshi::init()` convention. Silent no-op when the file
   // is missing — that's the expected case on CI, where keys come from
   // the workflow's `env:` block.
   let env_path = std::env::var_os("HOME")
     .map(PathBuf::from)
-    .map(|home| home.join(".agentflow").join(".env"));
+    .map(|home| home.join(".yanshi").join(".env"));
   if let Some(path) = env_path.as_ref()
     && path.exists()
   {
@@ -247,7 +247,7 @@ pub fn refresh_live_models_from_args(
     // condition.
     let _ = writeln!(
       out,
-      "[refresh] {missing_count} provider(s) need attention; copy the suggested replacement into agentflow-llm/tests/provider_consistency_live.rs::run_text_path"
+      "[refresh] {missing_count} provider(s) need attention; copy the suggested replacement into yanshi-llm/tests/provider_consistency_live.rs::run_text_path"
     );
   }
   if error_count > 0 && !keep_going {
@@ -269,7 +269,7 @@ fn probe_provider(probe: &LiveModelProbe) -> LiveProbeOutcome {
         default_text_model: probe.default_text_model.to_string(),
         status: ProbeStatus::Skipped {
           reason: format!(
-            "no key in {} (or HOME/.agentflow/.env)",
+            "no key in {} (or HOME/.yanshi/.env)",
             probe.key_envs.join(" / ")
           ),
         },
@@ -491,7 +491,7 @@ fn shared_prefix_len(a: &str, b: &str) -> usize {
 ///
 /// **Policy: `.env` wins over the ambient shell.** A real-world run
 /// (P10.3.4) surfaced an operator-stale `OPENAI_API_KEY` in the shell
-/// silently blocking a valid value in `~/.agentflow/.env`. The fix is
+/// silently blocking a valid value in `~/.yanshi/.env`. The fix is
 /// to make `.env` authoritative when it exists. CI is unaffected
 /// because no `.env` file ships in the runner's HOME; secrets reach
 /// the process via the workflow's `env:` block exactly as before.

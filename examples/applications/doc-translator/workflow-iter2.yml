@@ -19,7 +19,7 @@
 # read → build_prompt → translate → write.
 #
 # Run:
-#   agentflow workflow run examples/applications/doc-translator/workflow-iter2.yml
+#   yanshi workflow run examples/applications/doc-translator/workflow-iter2.yml
 #
 # Outputs land at:
 #   examples/applications/doc-translator/output/<lang>/<file>

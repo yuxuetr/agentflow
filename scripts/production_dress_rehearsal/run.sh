@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Production deployment dress rehearsal — host-side driver (P10.0.1).
 #
-# Reuses the `agentflow-doctor-smoke` image built by
+# Reuses the `yanshi-doctor-smoke` image built by
 # `scripts/doctor_smoke/run.sh` (or builds it on the fly if missing),
 # mounts the in-container rehearsal script, and captures the full
 # transcript + JSON summary into this directory.
@@ -19,7 +19,7 @@ set -euo pipefail
 RUNTIME="${PROD_REHEARSAL_RUNTIME:-${DOCTOR_SMOKE_RUNTIME:-container}}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-IMAGE_TAG="agentflow-dress-rehearsal"
+IMAGE_TAG="yanshi-dress-rehearsal"
 CONTAINERFILE="${SCRIPT_DIR}/Containerfile"
 LOG_OUT="${SCRIPT_DIR}/last-run.log"
 JSON_OUT="${SCRIPT_DIR}/last-run.json"
@@ -31,7 +31,7 @@ if ! command -v "${RUNTIME}" >/dev/null 2>&1; then
 fi
 
 # Build the rehearsal image if it isn't cached. The image bundles both
-# `agentflow` and `agentflow-server` (the latter needed by acceptance
+# `yanshi` and `yanshi-server` (the latter needed by acceptance
 # gate 2's `serve --check` flow).
 if ! "${RUNTIME}" image list 2>/dev/null | grep -q "^${IMAGE_TAG}\\b"; then
   echo "[rehearsal] ${IMAGE_TAG} not cached; building via ${CONTAINERFILE} (~12-18 min first run; both binaries)"

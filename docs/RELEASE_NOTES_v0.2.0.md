@@ -1,4 +1,4 @@
-# Release Notes: AgentFlow v0.2.0
+# Release Notes: Yanshi v0.2.0
 
 **Release Date**: 2025-10-26
 **Codename**: "Stability & Observability"
@@ -6,7 +6,7 @@
 
 ## 🎉 Overview
 
-AgentFlow v0.2.0 marks the completion of **Phase 1: Stabilization & Refinement**, delivering production-ready reliability improvements, comprehensive error handling, and resource management capabilities. This release focuses on making AgentFlow stable and observable for real-world workflows.
+Yanshi v0.2.0 marks the completion of **Phase 1: Stabilization & Refinement**, delivering production-ready reliability improvements, comprehensive error handling, and resource management capabilities. This release focuses on making Yanshi stable and observable for real-world workflows.
 
 ### Key Achievements
 
@@ -96,19 +96,19 @@ Interactive workflow debugging and inspection via CLI.
 **Commands:**
 ```bash
 # Validate workflow
-agentflow workflow debug workflow.yml --validate
+yanshi workflow debug workflow.yml --validate
 
 # Visualize DAG
-agentflow workflow debug workflow.yml --visualize
+yanshi workflow debug workflow.yml --visualize
 
 # Analyze complexity
-agentflow workflow debug workflow.yml --analyze
+yanshi workflow debug workflow.yml --analyze
 
 # Show execution plan
-agentflow workflow debug workflow.yml --plan
+yanshi workflow debug workflow.yml --plan
 
 # Dry run
-agentflow workflow debug workflow.yml --dry-run --verbose
+yanshi workflow debug workflow.yml --dry-run --verbose
 ```
 
 ### Week 3: Resource Management
@@ -271,7 +271,7 @@ All existing code continues to work without modification. All new features are o
 ### Phase 2: RAG System Implementation (v0.3.0)
 
 Planned for next 3-6 months:
-- `agentflow-rag` crate for vector store integration
+- `yanshi-rag` crate for vector store integration
 - Document chunking and embedding generation
 - Semantic search and retrieval
 - RAGNode for workflow integration
@@ -316,15 +316,15 @@ Special thanks to the Rust community for excellent libraries (tokio, serde, this
 - [MIGRATION_GUIDE_v0.2.0.md](./MIGRATION_GUIDE_v0.2.0.md) - Upgrade guide
 
 ### Examples
-- `agentflow-core/examples/retry_example.rs`
-- `agentflow-core/examples/resource_management_example.rs`
-- `agentflow-cli/examples/workflows/` (AI research assistant, etc.)
+- `yanshi-core/examples/retry_example.rs`
+- `yanshi-core/examples/resource_management_example.rs`
+- `yanshi-cli/examples/workflows/` (AI research assistant, etc.)
 
 ## 🔗 Links
 
-- **GitHub**: https://github.com/anthropics/agentflow
-- **Issues**: https://github.com/anthropics/agentflow/issues
-- **Discussions**: https://github.com/anthropics/agentflow/discussions
+- **GitHub**: https://github.com/anthropics/yanshi
+- **Issues**: https://github.com/anthropics/yanshi/issues
+- **Discussions**: https://github.com/anthropics/yanshi/discussions
 
 ## 📅 Timeline
 
@@ -337,9 +337,9 @@ Special thanks to the Rust community for excellent libraries (tokio, serde, this
 
 ## 🎊 Conclusion
 
-AgentFlow v0.2.0 delivers on the promise of production-ready stability and observability. With comprehensive retry mechanisms, detailed error context, powerful debugging tools, and robust resource management, AgentFlow is now ready for real-world workflows at scale.
+Yanshi v0.2.0 delivers on the promise of production-ready stability and observability. With comprehensive retry mechanisms, detailed error context, powerful debugging tools, and robust resource management, Yanshi is now ready for real-world workflows at scale.
 
-All features are backward compatible, well-tested, and performance-optimized. We're excited to see what you build with AgentFlow v0.2.0!
+All features are backward compatible, well-tested, and performance-optimized. We're excited to see what you build with Yanshi v0.2.0!
 
 ---
 

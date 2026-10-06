@@ -34,7 +34,7 @@ human pre-authoring that script as a skill asset.
 
 This RFC asks two questions in order:
 
-1. **Should AgentFlow support this at all**, given it's a deliberate,
+1. **Should Yanshi support this at all**, given it's a deliberate,
    scoped exception to a trust boundary the rest of the S-track spent four
    items hardening?
 2. **If yes, what does "safe enough to be worth it" require** — the four
@@ -67,7 +67,7 @@ This RFC asks two questions in order:
 - The trust model in `RFC_CODE_EXECUTION_TRUST.md` was written to make this
   exact lift possible later, deliberately, rather than as an accident — S4
   is a planned pressure-release valve, not scope creep discovered mid-flight.
-- `agentflow-harness`'s hook/approval pipeline (`wrap_registry` +
+- `yanshi-harness`'s hook/approval pipeline (`wrap_registry` +
   `HookConfig`, P-H.2/H3) already exists and already escalates
   `NonIdempotent` tool calls to `RequireApproval` under the production
   profile — `code_exec` slots into infrastructure that's already built and
@@ -151,7 +151,7 @@ files, other tools' scopes, or the host filesystem beyond its own ephemeral
 workdir. Whatever the code produces — computed values, generated files —
 comes back through the tool's own structured `ToolOutput` (text +
 `ToolOutputPart::{Text,Image,Resource}`, the same typed-output shape
-`agentflow-tools` already has), not by the model separately reading files
+`yanshi-tools` already has), not by the model separately reading files
 `code_exec` happened to leave on disk somewhere reachable. This keeps the
 trust boundary legible: everything that crosses back into the conversation
 did so through one auditable channel, not through incidental filesystem
@@ -161,7 +161,7 @@ adjacency.
 
 `code_exec` registers as `ToolIdempotency::NonIdempotent` (running arbitrary
 code is never idempotent by definition), which means under
-`agentflow-harness`'s production profile (`wrap_registry` + `HookConfig`,
+`yanshi-harness`'s production profile (`wrap_registry` + `HookConfig`,
 P-H.2) it's automatically escalated to `RequireApproval` — no new approval
 mechanism needed, just correct registration against infrastructure that
 already exists. `Session`/`Run`-scoped approval caching (already implemented
@@ -183,7 +183,7 @@ even though nothing in the type system enforces that today.
 
 ## Decision
 
-**Adopted, 2026-07-27.** AgentFlow will support LLM-generated code
+**Adopted, 2026-07-27.** Yanshi will support LLM-generated code
 execution via a new `code_exec` tool, subject to the five design
 constraints above. S4.2 (`ContainerBackend` + `code_exec` tool
 implementation) is next, tracked in `TODOs.md` §S4.2 with its own design

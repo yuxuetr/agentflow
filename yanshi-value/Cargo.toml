@@ -1,0 +1,20 @@
+[package]
+name = "yanshi-value"
+version = "0.1.0"
+description = "FlowValue — the universal data contract passed between Yanshi nodes"
+keywords = ["ai", "agents", "workflow", "dataflow"]
+categories = ["data-structures"]
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# R1.1: LlmTraceContext::random() needs an entropy source for trace/span ids.
+uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+proptest = "1.5"

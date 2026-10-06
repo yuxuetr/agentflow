@@ -5,16 +5,16 @@ name = "changelog-writer"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "AgentFlow A7 application: git log → conventional-commits-categorized markdown changelog (Plan A binary; L3 skill form was rejected, see skill.toml.rejected)"
+description = "Yanshi A7 application: git log → conventional-commits-categorized markdown changelog (Plan A binary; L3 skill form was rejected, see skill.toml.rejected)"
 
-# Standalone Cargo project — NOT a workspace member of the agentflow
+# Standalone Cargo project — NOT a workspace member of the yanshi
 # workspace. See examples/applications/blog-to-podcast/Cargo.toml for
-# the rationale (avoids polluting agentflow's Cargo.lock with every
+# the rationale (avoids polluting yanshi's Cargo.lock with every
 # application's transitive deps).
 
 [dependencies]
-agentflow-core = { path = "../../../agentflow-core" }
-agentflow-llm  = { path = "../../../agentflow-llm" }
+yanshi-core = { path = "../../../yanshi-core" }
+yanshi-llm  = { path = "../../../yanshi-llm" }
 
 tokio           = { version = "1", features = ["full"] }
 async-trait     = "0.1"

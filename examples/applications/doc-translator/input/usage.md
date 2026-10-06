@@ -3,7 +3,7 @@
 Install via cargo:
 
 ```bash
-cargo add agentflow-core
+cargo add yanshi-core
 ```
 
 Then build a flow:
@@ -13,4 +13,4 @@ let nodes = vec![/* your nodes here */];
 let flow = Flow::new(nodes);
 ```
 
-For more, see the [reference docs](https://docs.rs/agentflow-core).
+For more, see the [reference docs](https://docs.rs/yanshi-core).

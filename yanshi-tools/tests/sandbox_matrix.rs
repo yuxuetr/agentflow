@@ -1,0 +1,332 @@
+use std::sync::Arc;
+
+use serde_json::{Value, json};
+use tempfile::TempDir;
+use yanshi_tools::builtin::{FileTool, ShellTool};
+use yanshi_tools::sandbox::SandboxPolicy;
+use yanshi_tools::{Tool, ToolError, ToolMetadata, ToolPermission, ToolPolicy};
+
+struct SandboxTestCase {
+  name: &'static str,
+  params: Value,
+  expect_fragment: &'static str,
+}
+
+fn policy_for(root: &std::path::Path) -> Arc<SandboxPolicy> {
+  Arc::new(SandboxPolicy {
+    allowed_paths: vec![root.to_path_buf()],
+    max_exec_time_secs: 1,
+    ..SandboxPolicy::default()
+  })
+}
+
+async fn assert_file_denied(tool: &FileTool, case: SandboxTestCase) {
+  let error = tool
+    .execute(case.params)
+    .await
+    .unwrap_err_or_else(|| panic!("{} should be denied", case.name));
+
+  match error {
+    ToolError::SandboxViolation { message } => {
+      assert!(
+        message.contains(case.expect_fragment),
+        "{}: expected '{}' in '{}'",
+        case.name,
+        case.expect_fragment,
+        message
+      );
+    }
+    other => panic!("{}: expected sandbox violation, got {other:?}", case.name),
+  }
+}
+
+trait ResultExt<T> {
+  fn unwrap_err_or_else(self, make_message: impl FnOnce() -> String) -> ToolError;
+}
+
+impl<T> ResultExt<T> for Result<T, ToolError> {
+  fn unwrap_err_or_else(self, make_message: impl FnOnce() -> String) -> ToolError {
+    match self {
+      Ok(_) => panic!("{}", make_message()),
+      Err(error) => error,
+    }
+  }
+}
+
+#[tokio::test]
+async fn file_tool_blocks_traversal_absolute_and_symlink_escape() {
+  let temp = TempDir::new().unwrap();
+  let allowed = temp.path().join("allowed");
+  let outside = temp.path().join("outside");
+  std::fs::create_dir_all(&allowed).unwrap();
+  std::fs::create_dir_all(&outside).unwrap();
+  std::fs::write(outside.join("secret.txt"), "secret").unwrap();
+
+  #[cfg(unix)]
+  std::os::unix::fs::symlink(outside.join("secret.txt"), allowed.join("secret-link")).unwrap();
+
+  let tool = FileTool::new(policy_for(&allowed));
+  let mut cases = vec![
+    SandboxTestCase {
+      name: "path traversal",
+      params: json!({"operation": "read", "path": allowed.join("../outside/secret.txt")}),
+      expect_fragment: "traversal",
+    },
+    SandboxTestCase {
+      name: "absolute outside read",
+      params: json!({"operation": "read", "path": outside.join("secret.txt")}),
+      expect_fragment: "outside allowed path prefixes",
+    },
+    SandboxTestCase {
+      name: "absolute outside write",
+      params: json!({"operation": "write", "path": outside.join("write.txt"), "content": "x"}),
+      expect_fragment: "outside allowed path prefixes",
+    },
+  ];
+
+  #[cfg(unix)]
+  cases.push(SandboxTestCase {
+    name: "symlink escape",
+    params: json!({"operation": "read", "path": allowed.join("secret-link")}),
+    expect_fragment: "outside allowed path prefixes",
+  });
+
+  for case in cases {
+    assert_file_denied(&tool, case).await;
+  }
+}
+
+#[tokio::test]
+async fn file_tool_allows_missing_parent_under_allowed_root() {
+  let temp = TempDir::new().unwrap();
+  let allowed = temp.path().join("allowed");
+  std::fs::create_dir_all(&allowed).unwrap();
+  let target = allowed.join("missing").join("nested").join("out.txt");
+
+  let tool = FileTool::new(policy_for(&allowed));
+  let output = tool
+    .execute(json!({"operation": "write", "path": target, "content": "ok"}))
+    .await
+    .unwrap();
+
+  assert!(!output.is_error);
+  assert_eq!(
+    std::fs::read_to_string(allowed.join("missing").join("nested").join("out.txt")).unwrap(),
+    "ok"
+  );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn file_tool_blocks_write_through_symlinked_parent() {
+  let temp = TempDir::new().unwrap();
+  let allowed = temp.path().join("allowed");
+  let outside = temp.path().join("outside");
+  std::fs::create_dir_all(&allowed).unwrap();
+  std::fs::create_dir_all(&outside).unwrap();
+  std::os::unix::fs::symlink(&outside, allowed.join("outside-link")).unwrap();
+
+  let tool = FileTool::new(policy_for(&allowed));
+
+  assert_file_denied(
+    &tool,
+    SandboxTestCase {
+      name: "symlinked parent write",
+      params: json!({"operation": "write", "path": allowed.join("outside-link").join("pwn.txt"), "content": "x"}),
+      expect_fragment: "outside allowed path prefixes",
+    },
+  )
+  .await;
+  assert!(!outside.join("pwn.txt").exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn file_tool_blocks_hardlink_reads_by_default() {
+  let temp = TempDir::new().unwrap();
+  let allowed = temp.path().join("allowed");
+  let outside = temp.path().join("outside");
+  std::fs::create_dir_all(&allowed).unwrap();
+  std::fs::create_dir_all(&outside).unwrap();
+  let secret = outside.join("secret.txt");
+  let hardlink = allowed.join("secret-hardlink.txt");
+  std::fs::write(&secret, "secret").unwrap();
+  std::fs::hard_link(&secret, &hardlink).unwrap();
+
+  let tool = FileTool::new(policy_for(&allowed));
+
+  assert_file_denied(
+    &tool,
+    SandboxTestCase {
+      name: "hardlink read",
+      params: json!({"operation": "read", "path": hardlink}),
+      expect_fragment: "hard links",
+    },
+  )
+  .await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn file_tool_can_explicitly_allow_hardlink_reads() {
+  let temp = TempDir::new().unwrap();
+  let allowed = temp.path().join("allowed");
+  let outside = temp.path().join("outside");
+  std::fs::create_dir_all(&allowed).unwrap();
+  std::fs::create_dir_all(&outside).unwrap();
+  let secret = outside.join("secret.txt");
+  let hardlink = allowed.join("secret-hardlink.txt");
+  std::fs::write(&secret, "secret").unwrap();
+  std::fs::hard_link(&secret, &hardlink).unwrap();
+
+  let policy = Arc::new(SandboxPolicy {
+    allowed_paths: vec![allowed.clone()],
+    allow_hardlinked_files: true,
+    ..SandboxPolicy::default()
+  });
+  let tool = FileTool::new(policy);
+  let output = tool
+    .execute(json!({"operation": "read", "path": hardlink}))
+    .await
+    .unwrap();
+
+  assert_eq!(output.content, "secret");
+}
+
+#[tokio::test]
+async fn file_tool_read_only_rejects_write_but_allows_read_and_list() {
+  let temp = TempDir::new().unwrap();
+  let allowed = temp.path().join("allowed");
+  std::fs::create_dir_all(&allowed).unwrap();
+  let existing = allowed.join("existing.txt");
+  std::fs::write(&existing, "hello").unwrap();
+
+  let tool = FileTool::read_only(policy_for(&allowed));
+
+  let error = tool
+    .execute(json!({"operation": "write", "path": allowed.join("new.txt"), "content": "x"}))
+    .await
+    .unwrap_err_or_else(|| "write should be denied on a read-only file tool".to_string());
+  assert!(
+    matches!(error, ToolError::PolicyDenied { .. }),
+    "expected PolicyDenied, got {error:?}"
+  );
+  assert!(
+    !allowed.join("new.txt").exists(),
+    "read-only file tool must not touch the filesystem on a denied write"
+  );
+
+  let output = tool
+    .execute(json!({"operation": "read", "path": existing}))
+    .await
+    .unwrap();
+  assert_eq!(output.content, "hello");
+
+  let listing = tool
+    .execute(json!({"operation": "list", "path": allowed}))
+    .await
+    .unwrap();
+  assert!(listing.content.contains("existing.txt"));
+}
+
+#[tokio::test]
+async fn shell_tool_blocks_unallowed_command_before_spawn() {
+  let tool = ShellTool::default_policy();
+  let error = tool
+    .execute(json!({"command": "rm -rf /tmp/yanshi-should-not-run"}))
+    .await
+    .unwrap_err_or_else(|| "rm should be denied".to_string());
+
+  assert!(matches!(error, ToolError::SandboxViolation { .. }));
+}
+
+#[tokio::test]
+async fn shell_tool_times_out_long_running_process() {
+  let policy = Arc::new(SandboxPolicy {
+    allowed_commands: vec!["sleep".to_string()],
+    max_exec_time_secs: 1,
+    ..SandboxPolicy::default()
+  });
+  let tool = ShellTool::new(policy);
+
+  let error = tool
+    .execute(json!({"command": "sleep 5"}))
+    .await
+    .unwrap_err_or_else(|| "sleep should time out".to_string());
+
+  match error {
+    ToolError::ExecutionFailed { message } => assert!(message.contains("timed out")),
+    other => panic!("expected timeout, got {other:?}"),
+  }
+}
+
+#[tokio::test]
+async fn shell_tool_handles_large_stdout_without_policy_leakage() {
+  let policy = Arc::new(SandboxPolicy {
+    allowed_commands: vec!["awk".to_string()],
+    max_exec_time_secs: 5,
+    ..SandboxPolicy::default()
+  });
+  let tool = ShellTool::new(policy);
+
+  let output = tool
+    .execute(json!({"command": "awk 'BEGIN { for (i = 0; i < 8192; i++) print \"yanshi\" }'"}))
+    .await
+    .unwrap();
+
+  assert!(!output.is_error);
+  assert!(output.content.len() > 32_000);
+  assert!(!output.content.contains("API_KEY"));
+}
+
+#[test]
+fn tool_policy_decision_records_deny_reason() {
+  let policy = ToolPolicy::allow_permissions([ToolPermission::Network]);
+  let decision = policy.evaluate(
+    "shell",
+    &ToolMetadata::builtin_named("shell"),
+    &json!({"command": "echo ok"}),
+  );
+
+  assert!(!decision.allowed);
+  assert_eq!(decision.matched_rule, "permission_allowlist");
+  assert!(
+    decision
+      .deny_reason
+      .as_deref()
+      .unwrap_or_default()
+      .contains("permission 'process_exec' is not allowed")
+  );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn os_sandbox_blocks_hardlink_creation_without_fs_write() {
+  let temp = TempDir::new().unwrap();
+  let outside = temp.path().join("outside.txt");
+  let inside = temp.path().join("inside-hardlink.txt");
+  std::fs::write(&outside, "secret").unwrap();
+
+  let policy = Arc::new(SandboxPolicy {
+    allowed_commands: vec!["ln".to_string()],
+    allowed_paths: vec![temp.path().to_path_buf()],
+    max_exec_time_secs: 5,
+    ..SandboxPolicy::default()
+  });
+  let tool = ShellTool::new(policy).with_os_sandbox();
+  let command = format!("ln {} {}", outside.display(), inside.display());
+  let output = tool
+    .execute(json!({ "command": command }))
+    .await
+    .expect("sandboxed shell call should complete");
+
+  assert!(
+    output.is_error,
+    "hardlink creation should fail without fs.write capability: {}",
+    output.content
+  );
+  assert!(
+    !inside.exists(),
+    "hardlink target was created despite missing fs.write capability"
+  );
+}

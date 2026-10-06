@@ -1,7 +1,7 @@
 name: Release
 
-# P10.0.4 — release-artifact production. Builds per-arch `agentflow` CLI
-# tarballs + a multi-arch `agentflow-server` Docker image pushed to GHCR +
+# P10.0.4 — release-artifact production. Builds per-arch `yanshi` CLI
+# tarballs + a multi-arch `yanshi-server` Docker image pushed to GHCR +
 # a GitHub Release with all artifacts attached.
 #
 # W5.5: this workflow no longer triggers directly on a `v*` tag push.
@@ -39,7 +39,7 @@ name: Release
 # the runner has multi-hour queue times that block the release, Apple
 # itself has EOL'd the platform, and the Apple-Silicon build can be
 # run under Rosetta 2 if a user genuinely still needs Intel. Users
-# on Intel macOS can `cargo install agentflow-cli` from source.
+# on Intel macOS can `cargo install yanshi-cli` from source.
 #
 # First push notes:
 #   - GHCR creates packages as `private` by default. After the first
@@ -154,11 +154,11 @@ jobs:
           echo "tag_name=${HEAD_BRANCH}" >> "${GITHUB_OUTPUT}"
 
   # ─────────────────────────────────────────────────────────────────────
-  # CLI binary matrix. Each row produces `agentflow-<target>.tar.gz`
-  # containing the `agentflow` binary at the archive root.
+  # CLI binary matrix. Each row produces `yanshi-<target>.tar.gz`
+  # containing the `yanshi` binary at the archive root.
   # ─────────────────────────────────────────────────────────────────────
   build-binaries:
-    name: build agentflow (${{ matrix.target }})
+    name: build yanshi (${{ matrix.target }})
     needs: resolve-release-context
     if: ${{ needs.resolve-release-context.outputs.should_release == 'true' }}
     strategy:
@@ -194,20 +194,20 @@ jobs:
         with:
           key: release-${{ matrix.target }}
 
-      - name: Build agentflow (release)
+      - name: Build yanshi (release)
         # Default features (`llm`, `http`, `file`, `template`) — same as
-        # `cargo install agentflow-cli` would land for a fresh user.
+        # `cargo install yanshi-cli` would land for a fresh user.
         # Skip `plugin` + `rag` features — they're opt-in and pull
         # heavier deps. Tag-published binary stays minimal; users who
         # need rag/plugin can `cargo install --features rag,plugin`.
-        run: cargo build --release -p agentflow-cli --bin agentflow
+        run: cargo build --release -p yanshi-cli --bin yanshi
 
       - name: Package tarball
         shell: bash
         run: |
           set -euo pipefail
-          ARCHIVE="agentflow-${{ matrix.target }}.tar.gz"
-          tar -czf "${ARCHIVE}" -C target/release agentflow
+          ARCHIVE="yanshi-${{ matrix.target }}.tar.gz"
+          tar -czf "${ARCHIVE}" -C target/release yanshi
           # Compute sha256 alongside the archive so the release page
           # carries an integrity reference for every binary.
           if command -v sha256sum >/dev/null 2>&1; then
@@ -219,17 +219,17 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: agentflow-${{ matrix.target }}
+          name: yanshi-${{ matrix.target }}
           path: |
-            agentflow-${{ matrix.target }}.tar.gz
-            agentflow-${{ matrix.target }}.tar.gz.sha256
+            yanshi-${{ matrix.target }}.tar.gz
+            yanshi-${{ matrix.target }}.tar.gz.sha256
           retention-days: 7
 
   # ─────────────────────────────────────────────────────────────────────
-  # Multi-arch `agentflow-server` Docker image → GHCR.
+  # Multi-arch `yanshi-server` Docker image → GHCR.
   # ─────────────────────────────────────────────────────────────────────
   build-docker:
-    name: build + push agentflow-server image
+    name: build + push yanshi-server image
     needs: resolve-release-context
     if: ${{ needs.resolve-release-context.outputs.should_release == 'true' }}
     runs-on: ubuntu-latest
@@ -283,7 +283,7 @@ jobs:
         run: |
           set -euo pipefail
           OWNER_LOWER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
-          BASE="ghcr.io/${OWNER_LOWER}/agentflow-server"
+          BASE="ghcr.io/${OWNER_LOWER}/yanshi-server"
           REFS="${BASE}:${{ steps.tag.outputs.tag }}"
           if [[ "${{ steps.tag.outputs.is_prerelease }}" != "true" ]]; then
             REFS+=$'\n'"${BASE}:latest"
@@ -351,7 +351,7 @@ jobs:
         run: |
           set -euo pipefail
           # `download-artifact` lays files out per upload-artifact name:
-          #   artifacts/agentflow-<target>/agentflow-<target>.tar.gz
+          #   artifacts/yanshi-<target>/yanshi-<target>.tar.gz
           # The release page wants flat paths, so move everything up
           # one level into ./release/.
           mkdir -p release

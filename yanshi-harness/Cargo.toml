@@ -1,0 +1,64 @@
+[package]
+name = "yanshi-harness"
+version = "0.1.0"
+description = "Harness Agent Mode runtime + contract crate: long-lived, workspace-aware agent sessions for Yanshi"
+keywords = ["ai", "agents", "harness", "yanshi"]
+categories = ["development-tools"]
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# Phase H0 deliverable: the contract surface (event envelope, approval
+# protocol, hook traits, session context). Phase H1 adds the runtime
+# wrapper around `yanshi_agents::AgentRuntime`, four default context
+# providers, JSONL persistence, and event bridging.
+
+[dependencies]
+yanshi-agent-spi = { path = "../yanshi-agent-spi", version = "0.1" }
+# P-A2.2: the harness governs a deterministic `Flow` run via the L0 graph IR +
+# the injected `FlowRunner` contract (the executor stays out — runtime→contract).
+yanshi-graph = { path = "../yanshi-graph", version = "0.1" }
+# T3.3: contract-only usage (Tool/ToolMetadata/ToolPolicy/ToolPermission/
+# ToolSource/ToolIdempotency) — depends on the contract crate directly, not
+# the builtin-impl one. `builtin::CodeExecTool` (used only in this crate's
+# own tests) pulls in `yanshi-tools` as a dev-dependency below.
+yanshi-tool = { path = "../yanshi-tool", version = "0.1" }
+# Q1.7.2: redact secrets in `ApprovalRequest.params_summary` /
+# `ToolCallRequestedPayload.params_summary` before they hit JSONL /
+# SSE / stdout sinks.
+yanshi-tracing = { path = "../yanshi-tracing", version = "0.1" }
+# Phase 0 (RFC_HARNESS_LOOP_OWNERSHIP): real token accounting for context
+# budgeting via `yanshi_llm::tokenizer::counter_for_model`, replacing the
+# crate-local `chars / 4` heuristic.
+yanshi-llm = { path = "../yanshi-llm", version = "0.2" }
+# Phase 2b / §6: between-turn context-provider refresh injects a refreshed
+# workspace-context message into the session memory (`Message` /
+# `MemoryStore`). U2.1: depends on the L0 contract crate directly, not
+# `yanshi-memory` (which bundles concrete impls this crate never
+# constructs in production) — `SessionMemory` is dev-dependency-only,
+# used by this crate's own tests.
+yanshi-store-spi = { path = "../yanshi-store-spi", version = "0.1" }
+
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tokio = { workspace = true, features = ["fs", "io-util", "sync", "macros", "rt"] }
+tracing = "0.1"
+uuid = { workspace = true }
+
+[dev-dependencies]
+yanshi-agents = { path = "../yanshi-agents", version = "0.2" }
+# T3.3: `hooks_runtime.rs`'s own tests exercise the production-profile
+# approval escalation against the real, shipped `code_exec` tool.
+yanshi-tools = { path = "../yanshi-tools", version = "0.1" }
+# P-A2.2 tests execute a real `Flow` under harness governance via the
+# executor-backed `CoreFlowRunner`.
+yanshi-core = { path = "../yanshi-core", version = "0.2" }
+yanshi-llm = { path = "../yanshi-llm", version = "0.2" }
+yanshi-memory = { path = "../yanshi-memory", version = "0.1" }
+tempfile = "3"
+tokio = { workspace = true, features = ["full"] }

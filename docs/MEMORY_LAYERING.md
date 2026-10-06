@@ -7,16 +7,16 @@ injection, write tool) closed under U2.2 (2026-07-31); Project memory
 closed under V1.6 — see the "Wiring status" notes under §Precedence
 for what remains unwired (Entity facts) or partially wired (Project
 memory, elsewhere).
-Crate: `agentflow-memory`.
+Crate: `yanshi-memory`.
 Implements: P4.7 (backend implementations) and P-H.4 (background task
 context).
 
-AgentFlow agents accumulate four kinds of state that are easy to
+Yanshi agents accumulate four kinds of state that are easy to
 conflate but have very different lifetime, retrieval, and privacy
 requirements. This document is the v1 boundary contract between those
 four kinds so that:
 
-1. Implementations of [`MemoryStore`](../agentflow-store-spi/src/store.rs)
+1. Implementations of [`MemoryStore`](../yanshi-store-spi/src/store.rs)
    stay focused on one layer at a time.
 2. Agents (`ReActAgent`, `PlanExecuteAgent`, supervisors) get a
    deterministic precedence when more than one layer can answer the
@@ -48,11 +48,11 @@ substitutes a summary produced by a `MemorySummaryBackend`.
 
 Today's implementation:
 
-- [`SessionMemory`](../agentflow-memory/src/session.rs) — in-process
+- [`SessionMemory`](../yanshi-memory/src/session.rs) — in-process
   `HashMap<session_id, Vec<Message>>` with `prune` triggered on every
   write. `default_window()` ships an 8 000-token window;
   `large_window()` ships 128 000 for long-context models.
-- [`SqliteMemory`](../agentflow-memory/src/sqlite.rs) — persistent
+- [`SqliteMemory`](../yanshi-memory/src/sqlite.rs) — persistent
   Session memory backed by SQLite. Same shape as `SessionMemory`
   semantically; the difference is durability across process
   restarts. Used by skills that opt in with `[memory] type = "sqlite"`.
@@ -73,21 +73,21 @@ items.
 
 Today's implementation:
 
-- [`SemanticMemory`](../agentflow-memory/src/semantic.rs) — wraps an
-  `agentflow_rag::embeddings::EmbeddingProvider` and stores
+- [`SemanticMemory`](../yanshi-memory/src/semantic.rs) — wraps an
+  `yanshi_rag::embeddings::EmbeddingProvider` and stores
   `Message + Vec<f32>` pairs. Search uses cosine similarity
   in-process (no Qdrant dependency for the in-memory backend).
 
 #### Seam with RAG
 
-Semantic memory and the RAG retriever (`agentflow-rag::retrieval`)
+Semantic memory and the RAG retriever (`yanshi-rag::retrieval`)
 both perform "find nearest k by embedding", but they answer
 different questions:
 
 | Use case | Layer | Why |
 | --- | --- | --- |
 | "Did the user tell me their middle name in a prior conversation?" | Semantic memory | The data is conversational, ephemeral, user-scoped, and not part of any authored knowledge base. |
-| "What does the company policy say about refunds?" | RAG | The data is an authored corpus, chunked at ingestion, shared across users / tenants, and updated by a deliberate `agentflow rag ops index` invocation. |
+| "What does the company policy say about refunds?" | RAG | The data is an authored corpus, chunked at ingestion, shared across users / tenants, and updated by a deliberate `yanshi rag ops index` invocation. |
 | "What's the last error message this agent saw for this customer?" | Semantic memory | Same as the first row — generated as a side-effect of the agent loop, not authored. |
 | "Give me the API reference page for the `flow.resume` method." | RAG | Authored doc corpus. |
 
@@ -111,17 +111,17 @@ value back or `None`.
 Today's implementation (T4.1, closed 2026-05-24 under P4.7 —
 `5098719`):
 
-- [`SqlitePreferenceStore`](../agentflow-memory/src/preference.rs) —
+- [`SqlitePreferenceStore`](../yanshi-memory/src/preference.rs) —
   SQLite-backed, schema `(tenant_id, user_id, key, value JSON,
   updated_at, version)`, UPSERT with monotonic per-key `version`.
-- [`AgeEncryptedPreferenceStore`](../agentflow-memory/src/preference_encrypted.rs) —
+- [`AgeEncryptedPreferenceStore`](../yanshi-memory/src/preference_encrypted.rs) —
   `age`-encrypted-at-rest wrapper (P10.7.2) for deployments that need
   it; the plaintext `SqlitePreferenceStore` remains the local-profile
   default.
 
 Retention: keep indefinitely. Operators can prune via
-`agentflow memory prune --layer preference --older-than 1y`
-(`agentflow-cli/src/commands/memory/prune.rs`).
+`yanshi memory prune --layer preference --older-than 1y`
+(`yanshi-cli/src/commands/memory/prune.rs`).
 
 ### 4. Entity facts memory
 
@@ -136,20 +136,20 @@ the agent runtime can render a per-fact citation when challenged.
 Today's implementation (T4.1, closed 2026-05-24 under P4.7 —
 `5098719`):
 
-- [`SqliteEntityFactStore`](../agentflow-memory/src/entity_facts.rs) —
+- [`SqliteEntityFactStore`](../yanshi-memory/src/entity_facts.rs) —
   SQLite-backed, schema `(entity_id, fact_id, attribute, value JSON,
   source_message_id, confidence, extracted_at, invalidated_at
   NULLABLE, invalidation_reason)`.
 
 Retention: keep until explicitly invalidated. Invalidation sets
 `invalidated_at`; the row is preserved for audit. A separate
-`agentflow memory prune --layer entity_facts --older-than 2y`
+`yanshi memory prune --layer entity_facts --older-than 2y`
 (`EntityFactStore::prune_invalidated`) removes invalidated rows past a
 grace window — active facts are never touched, even at a zero cutoff.
 
 ## Layer trait surface
 
-The existing [`MemoryStore`](../agentflow-store-spi/src/store.rs)
+The existing [`MemoryStore`](../yanshi-store-spi/src/store.rs)
 trait covers the Session layer well today. P4.7 extends the trait
 surface conservatively: rather than adding methods to `MemoryStore`
 (which would force every backend to stub the methods it doesn't
@@ -157,7 +157,7 @@ support), each layer gets a dedicated trait that *extends*
 `MemoryStore` only where it makes sense.
 
 ```rust
-// agentflow-memory/src/store.rs (existing — covers Session today)
+// yanshi-memory/src/store.rs (existing — covers Session today)
 #[async_trait]
 pub trait MemoryStore: Send + Sync {
   async fn add_message(&mut self, message: Message) -> Result<(), MemoryError>;
@@ -169,7 +169,7 @@ pub trait MemoryStore: Send + Sync {
   async fn to_prompt(&self, session_id: &str) -> Result<String, MemoryError>;
 }
 
-// agentflow-memory/src/layer.rs (landed under P4.7, T4.1)
+// yanshi-memory/src/layer.rs (landed under P4.7, T4.1)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MemoryLayer { Session, Semantic, Preference, EntityFacts }
 
@@ -183,10 +183,10 @@ pub trait SemanticMemoryStore: MemoryStore {
   ) -> Result<Vec<(Message, f32)>, MemoryError>;
 }
 
-// U2.6: moved to `agentflow-store-spi::preference` with `&self` write
+// U2.6: moved to `yanshi-store-spi::preference` with `&self` write
 // methods (originally `&mut self`; re-auditing found that constraint
 // wasn't load-bearing — `SqlitePreferenceStore` only touches
-// `&self.pool`, an `Arc`-backed `sqlx::SqlitePool`). `agentflow-memory`
+// `&self.pool`, an `Arc`-backed `sqlx::SqlitePool`). `yanshi-memory`
 // re-exports it under this same `PreferenceStore` path.
 #[async_trait]
 pub trait PreferenceStore: Send + Sync {
@@ -231,8 +231,8 @@ pub trait EntityFactStore: Send + Sync {
 }
 ```
 
-Implementations: [`SqlitePreferenceStore`](../agentflow-memory/src/preference.rs)
-/ [`SqliteEntityFactStore`](../agentflow-memory/src/entity_facts.rs). `PreferenceValue`
+Implementations: [`SqlitePreferenceStore`](../yanshi-memory/src/preference.rs)
+/ [`SqliteEntityFactStore`](../yanshi-memory/src/entity_facts.rs). `PreferenceValue`
 wraps the stored `value` with its `updated_at`/`version` metadata on
 read; writes take a bare `serde_json::Value` since the store computes
 those fields itself.
@@ -250,9 +250,9 @@ read API.
 | Layer | Default | Operator override | Per-message override |
 | --- | --- | --- | --- |
 | Session | Token-windowed (8 000 / 128 000) | `[memory] window_tokens = N` in `skill.toml` | n/a |
-| Semantic | Keep until explicit delete | `agentflow memory prune --layer semantic --older-than DUR` | n/a |
-| Preference | Keep indefinitely | `agentflow memory prune --layer preference --older-than DUR` (purges last-updated > DUR ago) | `--user-id` filter |
-| Entity facts | Keep until invalidated; invalidated rows kept 2 y | `agentflow memory prune --layer entity_facts --hard-delete --older-than DUR` | `--entity-id` filter |
+| Semantic | Keep until explicit delete | `yanshi memory prune --layer semantic --older-than DUR` | n/a |
+| Preference | Keep indefinitely | `yanshi memory prune --layer preference --older-than DUR` (purges last-updated > DUR ago) | `--user-id` filter |
+| Entity facts | Keep until invalidated; invalidated rows kept 2 y | `yanshi memory prune --layer entity_facts --hard-delete --older-than DUR` | `--entity-id` filter |
 
 The CLI subcommand lands alongside P4.7 — schema design now, command
 later.
@@ -277,20 +277,20 @@ preference is exact, entity facts have provenance). Semantic is last
 because it's the noisiest layer and most likely to retrieve
 something that *looks* relevant but isn't.
 
-A `MemorySummaryBackend` (already in `agentflow-agents/src/reflection.rs`)
+A `MemorySummaryBackend` (already in `yanshi-agents/src/reflection.rs`)
 operates **before** this list: when session history overflows the
 token budget, the summary backend compacts the oldest messages into
 a single synthetic message that takes their slot.
 
 **Wiring status (U2.2, 2026-07-31)**: **Preference is wired end to end.**
 `ReActAgent` reads `PreferenceStore::list_preferences` fresh every turn
-and injects it into the persona (`agentflow-agents/src/react/agent.rs`),
+and injects it into the persona (`yanshi-agents/src/react/agent.rs`),
 and a Skill can both configure it (`[memory.preference]`, see below) and
 *write* to it mid-conversation via the new `remember_preference` tool
-(`agentflow_memory::RememberPreferenceTool`, registered automatically
+(`yanshi_memory::RememberPreferenceTool`, registered automatically
 by `SkillBuilder` whenever `[memory.preference]` is enabled) — the store
 was previously usable only "standalone" (a direct Rust API call, or
-`agentflow memory prune` for retention), so nothing in a real
+`yanshi memory prune` for retention), so nothing in a real
 conversation could ever populate it; that gap is now closed.
 `PlanExecuteAgent` does **not** get this — the precedent it would mirror
 (`task_summary_store`/`project_memory_store`) was never added there
@@ -300,8 +300,8 @@ either, so this is a pre-existing, unrelated gap, not new to U2.2.
 by a single `entity_id`, so consulting it automatically requires first
 deciding *which* entities are "named in the current turn" (real NLU-ish
 work, not just a store read); the store itself is unaffected and still
-only reachable standalone / via `agentflow memory prune`. No
-`agentflow-skills`/`agentflow-agents`/`agentflow-harness` code
+only reachable standalone / via `yanshi memory prune`. No
+`yanshi-skills`/`yanshi-agents`/`yanshi-harness` code
 references `EntityFactStore` yet. Wiring it is unscheduled future work
 (tracked in `TODOs.md`).
 
@@ -316,7 +316,7 @@ involved (unlike preference's `remember_preference`). **Wiring status
 `SkillBuilder`/`skill.toml` (`[memory.project]`, see below) since V1.6,
 but *only* for callers that resolve a real `project_root` and build via
 `SkillBuilder::build_with_project_root` instead of plain `build` —
-today that's `agentflow harness run`/`chat` alone (both resolve
+today that's `yanshi harness run`/`chat` alone (both resolve
 `--workspace`, defaulting to CWD). Multi-agent participants, the eval
 harness, and DAG `agent` nodes have no "what directory is this agent
 working in" concept, so `[memory.project]` is a no-op for them even if
@@ -339,7 +339,7 @@ Today (`v0.3.0`):
 - Preference *wiring* (config parsing, prompt injection, the
   `remember_preference` write tool) landed U2.2 (2026-07-31).
 
-Skill manifest impact — `agentflow-skills`' `[memory]` parsing accepts
+Skill manifest impact — `yanshi-skills`' `[memory]` parsing accepts
 `type = "session" | "sqlite" | "semantic" | "none"` (all four; a prior
 version of this document incorrectly said only three — `semantic` has
 been handled by `SkillBuilder::build_memory` since 2026-04-25, the gap
@@ -356,23 +356,23 @@ window_tokens = 12000
 # skill.toml (U2.2 — implemented)
 [memory.preference]
 enabled = true                                  # optional, defaults to true
-db_path = "~/.agentflow/memory/my-skill.preference.db"  # optional override;
+db_path = "~/.yanshi/memory/my-skill.preference.db"  # optional override;
                                                   # defaults to
-                                                  # ~/.agentflow/memory/<skill_name>.preference.db
+                                                  # ~/.yanshi/memory/<skill_name>.preference.db
 
 # skill.toml (V1.6 — implemented, but only takes effect for callers that
 # build via SkillBuilder::build_with_project_root with a real project_root;
 # see the Wiring status note above)
 [memory.project]
 enabled = true                              # optional, defaults to true
-db_path = "~/.agentflow/memory/my-skill.project.db"  # optional override;
+db_path = "~/.yanshi/memory/my-skill.project.db"  # optional override;
                                               # defaults to
-                                              # ~/.agentflow/memory/<skill_name>.project.db
+                                              # ~/.yanshi/memory/<skill_name>.project.db
 
 # skill.toml (proposed, not implemented — no SkillBuilder support yet)
 [memory.entity_facts]
 type = "sqlite"
-path = "~/.agentflow/memory/{skill}.facts.db"  # optional override
+path = "~/.yanshi/memory/{skill}.facts.db"  # optional override
 ```
 
 The existing `[memory]` table is unchanged. `[memory.preference]` and
@@ -397,9 +397,9 @@ See `docs/STABILITY.md` for the stability tier definitions.
 - `docs/AGENT_RUNTIME.md` — how the agent loop consumes memory.
 - `docs/RAG_EVAL.md` — the eval harness for the authored corpus.
 - `docs/AGENT_SDK.md` — `MemorySummaryBackend` extension trait.
-- [`agentflow-store-spi/src/store.rs`](../agentflow-store-spi/src/store.rs) —
+- [`yanshi-store-spi/src/store.rs`](../yanshi-store-spi/src/store.rs) —
   the trait this document extends.
-- [`agentflow-memory/src/semantic.rs`](../agentflow-memory/src/semantic.rs) —
+- [`yanshi-memory/src/semantic.rs`](../yanshi-memory/src/semantic.rs) —
   the current `SemanticMemory` implementation.
 - P-H.4 `tasks` module — background task agents reuse the same
   layer contract when they spawn an inner runtime.

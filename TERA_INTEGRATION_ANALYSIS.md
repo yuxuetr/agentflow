@@ -7,7 +7,7 @@
 
 ## 当前状态
 
-- **Tera 依赖**: ✅ 已在 `agentflow-cli/Cargo.toml` 中添加 (v1.19)
+- **Tera 依赖**: ✅ 已在 `yanshi-cli/Cargo.toml` 中添加 (v1.19)
 - **使用情况**: ❌ 未使用，代码中没有任何 Tera 的引用
 - **当前实现**: 简单的字符串替换（`template.rs`）
 
@@ -308,7 +308,7 @@ impl AsyncNode for TemplateNode {
         // 渲染模板
         let rendered = self.tera
             .render_str(&self.template, &context)
-            .map_err(|e| AgentFlowError::NodeExecutionError {
+            .map_err(|e| YanshiError::NodeExecutionError {
                 message: format!("Template error: {}", e)
             })?;
 
@@ -368,10 +368,10 @@ pub struct TemplateNode {
 
 ## 推荐实现步骤
 
-### 第 1 步: 添加 Tera 支持到 agentflow-nodes
+### 第 1 步: 添加 Tera 支持到 yanshi-nodes
 
 ```toml
-# agentflow-nodes/Cargo.toml
+# yanshi-nodes/Cargo.toml
 [dependencies]
 tera = "1.19"
 ```
@@ -379,9 +379,9 @@ tera = "1.19"
 ### 第 2 步: 创建 Tera 辅助函数
 
 ```rust
-// agentflow-nodes/src/common/tera_helpers.rs
+// yanshi-nodes/src/common/tera_helpers.rs
 
-use agentflow_core::value::FlowValue;
+use yanshi_core::value::FlowValue;
 use serde_json::Value as JsonValue;
 
 pub fn flow_value_to_tera_value(value: &FlowValue) -> tera::Value {
@@ -403,7 +403,7 @@ pub fn register_custom_filters(tera: &mut tera::Tera) {
 ### 第 3 步: 修改 TemplateNode
 
 ```rust
-// agentflow-nodes/src/nodes/template.rs
+// yanshi-nodes/src/nodes/template.rs
 
 use tera::Tera;
 use once_cell::sync::Lazy;
@@ -431,7 +431,7 @@ impl AsyncNode for TemplateNode {
 
         // 渲染
         let rendered = TERA.render_str(&self.template, &context)
-            .map_err(|e| AgentFlowError::NodeExecutionError {
+            .map_err(|e| YanshiError::NodeExecutionError {
                 message: format!("Template rendering failed: {}", e)
             })?;
 

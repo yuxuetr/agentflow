@@ -1,8 +1,8 @@
 ---
 name: multimodal-content-analyzer
-description: Analyze image, audio, transcript, and document context supplied by AgentFlow workflows.
+description: Analyze image, audio, transcript, and document context supplied by Yanshi workflows.
 license: Apache-2.0
-compatibility: AgentFlow v1 stability inventory
+compatibility: Yanshi v1 stability inventory
 allowed-tools: file
 metadata:
   version: "1.0.0"

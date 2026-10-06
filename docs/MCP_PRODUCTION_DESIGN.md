@@ -1,20 +1,20 @@
-# AgentFlow MCP Module - Production-Grade Design Document
+# Yanshi MCP Module - Production-Grade Design Document
 
 **Version**: 1.0
 **Date**: 2025-10-27
 **Status**: Design Phase
-**Owner**: AgentFlow Core Team
+**Owner**: Yanshi Core Team
 
 ---
 
 ## Executive Summary
 
-This document outlines the design and implementation plan for transforming the agentflow-mcp module from its current experimental state (30% complete) to a production-ready, fully-compliant MCP implementation.
+This document outlines the design and implementation plan for transforming the yanshi-mcp module from its current experimental state (30% complete) to a production-ready, fully-compliant MCP implementation.
 
 **Current State**: 828 lines, basic stdio transport, partial tool calling
 **Target State**: Production-ready MCP client/server with full protocol compliance
 **Estimated Effort**: 8-10 weeks (2 months)
-**Priority**: Phase 3 in AgentFlow roadmap
+**Priority**: Phase 3 in Yanshi roadmap
 
 ---
 
@@ -50,7 +50,7 @@ This document outlines the design and implementation plan for transforming the a
 ### 1.2 Module Structure
 
 ```
-agentflow-mcp/
+yanshi-mcp/
 ├── Cargo.toml                 # Dependencies and features
 ├── src/
 │   ├── lib.rs                 # Public API and re-exports
@@ -715,7 +715,7 @@ impl MCPClientBuilder {
       timeout: Duration::from_secs(30),
       max_retries: 3,
       client_info: Implementation {
-        name: "agentflow-mcp".to_string(),
+        name: "yanshi-mcp".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
       },
       capabilities: ClientCapabilities::default(),
@@ -807,7 +807,7 @@ impl MCPServerBuilder {
       transport_type: TransportType::Stdio,
       port: None,
       server_info: Implementation {
-        name: "agentflow-mcp-server".to_string(),
+        name: "yanshi-mcp-server".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
       },
       tools: Vec::new(),
@@ -1005,7 +1005,7 @@ impl Transport for MockTransport {
 
 ### Phase 5: Integration and Stabilization (Week 9-10)
 
-**Goal**: Integrate with AgentFlow and stabilize
+**Goal**: Integrate with Yanshi and stabilize
 
 **Tasks**:
 1. ✅ Update MCPToolNode to use new client
@@ -1018,14 +1018,14 @@ impl Transport for MockTransport {
 8. ✅ Performance tuning
 
 **Deliverables**:
-- Full AgentFlow integration
+- Full Yanshi integration
 - Example workflows
 - CLI commands for MCP
 - Security review complete
 - ~85% test coverage
 
 **Success Criteria**:
-- AgentFlow workflows can use MCP tools
+- Yanshi workflows can use MCP tools
 - LLM can auto-discover MCP tools
 - All integration tests pass
 - Security vulnerabilities addressed
@@ -1221,7 +1221,7 @@ fn bench_tool_call_throughput(b: &mut Bencher) {
 | MCP spec changes | Low | Medium | Use versioned protocol, design for extensibility |
 | Performance issues with stdio | Medium | Medium | Benchmark early, optimize transport layer |
 | HTTP/SSE complexity | Medium | Medium | Start with basic HTTP, SSE as optional feature |
-| Integration challenges with AgentFlow | Low | High | Early integration tests, continuous feedback |
+| Integration challenges with Yanshi | Low | High | Early integration tests, continuous feedback |
 
 ### 6.2 Resource Risks
 

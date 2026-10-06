@@ -2,7 +2,7 @@
 name: code-reviewer
 description: Review code changes for correctness, security, maintainability, and missing tests.
 license: Apache-2.0
-compatibility: AgentFlow v1 stability inventory
+compatibility: Yanshi v1 stability inventory
 allowed-tools: file shell
 metadata:
   version: "1.0.0"

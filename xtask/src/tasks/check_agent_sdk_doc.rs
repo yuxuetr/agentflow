@@ -34,7 +34,7 @@ const AGENT_SDK_ALLOWLIST: &[&str] = &[
   "VerificationCompleted",
   // FlowValue variants: `FlowValue::File` and `FlowValue::Url` show up in the
   // typed-value section. The parent `FlowValue` enum is declared in
-  // agentflow-core/src/value.rs.
+  // yanshi-core/src/value.rs.
   "File",
   "Url",
   // Example types defined inline in the doc (no real impl file).
@@ -43,7 +43,7 @@ const AGENT_SDK_ALLOWLIST: &[&str] = &[
 
 /// Run the agent-SDK doc drift check against `workspace_root`. Returns
 /// `Ok(())` when every CamelCase identifier the doc cites has either a real
-/// `pub` definition under any `agentflow-*/src/**/*.rs` or is on the
+/// `pub` definition under any `yanshi-*/src/**/*.rs` or is on the
 /// allowlist.
 pub(crate) fn check_agent_sdk_doc_at(
   workspace_root: &Path,
@@ -143,7 +143,7 @@ fn is_camelcase_ident(s: &str) -> bool {
 }
 
 /// Collect every `pub (trait|struct|enum|type|fn) Ident` name declared
-/// anywhere under `<workspace_root>/agentflow-*/src/**/*.rs`. Matches both
+/// anywhere under `<workspace_root>/yanshi-*/src/**/*.rs`. Matches both
 /// bare `pub` and visibility-restricted (`pub(crate)`, `pub(super)`, …)
 /// forms so internal-but-discoverable types still count toward the doc
 /// cross-reference.

@@ -8,12 +8,12 @@
   },
   "paths": {
     "home": "/root",
-    "config_dir": "/root/.agentflow",
+    "config_dir": "/root/.yanshi",
     "models_config": null,
-    "legacy_models_config": "/root/.agentflow/models.yaml",
-    "env_file": "/root/.agentflow/.env",
-    "skills_dir": "/root/.agentflow/skills",
-    "plugins_dir": "/root/.agentflow/plugins"
+    "legacy_models_config": "/root/.yanshi/models.yaml",
+    "env_file": "/root/.yanshi/.env",
+    "skills_dir": "/root/.yanshi/skills",
+    "plugins_dir": "/root/.yanshi/plugins"
   },
   "config": {
     "models_config_source_kind": "built_in_default",
@@ -29,7 +29,7 @@
     "error": null
   },
   "security": {
-    "env_var": "AGENTFLOW_SECURITY_PROFILE",
+    "env_var": "YANSHI_SECURITY_PROFILE",
     "profile": "local",
     "defaults": {
       "profile": "local",
@@ -92,28 +92,28 @@
     "warnings": []
   },
   "environment": {
-    "agentflow_run_dir": null,
-    "agentflow_trace_dir": null,
-    "agentflow_api_token_set": false,
-    "agentflow_skills_index": null
+    "yanshi_run_dir": null,
+    "yanshi_trace_dir": null,
+    "yanshi_api_token_set": false,
+    "yanshi_skills_index": null
   },
   "disk": {
     "run_dir": {
-      "path": "/root/.agentflow/runs",
+      "path": "/root/.yanshi/runs",
       "source": "default",
       "exists": false,
       "writable": false,
       "error": "directory does not exist; will be created on first write"
     },
     "trace_dir": {
-      "path": "/root/.agentflow/traces",
+      "path": "/root/.yanshi/traces",
       "source": "default",
       "exists": false,
       "writable": false,
       "error": "directory does not exist; will be created on first write"
     },
     "marketplace_cache": {
-      "path": "/root/.agentflow/marketplace/cache",
+      "path": "/root/.yanshi/marketplace/cache",
       "source": "default",
       "exists": false,
       "writable": false,
@@ -122,35 +122,35 @@
   },
   "backup_check": {
     "run_dir": {
-      "path": "/root/.agentflow/runs",
+      "path": "/root/.yanshi/runs",
       "source": "default",
       "exists": false,
       "writable": false,
       "error": "directory does not exist; will be created on first write"
     },
     "trace_dir": {
-      "path": "/root/.agentflow/traces",
+      "path": "/root/.yanshi/traces",
       "source": "default",
       "exists": false,
       "writable": false,
       "error": "directory does not exist; will be created on first write"
     },
     "marketplace_cache": {
-      "path": "/root/.agentflow/marketplace/cache",
+      "path": "/root/.yanshi/marketplace/cache",
       "source": "default",
       "exists": false,
       "writable": false,
       "error": "directory does not exist; will be created on first write"
     },
     "skills_dir": {
-      "path": "/root/.agentflow/skills",
+      "path": "/root/.yanshi/skills",
       "source": "default",
       "exists": false,
       "writable": false,
       "error": "directory does not exist; will be created on first write"
     },
     "plugins_dir": {
-      "path": "/root/.agentflow/plugins",
+      "path": "/root/.yanshi/plugins",
       "source": "default",
       "exists": false,
       "writable": false,

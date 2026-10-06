@@ -1,6 +1,6 @@
-# AgentFlow Expression Language
+# Yanshi Expression Language
 
-AgentFlow uses a small expression language for `run_if` and
+Yanshi uses a small expression language for `run_if` and
 `while.parameters.condition`. Expressions may be written directly or wrapped in
 template braces for compatibility:
 
@@ -57,7 +57,7 @@ strings, empty arrays, and empty objects are false; other values are true.
 
 ## Validation
 
-`agentflow workflow validate --strict` compiles every node `run_if` expression
+`yanshi workflow validate --strict` compiles every node `run_if` expression
 and every `while.parameters.condition`. Syntax errors include a column number:
 
 ```text

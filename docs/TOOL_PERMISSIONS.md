@@ -1,6 +1,6 @@
 # Tool Permission Model
 
-AgentFlow exposes a stable permission model through `ToolMetadata`.
+Yanshi exposes a stable permission model through `ToolMetadata`.
 Every `ToolDefinition` now includes:
 
 - `metadata.source`: `builtin`, `script`, `mcp`, or `workflow`
@@ -14,7 +14,7 @@ Every `ToolDefinition` now includes:
 - `process_exec`: execute local commands or scripts
 - `network`: make outbound network requests
 - `mcp`: connect to or invoke MCP servers
-- `workflow`: execute nested AgentFlow workflows
+- `workflow`: execute nested Yanshi workflows
 
 ## Defaults By Source
 
@@ -40,7 +40,7 @@ depends on inputs implement `Tool::idempotency(params)`:
 - shell and script tools: `non_idempotent`
 - MCP tools: `unknown` unless the description or schema declares a hint
 
-Agent runtime traces copy known idempotency into `_agentflow.side_effect_class`.
+Agent runtime traces copy known idempotency into `_yanshi.side_effect_class`.
 `AgentNode` uses that durable metadata during checkpoint resume: idempotent
 unresolved calls can be replayed, while non-idempotent or unknown unresolved
 calls require manual recovery.
@@ -77,15 +77,15 @@ cannot grant a child more authority than the merge allowed.
 
 | Platform | Backend                             | Crate symbol |
 |----------|-------------------------------------|--------------|
-| macOS    | `sandbox-exec` SBPL profile         | `agentflow_tools::sandbox::MacosSandboxExecBackend` |
-| Linux    | seccomp-bpf via `pre_exec`          | `agentflow_tools::sandbox::LinuxSeccompBackend` |
-| other    | no-op (rejects when enforcement is required) | `agentflow_tools::sandbox::NoopSandboxBackend` |
+| macOS    | `sandbox-exec` SBPL profile         | `yanshi_tools::sandbox::MacosSandboxExecBackend` |
+| Linux    | seccomp-bpf via `pre_exec`          | `yanshi_tools::sandbox::LinuxSeccompBackend` |
+| other    | no-op (rejects when enforcement is required) | `yanshi_tools::sandbox::NoopSandboxBackend` |
 
-`agentflow_tools::sandbox::default_backend()` selects the right backend at
+`yanshi_tools::sandbox::default_backend()` selects the right backend at
 runtime; callers that require real enforcement should check
 `SandboxBackend::is_enforcing()` before spawning.
 
-`agentflow doctor` reports the selected backend, whether it is enforcing,
+`yanshi doctor` reports the selected backend, whether it is enforcing,
 and any sandbox risk warnings. A non-enforcing backend is not silent: the
 doctor status becomes `warning` and the JSON output includes a sandbox
 warning explaining that subprocesses are protected only by in-process
@@ -127,11 +127,11 @@ so older trace consumers continue to deserialise.
 
 A `noop` backend is **not** silent: the event still records
 `{ "backend": "noop", "enforcement": "disabled" }` so misconfigured
-shell/script tools are visible in `agentflow trace replay`. This is what
+shell/script tools are visible in `yanshi trace replay`. This is what
 the P1.6 visibility rule enforces: a missing sandbox must always be a
 loud condition in traces, never a default omitted from the event stream.
 
-**Doctor output** — `agentflow doctor --output json` returns both the
+**Doctor output** — `yanshi doctor --output json` returns both the
 tri-state `enforcement` token and the legacy `enforcing` boolean:
 
 ```json
@@ -151,7 +151,7 @@ backend is available") so an operator reading the report can distinguish
 
 ## Sandbox Matrix Coverage
 
-The regression matrix in `agentflow-tools/tests/sandbox_matrix.rs` covers
+The regression matrix in `yanshi-tools/tests/sandbox_matrix.rs` covers
 the main escape classes that the in-process and OS layers are expected to
 handle:
 
@@ -302,7 +302,7 @@ Resolution rules:
   default) falls back to `security.os_sandbox`.
 * The field is honoured only for tools that actually spawn subprocesses
   (`shell` and `script`). Non-process tools (`file`, `http`) ignore it.
-* `agentflow skill inspect --explain-permissions` prints a per-tool
+* `yanshi skill inspect --explain-permissions` prints a per-tool
   resolution table under `Sandbox profile` so operators can confirm at
   a glance which tool ended up inheriting vs. opting in vs. opting out.
 
@@ -310,8 +310,8 @@ In Rust code (programmatic use):
 
 ```rust
 use std::sync::Arc;
-use agentflow_tools::SandboxPolicy;
-use agentflow_tools::builtin::ShellTool;
+use yanshi_tools::SandboxPolicy;
+use yanshi_tools::builtin::ShellTool;
 
 let policy = Arc::new(SandboxPolicy::permissive());
 let tool = ShellTool::new(policy).with_os_sandbox();
@@ -319,8 +319,8 @@ let tool = ShellTool::new(policy).with_os_sandbox();
 ```
 
 Tests can substitute a custom backend via `with_backend(...)`; this is how
-the integration tests in `agentflow-tools/tests/sandbox_macos.rs` and
-`agentflow-tools/tests/sandbox_linux.rs` exercise each path in isolation.
+the integration tests in `yanshi-tools/tests/sandbox_macos.rs` and
+`yanshi-tools/tests/sandbox_linux.rs` exercise each path in isolation.
 
 ### Failure modes
 
@@ -332,26 +332,26 @@ the integration tests in `agentflow-tools/tests/sandbox_macos.rs` and
 
 ## Plugin runtime: same backend, different bridge
 
-The subprocess plugin runtime in `agentflow-core::plugin` reuses the same
+The subprocess plugin runtime in `yanshi-core::plugin` reuses the same
 backends (`MacosSandboxExecBackend`, `LinuxSeccompBackend`,
 `NoopSandboxBackend`) through a thin adapter (`OsSandboxPluginPreparer`,
-in `agentflow-config/src/executor/plugin.rs`). The adapter translates a
+in `yanshi-config/src/executor/plugin.rs`). The adapter translates a
 plugin manifest's `[plugin.capabilities]` block into the same
 `Vec<Capability> + SandboxScope` pair that built-in tools use, then calls
 `SandboxBackend::wrap_command` on the spawn `Command`. See
 [`docs/PLUGIN_DESIGN.md` §6.5](PLUGIN_DESIGN.md#65-permission-model) for
-the full translation table and the `AGENTFLOW_PLUGIN_SANDBOX=1` opt-in
+the full translation table and the `YANSHI_PLUGIN_SANDBOX=1` opt-in
 flag. The capability merge layer (skill / policy / CLI) does **not**
 apply to plugin spawns — plugins are governed by their own manifest
 declarations, not by the host workflow's skill security.
 
 ## Plugin policy (P1.8)
 
-`agentflow-tools::PluginPolicy` is the second admission gate for plugins.
+`yanshi-tools::PluginPolicy` is the second admission gate for plugins.
 Where the sandbox layer above decides *how* a plugin runs once it's been
 spawned, the plugin policy decides *whether* the plugin is allowed to be
 installed at all under the active security profile. The CLI evaluates
-the policy at `agentflow plugin install` time and refuses to write any
+the policy at `yanshi plugin install` time and refuses to write any
 files when the decision is `Deny`.
 
 | Profile | Sandbox | Sandbox opt-in | Signature | Network |
@@ -372,7 +372,7 @@ Behavioral rules:
   if the manifest declares a `[plugin.signature]` block, the install
   command verifies a detached signature over the resolved entrypoint
   file's bytes against a public key loaded from `--keys-dir` (default
-  `~/.agentflow/marketplace-keys/`, shared with `agentflow marketplace
+  `~/.yanshi/marketplace-keys/`, shared with `yanshi marketplace
   install/verify`). A present-but-invalid signature is a hard install
   failure. No `[plugin.signature]` block ⇒ unsigned; `production`
   denies any unsigned install.
@@ -380,7 +380,7 @@ Behavioral rules:
   `*` or an empty string is treated as a wildcard / non-explicit
   grant — `production` rejects it.
 - Every decision is logged as `tracing::info!` on the
-  `agentflow.plugin.policy` target with the structured fields
+  `yanshi.plugin.policy` target with the structured fields
   `plugin`, `profile`, `allowed`, `sandbox_active`,
   `signature_checked`, and `network_policy`. Trace replay tools
   can grep for the target name; a typed `WorkflowEvent` variant
@@ -391,11 +391,11 @@ Behavioral rules:
 The install-time policy above gates *whether* a plugin is allowed onto
 disk. P5.4 extends the same per-profile defaults to *how* the plugin is
 spawned by the workflow runner. The decision lives in
-[`agentflow-config/src/executor/plugin.rs::select_preparer`](../agentflow-config/src/executor/plugin.rs)
+[`yanshi-config/src/executor/plugin.rs::select_preparer`](../yanshi-config/src/executor/plugin.rs)
 and is consulted lazily by `PluginWorkflowNode::ensure_loaded` before
 the host subprocess is started.
 
-| Profile | Default preparer | `AGENTFLOW_PLUGIN_SANDBOX=1` (force-on) | `AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN=1` (opt-out) |
+| Profile | Default preparer | `YANSHI_PLUGIN_SANDBOX=1` (force-on) | `YANSHI_ALLOW_UNSANDBOXED_PLUGIN=1` (opt-out) |
 | --- | --- | --- | --- |
 | `dev` | `NoopCommandPreparer` (no OS sandbox) | OS sandbox wrap | no-op (already unsandboxed) |
 | `local` (default) | `OsSandboxPluginPreparer` (OS sandbox wrap) | OS sandbox wrap | `NoopCommandPreparer` |
@@ -403,24 +403,24 @@ the host subprocess is started.
 
 Behavioral rules:
 
-- The active [`SecurityProfile`](../agentflow-tool/src/security_profile.rs)
-  is resolved from `AGENTFLOW_SECURITY_PROFILE` (defaults to `local`),
+- The active [`SecurityProfile`](../yanshi-tool/src/security_profile.rs)
+  is resolved from `YANSHI_SECURITY_PROFILE` (defaults to `local`),
   matching the install path.
-- `AGENTFLOW_PLUGIN_SANDBOX=1` is the legacy force-on flag. Under `dev`
+- `YANSHI_PLUGIN_SANDBOX=1` is the legacy force-on flag. Under `dev`
   it engages the OS bridge so authors can stress-test their manifest's
   capability declarations against the real backend. Under `local` /
   `production` the flag is informational because the policy already
   defaults to sandboxed.
-- `AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN=1` is the spawn-time mirror of
+- `YANSHI_ALLOW_UNSANDBOXED_PLUGIN=1` is the spawn-time mirror of
   the install-time `--allow-unsandboxed-plugin` flag. It is honored
   only when `PluginPolicy::for_profile(profile).allow_sandbox_disabled_opt_in`
   is `true` — i.e. `dev` and `local` honor it, `production` errors at
   spawn time with `OptOutRejected { profile: production }`.
-- If both `AGENTFLOW_PLUGIN_SANDBOX` and
-  `AGENTFLOW_ALLOW_UNSANDBOXED_PLUGIN` are set, the force-on flag wins
+- If both `YANSHI_PLUGIN_SANDBOX` and
+  `YANSHI_ALLOW_UNSANDBOXED_PLUGIN` are set, the force-on flag wins
   (the user explicitly asked for the bridge to engage).
 - A `production` spawn rejected by the policy surfaces through
-  `AgentFlowError::AsyncExecutionError` with the `OptOutRejected`
+  `YanshiError::AsyncExecutionError` with the `OptOutRejected`
   reason, so the workflow run fails fast before any child process
   starts.
 
@@ -428,5 +428,5 @@ The two policy gates (install + spawn) draw from the same
 `PluginPolicy::for_profile` defaults, so a plugin denied at install
 under `production` is also denied at spawn — the dual gate is defense
 in depth, not divergence. Unit tests in
-`agentflow-config/src/executor/plugin.rs::tests` cover the full
+`yanshi-config/src/executor/plugin.rs::tests` cover the full
 5-row × 4-flag-combo matrix.

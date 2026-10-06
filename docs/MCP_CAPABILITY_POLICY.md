@@ -1,10 +1,10 @@
 # MCP Capability & SkillSecurity Merge Policy
 
 Status: stable as of `P1.9`.
-Crate: `agentflow-skills`. Module: `agentflow_skills::policy`.
-Entry point: [`resolve_tool_policy`](../agentflow-skills/src/policy.rs).
+Crate: `yanshi-skills`. Module: `yanshi_skills::policy`.
+Entry point: [`resolve_tool_policy`](../yanshi-skills/src/policy.rs).
 
-AgentFlow tools can come from four different sources, and each source
+Yanshi tools can come from four different sources, and each source
 has its own opinion about whether a given tool should be admitted into
 the running agent's `ToolRegistry`. This document is the v1
 contract for how those opinions are merged into a single decision
@@ -28,7 +28,7 @@ per tool.
    server's name is in the skill's `mcp_server_allowlist` (or the
    allowlist is empty, which means "trust every declared server").
 4. **`ToolPolicy` default** — the top-level
-   `agentflow_tools::ToolPolicy` configured by the platform. This is
+   `yanshi_tools::ToolPolicy` configured by the platform. This is
    the catch-all that says "permit / deny everything else"; tools
    that never reach this layer never get a chance to bypass it.
 
@@ -53,7 +53,7 @@ unmatched tool is treated as denied rather than silently allowed.
 ## `resolve_tool_policy`
 
 ```rust
-use agentflow_skills::{
+use yanshi_skills::{
   AdmissionSource, PolicyResolutionInput, ResolvedToolPolicy, resolve_tool_policy,
 };
 
@@ -139,11 +139,11 @@ fallback_policy: None
 
 ## CLI surface
 
-The CLI (`agentflow skill inspect --explain-permissions`) is the
+The CLI (`yanshi skill inspect --explain-permissions`) is the
 human-facing view of the resolved policy. The `--allow-tool` and
 `--deny-tool` flags are runtime overrides accepted by the same
-commands that load a skill (most prominently `agentflow skill run` /
-`agentflow harness run --skill`). The merge is identical between CLI
+commands that load a skill (most prominently `yanshi skill run` /
+`yanshi harness run --skill`). The merge is identical between CLI
 mode and SDK callers because they share the same
 [`resolve_tool_policy`] entry point.
 

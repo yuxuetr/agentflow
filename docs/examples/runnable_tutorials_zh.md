@@ -1,4 +1,4 @@
-# AgentFlow 可运行教程
+# Yanshi 可运行教程
 
 本教程覆盖当前五条核心路径:
 
@@ -17,26 +17,26 @@ cargo --version
 python3 --version
 ```
 
-`Skill + MCP` 示例会启动 `agentflow-skills/examples/skills/mcp-basic/server.py`，因此需要本机有 `python3`。
+`Skill + MCP` 示例会启动 `yanshi-skills/examples/skills/mcp-basic/server.py`，因此需要本机有 `python3`。
 
-如果你的 Cargo target 目录不在仓库内，或者当前环境不能写默认 `~/.agentflow`，用下面的前缀运行示例:
+如果你的 Cargo target 目录不在仓库内，或者当前环境不能写默认 `~/.yanshi`，用下面的前缀运行示例:
 
 ```bash
-mkdir -p /tmp/agentflow-home
+mkdir -p /tmp/yanshi-home
 ```
 
-后续命令可以直接复制；它们显式使用 `/tmp/agentflow-target`，避免写入仓库外的默认 target 目录。
+后续命令可以直接复制；它们显式使用 `/tmp/yanshi-target`，避免写入仓库外的默认 target 目录。
 
 ## 1. 固定 DAG 工作流
 
 运行:
 
 ```bash
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-core --example fixed_dag_workflow --target-dir /tmp/agentflow-target
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-core --example fixed_dag_workflow --target-dir /tmp/yanshi-target
 ```
 
-这个示例位于 `agentflow-core/examples/fixed_dag_workflow.rs`。它构造四个确定性节点:
+这个示例位于 `yanshi-core/examples/fixed_dag_workflow.rs`。它构造四个确定性节点:
 
 ```text
 validate_order
@@ -61,17 +61,17 @@ total_cents
 运行:
 
 ```bash
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-agents --example agent_native_react --target-dir /tmp/agentflow-target
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-agents --example agent_native_react --target-dir /tmp/yanshi-target
 ```
 
-这个示例位于 `agentflow-agents/examples/agent_native_react.rs`。它不会创建 DAG，而是直接运行:
+这个示例位于 `yanshi-agents/examples/agent_native_react.rs`。它不会创建 DAG，而是直接运行:
 
 ```text
 AgentRuntime -> ReActAgent -> ToolRegistry -> echo tool
 ```
 
-示例通过 `AGENTFLOW_MOCK_RESPONSES` 注入两轮 mock 模型输出:
+示例通过 `YANSHI_MOCK_RESPONSES` 注入两轮 mock 模型输出:
 
 1. 第一轮选择调用 `echo` 工具。
 2. 第二轮根据工具结果给出最终答案。
@@ -92,23 +92,23 @@ final answer: echo: agent-native
 先检查本地 Skill registry/index:
 
 ```bash
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill index validate agentflow-skills/examples/skills.index.toml
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill index list agentflow-skills/examples/skills.index.toml
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill index resolve agentflow-skills/examples/skills.index.toml mcp-demo
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill index validate yanshi-skills/examples/skills.index.toml
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill index list yanshi-skills/examples/skills.index.toml
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill index resolve yanshi-skills/examples/skills.index.toml mcp-demo
 ```
 
-`agentflow-skills/examples/skills.index.toml` 是本地共享目录示例，`mcp-demo` alias 会解析到 `agentflow-skills/examples/skills/mcp-basic`。
+`yanshi-skills/examples/skills.index.toml` 是本地共享目录示例，`mcp-demo` alias 会解析到 `yanshi-skills/examples/skills/mcp-basic`。
 
 也可以先安装到本地 skills 目录再验证:
 
 ```bash
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill install agentflow-skills/examples/skills.index.toml mcp-demo --dir /tmp/agentflow-skills
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill validate /tmp/agentflow-skills/mcp-basic
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill install yanshi-skills/examples/skills.index.toml mcp-demo --dir /tmp/yanshi-skills
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill validate /tmp/yanshi-skills/mcp-basic
 ```
 
 `skill install` 会复制 index 中解析到的本地 Skill 目录；目标目录已存在时会拒绝覆盖，除非显式传入 `--force`。
@@ -116,10 +116,10 @@ HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
 先验证 Skill manifest 和 MCP 工具发现:
 
 ```bash
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill validate agentflow-skills/examples/skills/mcp-basic
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill list-tools agentflow-skills/examples/skills/mcp-basic
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill validate yanshi-skills/examples/skills/mcp-basic
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill list-tools yanshi-skills/examples/skills/mcp-basic
 ```
 
 预期工具包括:
@@ -132,11 +132,11 @@ mcp_local_demo_status
 然后运行无 LLM 的直接调用示例:
 
 ```bash
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-skills --example skill_calls_mcp_tool --target-dir /tmp/agentflow-target
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-skills --example skill_calls_mcp_tool --target-dir /tmp/yanshi-target
 ```
 
-这个示例位于 `agentflow-skills/examples/skill_calls_mcp_tool.rs`，执行链路是:
+这个示例位于 `yanshi-skills/examples/skill_calls_mcp_tool.rs`，执行链路是:
 
 ```text
 SKILL.md
@@ -158,8 +158,8 @@ Is error: false
 如果要通过 CLI 跑完整 agent loop，可以在配置好模型后执行:
 
 ```bash
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill run agentflow-skills/examples/skills/mcp-basic \
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill run yanshi-skills/examples/skills/mcp-basic \
   --message "echo hello through MCP" \
   --trace
 ```
@@ -173,11 +173,11 @@ HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
 运行:
 
 ```bash
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-agents --example hybrid_workflow_agent --target-dir /tmp/agentflow-target
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-agents --example hybrid_workflow_agent --target-dir /tmp/yanshi-target
 ```
 
-这个示例位于 `agentflow-agents/examples/hybrid_workflow_agent.rs`。父工作流只有一个 `AgentNode`，但 agent 内部会调用一个 `WorkflowTool`:
+这个示例位于 `yanshi-agents/examples/hybrid_workflow_agent.rs`。父工作流只有一个 `AgentNode`，但 agent 内部会调用一个 `WorkflowTool`:
 
 ```text
 Parent Flow
@@ -231,35 +231,35 @@ let workflow_tool = WorkflowTool::new(name, description, flow)
 从仓库根目录运行:
 
 ```bash
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-core --example fixed_dag_workflow --target-dir /tmp/agentflow-target
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-agents --example agent_native_react --target-dir /tmp/agentflow-target
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill index validate agentflow-skills/examples/skills.index.toml
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill index list agentflow-skills/examples/skills.index.toml
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill index resolve agentflow-skills/examples/skills.index.toml mcp-demo
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill install agentflow-skills/examples/skills.index.toml mcp-demo --dir /tmp/agentflow-skills --force
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill validate /tmp/agentflow-skills/mcp-basic
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill validate agentflow-skills/examples/skills/mcp-basic
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-cli --target-dir /tmp/agentflow-target -- skill list-tools agentflow-skills/examples/skills/mcp-basic
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-skills --example skill_calls_mcp_tool --target-dir /tmp/agentflow-target
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo run -p agentflow-agents --example hybrid_workflow_agent --target-dir /tmp/agentflow-target
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-core --example fixed_dag_workflow --target-dir /tmp/yanshi-target
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-agents --example agent_native_react --target-dir /tmp/yanshi-target
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill index validate yanshi-skills/examples/skills.index.toml
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill index list yanshi-skills/examples/skills.index.toml
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill index resolve yanshi-skills/examples/skills.index.toml mcp-demo
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill install yanshi-skills/examples/skills.index.toml mcp-demo --dir /tmp/yanshi-skills --force
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill validate /tmp/yanshi-skills/mcp-basic
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill validate yanshi-skills/examples/skills/mcp-basic
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-cli --target-dir /tmp/yanshi-target -- skill list-tools yanshi-skills/examples/skills/mcp-basic
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-skills --example skill_calls_mcp_tool --target-dir /tmp/yanshi-target
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo run -p yanshi-agents --example hybrid_workflow_agent --target-dir /tmp/yanshi-target
 ```
 
 如果只想快速验证编译:
 
 ```bash
-HOME=/tmp/agentflow-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
-  cargo check --target-dir /tmp/agentflow-target -p agentflow-core -p agentflow-agents -p agentflow-skills -p agentflow-cli
+HOME=/tmp/yanshi-home CARGO_HOME=$HOME/.cargo RUSTUP_HOME=$HOME/.rustup \
+  cargo check --target-dir /tmp/yanshi-target -p yanshi-core -p yanshi-agents -p yanshi-skills -p yanshi-cli
 ```
 
 ## 7. 模式选择

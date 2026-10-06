@@ -58,11 +58,11 @@ and capture findings on the primitive before scaling fan-out in iter 2.
 ## Run
 
 ```bash
-# Requires MOONSHOT_API_KEY in ~/.agentflow/.env (P9.3 auto-loads it)
-agentflow workflow run examples/applications/doc-translator/workflow.yml
+# Requires MOONSHOT_API_KEY in ~/.yanshi/.env (P9.3 auto-loads it)
+yanshi workflow run examples/applications/doc-translator/workflow.yml
 
 # Validate without execution
-agentflow workflow validate examples/applications/doc-translator/workflow.yml
+yanshi workflow validate examples/applications/doc-translator/workflow.yml
 ```
 
 ## Iteration 1 observations (2026-05-18)
@@ -107,7 +107,7 @@ doc-translator/
 - **Code fence preservation**: confirmed across all 4 target
   languages — `` ```rust `` / `` ```bash `` blocks come through
   with content untouched. Inline `` `code` `` spans also survive
-  (`agentflow-core::Flow` stays verbatim in German output).
+  (`yanshi-core::Flow` stays verbatim in German output).
 - **One minor model over-reach**: Chinese translated a *comment
   inside* a code block (`/* your nodes here */` → `/* 你的节点在这里 */`).
   Defensible — code comments are sometimes intended to be
@@ -158,13 +158,13 @@ list.
   Semaphore` in `execute_map_node_parallel`. Re-running this
   workflow with `max_concurrent: 3` on N=4 inputs now yields 4/4
   successes (was 3/4 before). Two new unit tests in
-  `agentflow-core` assert the cap holds in practice and that
+  `yanshi-core` assert the cap holds in practice and that
   `Some(0)` is rejected rather than deadlocking.
 
 - **F-A6-2 — schema validator warns `input_list is not defined in
   the CLI schema for node type 'map'`**. ✅ **CLOSED 2026-05-18**:
   added `input_list` and `max_concurrent` to the map ParamSpec
-  list in `agentflow-cli/src/config/schema.rs`. `agentflow workflow
+  list in `yanshi-cli/src/config/schema.rs`. `yanshi workflow
   validate` now reports `✅ Schema validation passed` on this
   workflow.
 
@@ -212,7 +212,7 @@ list.
   `{% if not loop.first or not loop.parent.first %},{% endif %}`
   emits a comma right after the opening `[`, producing invalid
   JSON. **Workaround** (used in iter 3): an explicit `needs_comma`
-  flag manipulated via `set_global`. **Not an agentflow bug**, but
+  flag manipulated via `set_global`. **Not an yanshi bug**, but
   worth a `templating` convention note: prefer `set_global`
   accumulators over Tera loop introspection for any list-of-N
   rendering pattern. Surfaced during A6 iter 3.
@@ -224,12 +224,12 @@ list.
   `{{ item.field }}` and `{{ item.foo.bar }}` (any dotted path) in
   YAML `input_mapping` values; encoded with the sentinel
   source-node id `!item` so existing call sites are unaffected.
-  `agentflow_core::Flow::gather_inputs` walks the dotted path
+  `yanshi_core::Flow::gather_inputs` walks the dotted path
   against the seeded `item` initial input and inserts the
   resolved value (typically a string) directly into the
   downstream node's inputs. A6 iter 2 refactored from 6 nodes/
   sub-flow to 4 (dropped both render-path templates). 2 new
-  unit tests in `agentflow-core` cover happy path (flat + nested
+  unit tests in `yanshi-core` cover happy path (flat + nested
   lookup) and missing-path error reporting.
 
 - **F-A6-4 — prompt ambiguity: "translate to {target_lang}" with
@@ -239,7 +239,7 @@ list.
   for translation, validate that `source_lang != target_lang`
   before dispatching. Easy guard at the `build_prompt` template
   step (Tera `{% if item.lang != "en" %} ... {% endif %}` or
-  workflow-level filter). Not an agentflow bug.
+  workflow-level filter). Not an yanshi bug.
   ✅ **CLOSED 2026-05-18**: workflow.yml now uses
   `[ja, fr, de, zh]` (English source → 4 non-English targets) so
   the demo doesn't hit the trap itself. A comment in workflow.yml

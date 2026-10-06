@@ -1,6 +1,6 @@
 # Distributed Scheduling
 
-AgentFlow's distributed scheduler is being introduced behind a transport-neutral
+Yanshi's distributed scheduler is being introduced behind a transport-neutral
 protocol boundary. The first implementation milestone defines the control-plane
 contract and keeps the existing `/v1/runs` behavior unchanged.
 
@@ -13,7 +13,7 @@ The distributed control plane has four responsibilities:
 - Accept terminal task results and trace fragments from workers.
 - Track worker heartbeats so stale work can later be retried or marked failed.
 
-The protocol lives in `agentflow-server/src/scheduler/` as `WorkerProtocol`.
+The protocol lives in `yanshi-server/src/scheduler/` as `WorkerProtocol`.
 It is intentionally independent of HTTP routing and database persistence so the
 transport can evolve without changing run submission semantics.
 
@@ -27,13 +27,13 @@ Rationale:
 - HTTP/2 streaming fits task claim loops, heartbeat streams, and trace fragment
   upload without introducing a separate message broker.
 - It keeps local and Kubernetes deployments simple because workers only need to
-  reach the `agentflow-server` control plane.
+  reach the `yanshi-server` control plane.
 - NATS and Redis Streams remain viable adapters for larger installations, but
   they add external infrastructure that is not required for the first distributed
   milestone.
 
 The current code records this selection as
-`agentflow_server::SELECTED_TRANSPORT == WorkerTransport::Grpc`.
+`yanshi_server::SELECTED_TRANSPORT == WorkerTransport::Grpc`.
 
 ## Protocol Contract
 
@@ -77,9 +77,9 @@ submission, and heartbeat snapshots.
 It is not durable and must not be used as a multi-process scheduler. Its purpose
 is to keep protocol semantics covered without requiring a network service.
 
-The first tonic adapter is now available in `agentflow-server`:
+The first tonic adapter is now available in `yanshi-server`:
 
-- `proto/agentflow/scheduler/v1/worker.proto` defines `SubmitTask`,
+- `proto/yanshi/scheduler/v1/worker.proto` defines `SubmitTask`,
   `ClaimTask`, `ReportResult`, and `Heartbeat`.
 - `WorkerControlServer` exposes any `WorkerControl` implementation as a gRPC
   service.
@@ -89,7 +89,7 @@ The first tonic adapter is now available in `agentflow-server`:
 - `GrpcWorkerProtocol` implements the same `WorkerProtocol` trait from the
   client side and is used by worker processes.
 
-`agentflow-worker` is now a minimal worker process and library runtime. The
+`yanshi-worker` is now a minimal worker process and library runtime. The
 runtime is protocol-agnostic and performs one loop of:
 
 1. send heartbeat;
@@ -100,13 +100,13 @@ runtime is protocol-agnostic and performs one loop of:
 The binary supports local smoke tests against `memory://local`:
 
 ```bash
-cargo run -p agentflow-worker -- --once --worker-id worker-a
+cargo run -p yanshi-worker -- --once --worker-id worker-a
 ```
 
 It can also connect to a gRPC control-plane endpoint:
 
 ```bash
-cargo run -p agentflow-worker -- \
+cargo run -p yanshi-worker -- \
   --control-plane grpc://127.0.0.1:50051 \
   --worker-id worker-a
 ```
@@ -121,7 +121,7 @@ that sits above the protocol. It currently provides:
   trace fragments on the run snapshot. The control plane also produces
   `StitchedWorkerTraceEvent` entries with global sequence, worker id, task id,
   node id, attempt, local sequence, kind, payload, and stitch timestamp. The
-  same snapshot can be converted into `agentflow-tracing::OtelSpan` values with
+  same snapshot can be converted into `yanshi-tracing::OtelSpan` values with
   `WorkerControlPlane::stitched_otel_spans(...)`: one distributed-run root span
   plus one child span per task attempt, with worker-local fragments preserved as
   span events.
@@ -137,20 +137,20 @@ pool.
 
 The portable `NodeExecutionPayload` schema covers the following node types.
 The same dispatcher is used by the local `DistributedDagScheduler` smokes and
-the standalone `agentflow-worker` binary.
+the standalone `yanshi-worker` binary.
 
 | `node_type` | Dispatcher | Test coverage |
 |-------------|------------|---------------|
-| `template`  | `agentflow_nodes::nodes::template::TemplateNode` | `run_once_executes_distributed_template_payload` |
-| `file`      | `agentflow_nodes::nodes::file::FileNode` | `run_once_executes_distributed_file_payload` |
+| `template`  | `yanshi_nodes::nodes::template::TemplateNode` | `run_once_executes_distributed_template_payload` |
+| `file`      | `yanshi_nodes::nodes::file::FileNode` | `run_once_executes_distributed_file_payload` |
 | `mock`      | inline (`fail_until_attempt` / `fail` / `value`) | `distributed_scheduler_runs_100_mock_nodes_with_two_workers`, retry + heartbeat tests |
-| `llm`       | `agentflow_nodes::nodes::llm::LlmNode` (uses `agentflow-llm` registry + mock provider in tests) | `dispatch_llm_and_agent::llm_payload_returns_mock_response` |
-| `http`      | `agentflow_nodes::nodes::http::HttpNode` | `dispatch_simple::http_payload_routes_to_http_node_dispatcher` |
-| `mcp`       | `agentflow_nodes::nodes::mcp::MCPNode` (stdio server) | `dispatch_simple::mcp_payload_routes_to_mcp_node_dispatcher` |
-| `agent`     | minimal `agentflow_agents::react::ReActAgent` loop, empty tool registry | `dispatch_llm_and_agent::agent_payload_runs_react_loop_to_completion` |
+| `llm`       | `yanshi_nodes::nodes::llm::LlmNode` (uses `yanshi-llm` registry + mock provider in tests) | `dispatch_llm_and_agent::llm_payload_returns_mock_response` |
+| `http`      | `yanshi_nodes::nodes::http::HttpNode` | `dispatch_simple::http_payload_routes_to_http_node_dispatcher` |
+| `mcp`       | `yanshi_nodes::nodes::mcp::MCPNode` (stdio server) | `dispatch_simple::mcp_payload_routes_to_mcp_node_dispatcher` |
+| `agent`     | minimal `yanshi_agents::react::ReActAgent` loop, empty tool registry | `dispatch_llm_and_agent::agent_payload_runs_react_loop_to_completion` |
 
 Unknown `node_type` values produce a non-retryable
-`AgentFlowError::FlowDefinitionError` so a typo in the YAML never silently
+`YanshiError::FlowDefinitionError` so a typo in the YAML never silently
 hot-loops the worker pool. `dispatch_simple::unsupported_node_type_returns_structured_failure`
 locks this in.
 
@@ -185,7 +185,7 @@ streams can observe real distributed execution.
 
 The control plane gates every authenticated worker call through
 `AuthenticatedControlPlane`, which sits in front of `WorkerControlPlane`
-and consults a [`WorkerAdmissionPolicy`](../agentflow-server/src/scheduler/admission.rs).
+and consults a [`WorkerAdmissionPolicy`](../yanshi-server/src/scheduler/admission.rs).
 The policy decides three orthogonal questions before letting a worker
 heartbeat, claim a task, or report a result.
 
@@ -260,31 +260,31 @@ returns `AdmissionConfigError::MissingCredentialConfig` instead of building
 an control plane that would accept anonymous workers. This mirrors
 `auth::resolve_auth_config`'s fail-closed shape for the bearer-token
 gateway auth. `dev`/`local` profiles keep the historical open-by-default
-behavior. The check is exposed in `agentflow doctor`'s `security.defaults.
+behavior. The check is exposed in `yanshi doctor`'s `security.defaults.
 worker_admission.require_credential_config` field (JSON) / "worker
 admission credentials required" line (text). At the time this landed it
 only hardened the `AuthenticatedControlPlane` type's own default-safety
 — the server binary had no gRPC listener flag to actually construct and
 wire one up in production. That gap is now closed by T1.2 (below):
-`WorkerGrpcServeConfig`/`agentflow serve --worker-grpc` is exactly the
+`WorkerGrpcServeConfig`/`yanshi serve --worker-grpc` is exactly the
 production entry point this paragraph originally deferred.
 
 Test references:
 
-- `agentflow-server/src/scheduler/admission.rs#tests` — policy units
+- `yanshi-server/src/scheduler/admission.rs#tests` — policy units
   (allowlist, PSK match, rotation overlap, fleet cap, per-worker
   concurrency cap, JWT happy-path + every documented failure mode,
   PSK-takes-precedence-over-JWT misconfiguration).
-- `agentflow-server/src/scheduler/jwt.rs#tests` — JWT verifier
+- `yanshi-server/src/scheduler/jwt.rs#tests` — JWT verifier
   units (HS256 round-trip, signature mismatch, issuer / audience /
   subject mismatch with operator-actionable error fields, expired
   after leeway, just-expired within leeway, nbf in future, key
   rotation pool, multi-aud string-vs-array parsing).
-- `agentflow-server/tests/worker_admission.rs` — the three TODO-mandated
+- `yanshi-server/tests/worker_admission.rs` — the three TODO-mandated
   end-to-end scenarios: unknown worker rejected, admitted worker can
   poll/heartbeat/report, and token rotation does not drop in-flight
   tasks.
-- `agentflow-server/src/scheduler/admission.rs#tests` (T0.2) —
+- `yanshi-server/src/scheduler/admission.rs#tests` (T0.2) —
   `for_profile` fail-closed unit coverage: empty policy rejected under
   `Production`; each of `allowed_workers`/`pre_shared_keys`/`jwt` alone
   is sufficient to pass; an explicit empty `allowed_workers` set (admits
@@ -293,19 +293,19 @@ Test references:
 
 ## Transport Security (T1.2)
 
-Before T1.2, `agentflow-worker` accepted `--server-ca`/`--client-cert`/
+Before T1.2, `yanshi-worker` accepted `--server-ca`/`--client-cert`/
 `--client-key` on the CLI but never used them (plaintext gRPC only),
-and `agentflow-server` had no gRPC listener at all — the "one control
+and `yanshi-server` had no gRPC listener at all — the "one control
 plane, N workers" shape below could not run end-to-end. Both halves are
 now wired:
 
-**Worker (client) side** — `agentflow-worker`:
+**Worker (client) side** — `yanshi-worker`:
 
 | Flag | Env fallback | Effect |
 |------|--------------|--------|
-| `--server-ca PATH` | `AGENTFLOW_WORKER_SERVER_CA` | PEM CA used to validate the server's certificate. Alone, this is server-authenticated TLS. |
-| `--client-cert PATH` | `AGENTFLOW_WORKER_CLIENT_CERT` | PEM client certificate. Must be paired with `--client-key` (mTLS). |
-| `--client-key PATH` | `AGENTFLOW_WORKER_CLIENT_KEY` | PEM private key for `--client-cert`. |
+| `--server-ca PATH` | `YANSHI_WORKER_SERVER_CA` | PEM CA used to validate the server's certificate. Alone, this is server-authenticated TLS. |
+| `--client-cert PATH` | `YANSHI_WORKER_CLIENT_CERT` | PEM client certificate. Must be paired with `--client-key` (mTLS). |
+| `--client-key PATH` | `YANSHI_WORKER_CLIENT_KEY` | PEM private key for `--client-cert`. |
 
 Any of the three present switches `control-plane`'s `grpc://` shorthand
 from `http://` to `https://` (tonic rejects a `tls_config` paired with
@@ -316,18 +316,18 @@ error, not silently-ignored mTLS. `memory://local` never uses TLS; TLS
 flags set alongside it are a no-op warning, matching the existing
 `--admission-token` behavior for that mode.
 
-**Server (listener) side** — `agentflow-server` / `agentflow serve`:
+**Server (listener) side** — `yanshi-server` / `yanshi serve`:
 
 | Flag | Env var | Effect |
 |------|---------|--------|
-| `--worker-grpc HOST:PORT` | `AGENTFLOW_WORKER_GRPC_BIND` | Starts the worker gRPC control-plane listener as a background task. Unset (default): no gRPC socket is bound at all — this stays fully opt-in. |
-| `--worker-grpc-tls-cert PATH` | `AGENTFLOW_WORKER_GRPC_TLS_CERT` | PEM server certificate. Must be paired with `--worker-grpc-tls-key`. |
-| `--worker-grpc-tls-key PATH` | `AGENTFLOW_WORKER_GRPC_TLS_KEY` | PEM private key for the server certificate. |
-| `--worker-grpc-client-ca PATH` | `AGENTFLOW_WORKER_GRPC_CLIENT_CA` | PEM CA used to require and verify worker client certificates (mTLS) on top of the cert/key pair above. |
-| `--worker-ids a,b,c` | `AGENTFLOW_WORKER_IDS` | Comma-separated allowlist. Empty = any worker id. |
-| `--worker-psk TOKEN` | `AGENTFLOW_WORKER_PSK` | Shared pre-shared-key every listed id must present. |
+| `--worker-grpc HOST:PORT` | `YANSHI_WORKER_GRPC_BIND` | Starts the worker gRPC control-plane listener as a background task. Unset (default): no gRPC socket is bound at all — this stays fully opt-in. |
+| `--worker-grpc-tls-cert PATH` | `YANSHI_WORKER_GRPC_TLS_CERT` | PEM server certificate. Must be paired with `--worker-grpc-tls-key`. |
+| `--worker-grpc-tls-key PATH` | `YANSHI_WORKER_GRPC_TLS_KEY` | PEM private key for the server certificate. |
+| `--worker-grpc-client-ca PATH` | `YANSHI_WORKER_GRPC_CLIENT_CA` | PEM CA used to require and verify worker client certificates (mTLS) on top of the cert/key pair above. |
+| `--worker-ids a,b,c` | `YANSHI_WORKER_IDS` | Comma-separated allowlist. Empty = any worker id. |
+| `--worker-psk TOKEN` | `YANSHI_WORKER_PSK` | Shared pre-shared-key every listed id must present. |
 
-The listener is built from `agentflow_server::worker_grpc::
+The listener is built from `yanshi_server::worker_grpc::
 WorkerGrpcServeConfig` via `build_worker_control_plane`, which runs the
 resulting `WorkerAdmissionPolicy` through T0.2's `for_profile` fail-closed
 check — a `production`-profile gateway with no `--worker-ids`+`--worker-psk`
@@ -362,24 +362,24 @@ security boundary; a fail-closed credential check has no equivalent
 "this is fine, I meant to do that" case to protect. If that trade-off
 changes (e.g. a future requirement that `production` always terminates
 TLS), tighten `production_worker_grpc_lacks_tls` in
-`agentflow-server/src/worker_grpc.rs` into a hard error alongside the
+`yanshi-server/src/worker_grpc.rs` into a hard error alongside the
 admission check, and update this section and the deployment shape
 example below accordingly.
 
 `WorkerGrpcServeConfig`'s single-shared-PSK-per-listed-id model is
 deliberately the simple case; operators needing per-worker PSK rotation
 or JWT identity should construct a `WorkerAdmissionPolicy` directly and
-call `agentflow_server::worker_grpc::serve_worker_grpc` themselves
+call `yanshi_server::worker_grpc::serve_worker_grpc` themselves
 instead of going through the CLI-facing config struct.
 
 Test references:
 
-- `agentflow-server/src/worker_grpc.rs#tests` — plaintext claim/
+- `yanshi-server/src/worker_grpc.rs#tests` — plaintext claim/
   heartbeat/report round trip over the real gRPC wire; production
   profile rejects an unconfigured admission policy before any socket is
   touched.
-- `agentflow-worker/tests/grpc_tls_e2e.rs` — the full acceptance
-  scenario: a real, separately-compiled `agentflow-worker` process
+- `yanshi-worker/tests/grpc_tls_e2e.rs` — the full acceptance
+  scenario: a real, separately-compiled `yanshi-worker` process
   (not an in-process mock) connects over **mutual TLS** to a
   `serve_worker_grpc` listener (self-signed CA + server/client leaf
   certs generated in-process via `rcgen`) and completes a claim →
@@ -430,7 +430,7 @@ string` (tag 2) + `locality_run_id: string` (tag 3), and
 string` (tag 5). All four fields are wire-additive — pre-FU1
 workers that don't set them encode as empty values which the
 server decodes as "no hints / untagged task" (preserving the
-pre-FU1 FIFO behavior). The `agentflow-worker` runtime gained
+pre-FU1 FIFO behavior). The `yanshi-worker` runtime gained
 a `WorkerConfig::capabilities` knob that flows through every
 heartbeat + claim call.
 
@@ -445,12 +445,12 @@ Wire shape:
 
 Test references:
 
-- `agentflow-server/src/scheduler/mod.rs#tests` — capability
+- `yanshi-server/src/scheduler/mod.rs#tests` — capability
   filter, locality preference, FIFO fallback when no match,
   cached last-run locality, combined capability + locality, and
   the `WorkerControlPlane::claim_task_with_hints` end-to-end
   invariant that run snapshots still increment.
-- `agentflow-server/src/scheduler/grpc.rs#hint_proto_tests`
+- `yanshi-server/src/scheduler/grpc.rs#hint_proto_tests`
   (P10.16.2-FU1) — 7 hermetic round-trip tests covering
   `WorkerTask.node_type` (tagged + untagged), `ClaimHints`
   (both fields set + bare-default → no-hints), malformed
@@ -460,7 +460,7 @@ Test references:
 ## Worker Resource Limits (P5.6)
 
 Each worker enforces an in-process resource envelope around every
-dispatched node via [`WorkerResourceLimits`](../agentflow-worker/src/lib.rs):
+dispatched node via [`WorkerResourceLimits`](../yanshi-worker/src/lib.rs):
 
 | Knob | Default | Behavior |
 |------|---------|----------|
@@ -494,7 +494,7 @@ parameters:
   output_size_bytes: 8192  # appends an "x" * N blob to the output
 ```
 
-`agentflow-worker/tests/resource_limits.rs` exercises every guarantee
+`yanshi-worker/tests/resource_limits.rs` exercises every guarantee
 above: timeout cut-off, mid-dispatch cancellation, output truncation
 with the matching trace event, and retry semantics through the
 distributed scheduler.
@@ -502,7 +502,7 @@ distributed scheduler.
 ## Failure Domains (P5.7)
 
 Six distributed failure scenarios are pinned down by integration
-tests in `agentflow-worker/tests/failure_domains.rs`:
+tests in `yanshi-worker/tests/failure_domains.rs`:
 
 | Scenario | Trigger | Recovery | Test |
 |----------|---------|----------|------|
@@ -526,16 +526,16 @@ milestones plus the T1.2 mTLS end-to-end test (above) both exercise the
 exact commands below:
 
 ```bash
-agentflow serve --bind 0.0.0.0:8080 \
+yanshi serve --bind 0.0.0.0:8080 \
   --worker-grpc 0.0.0.0:50051 \
   --worker-grpc-tls-cert server.pem --worker-grpc-tls-key server-key.pem \
   --worker-grpc-client-ca ca.pem \
   --worker-ids worker-a,worker-b --worker-psk "$WORKER_PSK"
 
-agentflow-worker --control-plane grpc://agentflow-server:50051 --worker-id worker-a \
+yanshi-worker --control-plane grpc://yanshi-server:50051 --worker-id worker-a \
   --admission-token "$WORKER_PSK" \
   --server-ca ca.pem --client-cert worker-a.pem --client-key worker-a-key.pem
-agentflow-worker --control-plane grpc://agentflow-server:50051 --worker-id worker-b \
+yanshi-worker --control-plane grpc://yanshi-server:50051 --worker-id worker-b \
   --admission-token "$WORKER_PSK" \
   --server-ca ca.pem --client-cert worker-b.pem --client-key worker-b-key.pem
 ```

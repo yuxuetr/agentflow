@@ -1,0 +1,54 @@
+[package]
+name = "yanshi-tracing"
+version = "0.1.0"
+description = "Workflow execution tracing and logging for Yanshi"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+# Core dependencies
+yanshi-core = { path = "../yanshi-core", version = "0.2" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+async-trait = "0.1"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+futures = "0.3"
+tracing = "0.1"
+rand = "0.8"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# W4.4: first-party OTLP/HTTP span exporter (optional — operators can still
+# bring their own `OtelSpanSink` without pulling these in). `default-features
+# = false` on `opentelemetry-otlp` to skip its bundled metrics/logs/gRPC/
+# blocking-client machinery; only trace export over HTTP+JSON is needed here.
+opentelemetry = { version = "0.32", optional = true }
+opentelemetry_sdk = { version = "0.32", features = ["trace"], optional = true }
+opentelemetry-otlp = { version = "0.32", default-features = false, features = [
+  "trace",
+  "http-json",
+  "reqwest-client",
+], optional = true }
+
+[features]
+default = []
+otlp-http = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp"]
+
+[dev-dependencies]
+tempfile = "3.8"
+tokio-test = "0.4"
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+[[bench]]
+name = "event_write"
+harness = false

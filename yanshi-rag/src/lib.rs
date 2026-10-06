@@ -1,0 +1,118 @@
+//! # Yanshi RAG System
+//!
+//! Retrieval-Augmented Generation (RAG) system for Yanshi workflows.
+//!
+//! This crate provides comprehensive RAG capabilities including:
+//! - Vector store abstractions (Qdrant, Chroma, and more)
+//! - Embedding generation (OpenAI, local models)
+//! - Document processing and chunking
+//! - Semantic search and retrieval
+//! - Re-ranking and filtering
+//!
+//! ## Quick Start
+//!
+//! ```rust,no_run
+//! use yanshi_rag::{
+//!     vectorstore::{VectorStore, QdrantStore},
+//!     embeddings::{EmbeddingProvider, OpenAIEmbedding},
+//!     types::{Document, CollectionConfig, DistanceMetric},
+//! };
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! // 1. Connect to vector store
+//! let store = QdrantStore::new("http://localhost:6334").await?;
+//!
+//! // 2. Create collection
+//! store.create_collection("docs", CollectionConfig {
+//!     dimension: 1536,
+//!     distance: DistanceMetric::Cosine,
+//!     index_config: None,
+//! }).await?;
+//!
+//! // 3. Index documents
+//! let doc = Document::new("Yanshi is a workflow orchestration platform")
+//!     .with_metadata("source".into(), "readme".into());
+//!
+//! store.add_documents("docs", vec![doc]).await?;
+//!
+//! // 4. Search
+//! let results = store.similarity_search("docs", "workflow platform", 5, None).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Features
+//!
+//! - `qdrant` - Qdrant vector database support (default)
+//! - `local-embeddings` - Local embedding models via ONNX
+//! - `pdf` - PDF document processing
+//! - `html` - HTML document processing
+
+// Public modules
+pub mod chunking;
+pub mod embeddings;
+pub mod error;
+pub mod eval;
+pub mod indexing;
+pub mod knowledge;
+pub mod postprocess;
+pub mod reranking;
+pub mod retrieval;
+pub mod rewrite;
+pub mod sources;
+pub mod tool;
+pub mod types;
+pub mod vectorstore;
+
+// Re-exports for convenience
+pub use error::{RAGError, Result};
+pub use knowledge::{Bm25KnowledgeBackend, VectorStoreKnowledgeBackend};
+pub use tool::RagSearchTool;
+pub use types::{
+  ChunkingConfig, ChunkingStrategy, CollectionConfig, Condition, DistanceMetric, Document,
+  EmbeddingConfig, Filter, IndexingStats, MetadataValue, SearchResult, TextChunk,
+};
+// The kernel knowledge contract is implemented here; re-export it so callers
+// can name the SPI types without a direct `yanshi-store-spi` dependency.
+pub use yanshi_store_spi::{KnowledgeBackend, KnowledgeChunk, KnowledgeError};
+
+/// Library version
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Check if a feature is enabled
+// R0.2: `--all-features` builds make clippy see every arm's `cfg!(...)`
+// resolve to the literal `true`, so it suggests collapsing this into
+// `matches!(feature, "qdrant" | "local-embeddings" | "pdf" | "html")`.
+// That rewrite is only correct under `--all-features` — with a partial
+// feature set (the normal case) it would report a feature as enabled
+// just because its name is recognized, regardless of whether the
+// corresponding `cfg` is actually active. Keep the per-arm `cfg!` checks.
+#[allow(
+  clippy::match_like_matches_macro,
+  reason = "cfg! per arm is not equivalent to matches! outside --all-features builds"
+)]
+pub fn has_feature(feature: &str) -> bool {
+  match feature {
+    "qdrant" => cfg!(feature = "qdrant"),
+    "local-embeddings" => cfg!(feature = "local-embeddings"),
+    "pdf" => cfg!(feature = "pdf"),
+    "html" => cfg!(feature = "html"),
+    _ => false,
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_version() {
+    assert!(!VERSION.is_empty());
+  }
+
+  #[test]
+  fn test_default_features() {
+    // qdrant should be enabled by default
+    assert!(has_feature("qdrant"));
+  }
+}

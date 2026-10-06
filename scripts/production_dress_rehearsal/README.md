@@ -3,7 +3,7 @@
 End-to-end reproduction of the 6-step
 [`docs/RELEASE_NOTES_v1.0.0-rc.1.md::Production Deployment Checklist`](../../docs/RELEASE_NOTES_v1.0.0-rc.1.md#production-deployment-checklist)
 inside a fresh `ubuntu:24.04` container. Captures the canonical
-`agentflow doctor --profile production` exit code (the explicit
+`yanshi doctor --profile production` exit code (the explicit
 deliverable from the TODO) plus the two server-side acceptance gates
 that don't require an external Postgres.
 
@@ -23,7 +23,7 @@ scripts/production_dress_rehearsal/run.sh
 
 `PROD_REHEARSAL_RUNTIME=docker` switches to Docker (default is
 Apple's `container` CLI). First run takes ~12-18 min (Rust toolchain
-+ both `agentflow` and `agentflow-server` binaries); cache hits bring
++ both `yanshi` and `yanshi-server` binaries); cache hits bring
 re-runs down to ~10 s.
 
 ## Files
@@ -41,14 +41,14 @@ re-runs down to ~10 s.
 
 | # | Step (from the checklist) | Outcome |
 |---|---------------------------|---------|
-| 1 | `AGENTFLOW_SECURITY_PROFILE=production` | **PASS** — env exported, doctor reports `security.profile = "production"`. |
-| 2 | Provision `AGENTFLOW_API_TOKEN` (≥ 32 chars CSPRNG) | **PASS** — 64-hex-char token from `openssl rand -hex 32`. |
-| 3 | Pre-provision 5 storage directories | **PASS** — `/var/lib/agentflow/{runs,traces,marketplace-cache,skills,plugins}` created via `install -d -m 0750`; all 5 reachable + writable. |
+| 1 | `YANSHI_SECURITY_PROFILE=production` | **PASS** — env exported, doctor reports `security.profile = "production"`. |
+| 2 | Provision `YANSHI_API_TOKEN` (≥ 32 chars CSPRNG) | **PASS** — 64-hex-char token from `openssl rand -hex 32`. |
+| 3 | Pre-provision 5 storage directories | **PASS** — `/var/lib/yanshi/{runs,traces,marketplace-cache,skills,plugins}` created via `install -d -m 0750`; all 5 reachable + writable. |
 | 4 | Wire `DATABASE_URL` | **PASS-NOTED** — env exported pointing at `db.invalid:5432`. The single-container rehearsal does not provision a Postgres sidecar; actual connectivity is validated host-side via docker compose (see "Host-side follow-ups" below). |
-| 5 | `agentflow doctor --profile production --backup-check --format json` | **PASS** — exit code 0, `status: "ok"`. This is the canonical deliverable of the TODO. |
+| 5 | `yanshi doctor --profile production --backup-check --format json` | **PASS** — exit code 0, `status: "ok"`. This is the canonical deliverable of the TODO. |
 | 6 | docker compose smoke (`docker compose up -d`, hit `/health/{live,ready}`, open `/ui`) | **SKIP** — requires docker-in-docker; out of scope for the single-container rehearsal. |
 | AG1 | doctor exits 0 | **PASS** (same evidence as step 5). |
-| AG2 | `agentflow serve --check --security-profile production` | **SKIP-NEEDS-POSTGRES** — the check runs the config-resolution stage cleanly but then attempts a real DB connection. With `db.invalid` the connection fails. **Note**: this contradicts the source-code comment in `agentflow-cli/src/commands/serve.rs` ("non-binding readiness diagnostic which does not require Postgres"); the implementation has drifted. Filed for follow-up. |
+| AG2 | `yanshi serve --check --security-profile production` | **SKIP-NEEDS-POSTGRES** — the check runs the config-resolution stage cleanly but then attempts a real DB connection. With `db.invalid` the connection fails. **Note**: this contradicts the source-code comment in `yanshi-cli/src/commands/serve.rs` ("non-binding readiness diagnostic which does not require Postgres"); the implementation has drifted. Filed for follow-up. |
 | AG3 | `/health/ready` returns 200 | **SKIP** — requires running server + Postgres; host-side. |
 | AG4 | Authenticated `POST /v1/runs` completes | **SKIP** — requires running server + Postgres; host-side. |
 
@@ -64,9 +64,9 @@ use the reference `docker-compose.yml` at the repo root:
 
 ```sh
 # 1. Generate a token + write the .env block
-export AGENTFLOW_API_TOKEN="$(openssl rand -hex 32)"
-export AGENTFLOW_SECURITY_PROFILE=production
-# (edit docker-compose.yml to source AGENTFLOW_API_TOKEN from the host env,
+export YANSHI_API_TOKEN="$(openssl rand -hex 32)"
+export YANSHI_SECURITY_PROFILE=production
+# (edit docker-compose.yml to source YANSHI_API_TOKEN from the host env,
 #  or use --env-file with a 0600 .env file outside the repo)
 
 # 2. Bring the stack up
@@ -80,7 +80,7 @@ open       http://localhost:3000/ui              # SPA shell renders
 
 # 4. AG4: authenticated run submission
 curl -fsS -X POST http://localhost:3000/v1/runs \
-  -H "Authorization: Bearer ${AGENTFLOW_API_TOKEN}" \
+  -H "Authorization: Bearer ${YANSHI_API_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"workflow":"name: noop\nnodes: []\n"}'
 ```
@@ -107,7 +107,7 @@ documentation + diff target, not a strict oracle. The driver's
 
 * Before cutting a release (paired with the doctor smoke).
 * After PRs that touch `doctor`, `serve --check`, or the
-  `AGENTFLOW_SECURITY_PROFILE=production` enforcement code path.
+  `YANSHI_SECURITY_PROFILE=production` enforcement code path.
 * After bumping the workspace's Rust toolchain pin.
 
 Like the doctor smoke, this is **not** wired into `quality.yml` —

@@ -1,8 +1,8 @@
-# AgentFlow Operator Dashboards
+# Yanshi Operator Dashboards
 
 Status: **dashboard JSON checked in (P10.14.2); metric emission tracked under P10.14.2-FU1**
 
-Checked-in Grafana dashboards for operating an `agentflow-server`
+Checked-in Grafana dashboards for operating an `yanshi-server`
 deployment. Import any of the JSON files in `grafana/` directly into
 Grafana 8+ (the dashboards are `schemaVersion: 38`).
 
@@ -10,7 +10,7 @@ Grafana 8+ (the dashboards are `schemaVersion: 38`).
 
 | File | Purpose |
 |------|---------|
-| `grafana/agentflow-overview.json` | Operator overview: workflow runs, harness sessions, worker fleet, retention sweep, memory + state size. 9 panels across 4 rows. |
+| `grafana/yanshi-overview.json` | Operator overview: workflow runs, harness sessions, worker fleet, retention sweep, memory + state size. 9 panels across 4 rows. |
 
 ## Importing
 
@@ -24,38 +24,38 @@ curl -X POST \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $GRAFANA_API_TOKEN" \
   "$GRAFANA_URL/api/dashboards/db" \
-  -d "$(jq '{dashboard: ., overwrite: true, folderUid: ""}' grafana/agentflow-overview.json)"
+  -d "$(jq '{dashboard: ., overwrite: true, folderUid: ""}' grafana/yanshi-overview.json)"
 ```
 
 ## Metric contract
 
 The dashboards expect the following Prometheus metric names from
-`agentflow-server`'s `/metrics` endpoint. The contract is documented
+`yanshi-server`'s `/metrics` endpoint. The contract is documented
 in [`docs/KUBERNETES_DEPLOYMENT.md`](../docs/KUBERNETES_DEPLOYMENT.md)
 §"Grafana Dashboard"; this file is the runtime artifact.
 
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
-| `agentflow_health_status` | gauge | `component` | 1 = up, 0 = down. Status panel. |
-| `agentflow_workflow_runs_active` | gauge | — | Queued + running runs, summed across all tenants (V3.4: unlabeled — `/metrics` is unauthenticated, a `tenant` label would leak tenant IDs). |
-| `agentflow_workflow_completed_total` | counter | `status` | Terminal-status throughput. `status ∈ {succeeded, failed, cancelled}`. |
-| `agentflow_workflow_duration_seconds` | histogram | — | Full-run wall clock. Drives p50/p95/p99 panel. |
-| `agentflow_nodes_failed_total` | counter | `node_type` | Per-node-type failure rate; the canonical "what broke" signal. |
-| `agentflow_workers_admitted` | gauge | — | Currently-admitted worker count (per `WorkerAdmissionPolicy`). |
-| `agentflow_worker_tasks_inflight` | gauge | `worker_id` | Per-worker in-flight task count. |
-| `agentflow_memory_usage_bytes` | gauge | — | Server process resident memory. |
-| `agentflow_state_size_bytes` | gauge | — | Total `FlowValue` state size, summed across active runs (V3.4: unlabeled, same rationale as `agentflow_workflow_runs_active`). |
-| `agentflow_cleanup_runs_deleted_total` | counter | — | Retention sweep — `runs` rows reaped. |
-| `agentflow_cleanup_events_deleted_total` | counter | — | Retention sweep — `events` rows reaped. |
-| `agentflow_cleanup_artifacts_deleted_total` | counter | — | Retention sweep — `artifacts` rows reaped. |
-| `agentflow_harness_sessions_active` | gauge | `status` | Harness Mode sessions, broken out by `status ∈ {running, paused, completed, ...}`. |
-| `agentflow_harness_approvals_pending` | gauge | — | Pending approval requests. Anything > 0 means an operator action is waiting. |
+| `yanshi_health_status` | gauge | `component` | 1 = up, 0 = down. Status panel. |
+| `yanshi_workflow_runs_active` | gauge | — | Queued + running runs, summed across all tenants (V3.4: unlabeled — `/metrics` is unauthenticated, a `tenant` label would leak tenant IDs). |
+| `yanshi_workflow_completed_total` | counter | `status` | Terminal-status throughput. `status ∈ {succeeded, failed, cancelled}`. |
+| `yanshi_workflow_duration_seconds` | histogram | — | Full-run wall clock. Drives p50/p95/p99 panel. |
+| `yanshi_nodes_failed_total` | counter | `node_type` | Per-node-type failure rate; the canonical "what broke" signal. |
+| `yanshi_workers_admitted` | gauge | — | Currently-admitted worker count (per `WorkerAdmissionPolicy`). |
+| `yanshi_worker_tasks_inflight` | gauge | `worker_id` | Per-worker in-flight task count. |
+| `yanshi_memory_usage_bytes` | gauge | — | Server process resident memory. |
+| `yanshi_state_size_bytes` | gauge | — | Total `FlowValue` state size, summed across active runs (V3.4: unlabeled, same rationale as `yanshi_workflow_runs_active`). |
+| `yanshi_cleanup_runs_deleted_total` | counter | — | Retention sweep — `runs` rows reaped. |
+| `yanshi_cleanup_events_deleted_total` | counter | — | Retention sweep — `events` rows reaped. |
+| `yanshi_cleanup_artifacts_deleted_total` | counter | — | Retention sweep — `artifacts` rows reaped. |
+| `yanshi_harness_sessions_active` | gauge | `status` | Harness Mode sessions, broken out by `status ∈ {running, paused, completed, ...}`. |
+| `yanshi_harness_approvals_pending` | gauge | — | Pending approval requests. Anything > 0 means an operator action is waiting. |
 
 ## Current emission status
 
-**As of P10.14.2-FU1 (slice 1), `agentflow-server` exposes
+**As of P10.14.2-FU1 (slice 1), `yanshi-server` exposes
 `/metrics` as Prometheus text format.** The recorder is
-installed during `agentflow_server::serve::run` boot;
+installed during `yanshi_server::serve::run` boot;
 `GET /metrics` is unauthenticated (same convention as
 `/health`) so Prometheus scrapers don't need a bearer token.
 
@@ -63,24 +63,24 @@ Live series:
 
 | Metric | Status | Source |
 |--------|--------|--------|
-| `agentflow_workflow_completed_total{status}` | ✅ live | `WorkflowEventListener` (terminal events) |
-| `agentflow_workflow_duration_seconds` | ✅ live | `WorkflowEventListener` (terminal events) |
-| `agentflow_nodes_failed_total{node_type}` | ✅ live | `WorkflowEventListener` (NodeFailed events) |
-| `agentflow_cleanup_runs_deleted_total` | ✅ live | `cleanup_expired` (FU2) |
-| `agentflow_cleanup_events_deleted_total` | ✅ live | `cleanup_expired` (FU2) |
-| `agentflow_cleanup_artifacts_deleted_total` | ✅ live | `cleanup_expired` (FU2) |
-| `agentflow_workers_admitted` | ✅ live | `AuthenticatedControlPlane::admit` (FU3) |
-| `agentflow_worker_tasks_inflight` | ✅ live | `AuthenticatedControlPlane::claim_task` + `report_result` (FU3) |
-| `agentflow_harness_sessions_active{status}` | ✅ live | scrape-time `SELECT … FROM harness_sessions GROUP BY status` (FU4) |
-| `agentflow_harness_approvals_pending` | ✅ live | scrape-time `PendingApprovalRegistry::pending_count()` (FU4) |
-| `agentflow_health_status{component}` | ✅ live | scrape-time inspector — `system=1` always; `database=1\|0` from `SELECT 1` (FU5) |
-| `agentflow_memory_usage_bytes` | ✅ live | scrape-time `/proc/self/statm` on Linux; `0` fallback elsewhere (FU5) |
-| `agentflow_workflow_runs_active` | ✅ live | scrape-time `SELECT tenant_id, COUNT(*) … WHERE status IN ('queued','running')`, summed across rows before emission (FU5, unlabeled since V3.4) |
-| `agentflow_state_size_bytes` | ✅ live | `LiveStateRegistry` snapshot at scrape time; `Flow::StateSizeObserver` writes per-run entries after every node completes, executor deregisters on terminal transitions; summed across entries before emission (FU6, unlabeled since V3.4) |
+| `yanshi_workflow_completed_total{status}` | ✅ live | `WorkflowEventListener` (terminal events) |
+| `yanshi_workflow_duration_seconds` | ✅ live | `WorkflowEventListener` (terminal events) |
+| `yanshi_nodes_failed_total{node_type}` | ✅ live | `WorkflowEventListener` (NodeFailed events) |
+| `yanshi_cleanup_runs_deleted_total` | ✅ live | `cleanup_expired` (FU2) |
+| `yanshi_cleanup_events_deleted_total` | ✅ live | `cleanup_expired` (FU2) |
+| `yanshi_cleanup_artifacts_deleted_total` | ✅ live | `cleanup_expired` (FU2) |
+| `yanshi_workers_admitted` | ✅ live | `AuthenticatedControlPlane::admit` (FU3) |
+| `yanshi_worker_tasks_inflight` | ✅ live | `AuthenticatedControlPlane::claim_task` + `report_result` (FU3) |
+| `yanshi_harness_sessions_active{status}` | ✅ live | scrape-time `SELECT … FROM harness_sessions GROUP BY status` (FU4) |
+| `yanshi_harness_approvals_pending` | ✅ live | scrape-time `PendingApprovalRegistry::pending_count()` (FU4) |
+| `yanshi_health_status{component}` | ✅ live | scrape-time inspector — `system=1` always; `database=1\|0` from `SELECT 1` (FU5) |
+| `yanshi_memory_usage_bytes` | ✅ live | scrape-time `/proc/self/statm` on Linux; `0` fallback elsewhere (FU5) |
+| `yanshi_workflow_runs_active` | ✅ live | scrape-time `SELECT tenant_id, COUNT(*) … WHERE status IN ('queued','running')`, summed across rows before emission (FU5, unlabeled since V3.4) |
+| `yanshi_state_size_bytes` | ✅ live | `LiveStateRegistry` snapshot at scrape time; `Flow::StateSizeObserver` writes per-run entries after every node completes, executor deregisters on terminal transitions; summed across entries before emission (FU6, unlabeled since V3.4) |
 
 All 14 contracted series are live. The dashboard JSON is the
 operator-side source of truth; the metric names module
-(`agentflow-server::metrics::names`) pins the same strings so
+(`yanshi-server::metrics::names`) pins the same strings so
 the unit-test compat layer can assert exact parity.
 
 ## Conventions
@@ -93,7 +93,7 @@ the unit-test compat layer can assert exact parity.
 - Stat panels use background coloring (red < threshold, green ≥
   threshold) so the system-health row is glance-readable from a
   wall-mounted ops display.
-- The dashboard is tagged `agentflow`, `overview`, `operator` —
+- The dashboard is tagged `yanshi`, `overview`, `operator` —
   use those tags to find related dashboards in folders.
 
 ## Adding a new dashboard
@@ -104,7 +104,7 @@ the unit-test compat layer can assert exact parity.
    don't conflict with existing dashboards by id.
 3. Replace any hard-coded `datasource.uid` strings with
    `${DS_PROMETHEUS}` and add the corresponding variable to
-   `templating.list` (copy from `agentflow-overview.json`).
+   `templating.list` (copy from `yanshi-overview.json`).
 4. Add a row to the table at the top of this file.
 5. Open a PR; reviewer checks the JSON parses with `jq . file.json`.
 

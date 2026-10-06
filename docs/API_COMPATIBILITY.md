@@ -1,12 +1,12 @@
 # API Compatibility Policy
 
-This document defines how AgentFlow evolves public Rust APIs, manifests, wire
+This document defines how Yanshi evolves public Rust APIs, manifests, wire
 schemas, and persisted data after the v1 stability inventory in
 `docs/STABILITY.md`.
 
 ## Versioning Rules
 
-AgentFlow uses semantic versioning for published crates and binaries:
+Yanshi uses semantic versioning for published crates and binaries:
 
 - Patch: bug fixes, documentation, performance improvements, and compatible
   validation tightening for invalid inputs.
@@ -34,7 +34,7 @@ Stable traits must not change:
 - Existing serialized field names for public structs and enums.
 
 Closed enums, including `AgentStepKind` and `AgentEvent`, may receive new
-variants in AgentFlow releases. Consumers must handle unknown variants at wire
+variants in Yanshi releases. Consumers must handle unknown variants at wire
 boundaries by ignoring or preserving them when possible; Rust pattern matches in
 downstream code should include a wildcard arm when compiling against future
 versions matters.
@@ -56,10 +56,10 @@ Current manifest owners:
 
 | Manifest | Owner | Version key |
 | --- | --- | --- |
-| `SKILL.md` | `agentflow-skills` | none; compatibility by field set |
-| `skill.toml` | `agentflow-skills::SkillManifest` | `[skill].version` identifies the skill package, not the schema |
-| `plugin.toml` | `agentflow-core::plugin::PluginManifest` | `plugin.protocol`, currently `agentflow.plugin/1` |
-| Remote marketplace TOML | `agentflow-skills::RemoteMarketplaceManifest` | `schema_version` |
+| `SKILL.md` | `yanshi-skills` | none; compatibility by field set |
+| `skill.toml` | `yanshi-skills::SkillManifest` | `[skill].version` identifies the skill package, not the schema |
+| `plugin.toml` | `yanshi-core::plugin::PluginManifest` | `plugin.protocol`, currently `yanshi.plugin/1` |
+| Remote marketplace TOML | `yanshi-skills::RemoteMarketplaceManifest` | `schema_version` |
 
 ## Server API Compatibility
 

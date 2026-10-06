@@ -1,8 +1,8 @@
-//! `println-lint` (V1.7) — fail if agentflow-core/agentflow-nodes/agentflow-nodes-ai
+//! `println-lint` (V1.7) — fail if yanshi-core/yanshi-nodes/yanshi-nodes-ai
 //! contain println!/eprintln! used as logging outside test code; suppress a
 //! documented exception with `// allow-println-lint: <reason>`.
 //!
-//! `agentflow-core`/`agentflow-nodes`/`agentflow-nodes-ai` used to lean on
+//! `yanshi-core`/`yanshi-nodes`/`yanshi-nodes-ai` used to lean on
 //! `println!`/`eprintln!` as ad-hoc logging (some with emoji, some dumping
 //! rendered templates / prompts / tool params), unconditionally polluting
 //! stdout/stderr for every consumer including JSON-output CLI modes. V1.7
@@ -22,7 +22,7 @@ struct PrintlnLintHit {
 
 /// Crate `src/` trees this gate scans — exactly the three the V1.7
 /// evaluation finding named.
-const PRINTLN_LINT_CRATES: &[&str] = &["agentflow-core", "agentflow-nodes", "agentflow-nodes-ai"];
+const PRINTLN_LINT_CRATES: &[&str] = &["yanshi-core", "yanshi-nodes", "yanshi-nodes-ai"];
 
 /// Deliberate, documented exceptions (see the V1.7 commit that introduced
 /// this gate):
@@ -31,11 +31,11 @@ const PRINTLN_LINT_CRATES: &[&str] = &["agentflow-core", "agentflow-nodes", "age
 ///    that pollutes a host application's output.
 ///
 /// `shutdown.rs` used to be exempt too (its ctrl_c/SIGTERM install-failure
-/// logging had to work in consumers that didn't enable agentflow-core's
+/// logging had to work in consumers that didn't enable yanshi-core's
 /// `observability` feature) — W0.7 made `tracing` an unconditional
 /// dependency, so it now routes through `tracing::error!` like everything
 /// else and no longer needs the exemption.
-const PRINTLN_LINT_EXEMPT_FILES: &[&str] = &["agentflow-core/src/bin/echo_plugin.rs"];
+const PRINTLN_LINT_EXEMPT_FILES: &[&str] = &["yanshi-core/src/bin/echo_plugin.rs"];
 
 pub(crate) fn println_lint_at(
   workspace_root: &Path,
@@ -168,7 +168,7 @@ mod println_lint_tests {
     let workspace = dir.path();
     write_crate_src(
       workspace,
-      "agentflow-core",
+      "yanshi-core",
       "lib.rs",
       "fn a() { println!(\"hi\"); }\nfn b() { eprintln!(\"warn\"); }\n",
     );
@@ -185,7 +185,7 @@ mod println_lint_tests {
     let workspace = dir.path();
     write_crate_src(
       workspace,
-      "agentflow-nodes",
+      "yanshi-nodes",
       "lib.rs",
       "fn a() {}\n#[cfg(test)]\nmod tests {\n  fn t() { println!(\"skip me\"); }\n}\n",
     );
@@ -203,7 +203,7 @@ mod println_lint_tests {
     let workspace = dir.path();
     write_crate_src(
       workspace,
-      "agentflow-nodes-ai",
+      "yanshi-nodes-ai",
       "lib.rs",
       "/// ```\n/// println!(\"example\");\n/// ```\n//! println!(\"module doc\");\nfn a() {}\n",
     );
@@ -219,7 +219,7 @@ mod println_lint_tests {
     let workspace = dir.path();
     write_crate_src(
       workspace,
-      "agentflow-core",
+      "yanshi-core",
       "lib.rs",
       "fn a() { println!(\"bad\"); }\n\
        fn b() { println!(\"benign\"); } // allow-println-lint: test fixture\n",
@@ -243,7 +243,7 @@ mod println_lint_tests {
     let workspace = dir.path();
     write_crate_src(
       workspace,
-      "agentflow-core",
+      "yanshi-core",
       "bin/echo_plugin.rs",
       "fn a() { eprintln!(\"standalone reference-plugin binary output\"); }\n",
     );
@@ -259,7 +259,7 @@ mod println_lint_tests {
     let workspace = dir.path();
     write_crate_src(
       workspace,
-      "agentflow-cli",
+      "yanshi-cli",
       "lib.rs",
       "fn a() { println!(\"CLI output is fine here\"); }\n",
     );

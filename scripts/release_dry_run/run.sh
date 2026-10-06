@@ -3,11 +3,11 @@
 #
 # Walks the same two build legs that `.github/workflows/release.yml`
 # runs in CI:
-#   1. Build the `agentflow` CLI binary in release mode for the
+#   1. Build the `yanshi` CLI binary in release mode for the
 #      *host* triple. (CI builds 4 targets; we only do the host here
 #      — the goal is to catch feature-flag / dep-graph breakage, not
 #      cross-compilation issues.)
-#   2. `docker buildx build` the multi-arch `agentflow-server` image
+#   2. `docker buildx build` the multi-arch `yanshi-server` image
 #      WITHOUT pushing. Confirms the root `Dockerfile` still works on
 #      both `linux/amd64` and `linux/arm64`.
 #
@@ -35,17 +35,17 @@ echo "[dry-run] container runtime: ${RUNTIME}"
 
 # ── 1. CLI release binary on the host platform ──────────────────────
 echo
-echo "[dry-run] step 1: cargo build --release -p agentflow-cli --bin agentflow"
+echo "[dry-run] step 1: cargo build --release -p yanshi-cli --bin yanshi"
 cd "${REPO_ROOT}"
-cargo build --release -p agentflow-cli --bin agentflow
+cargo build --release -p yanshi-cli --bin yanshi
 # Use `cargo metadata` to discover the real `target_directory` —
 # `~/.cargo/config.toml` may redirect target out of the workspace
-# (the AgentFlow dev convention does, per `CLAUDE.md`'s Cargo
+# (the Yanshi dev convention does, per `CLAUDE.md`'s Cargo
 # Configuration section).
 TARGET_DIR="$(cargo metadata --format-version 1 --no-deps \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' \
   2>/dev/null || echo "${REPO_ROOT}/target")"
-BIN_PATH="${TARGET_DIR}/release/agentflow"
+BIN_PATH="${TARGET_DIR}/release/yanshi"
 if [[ ! -x "${BIN_PATH}" ]]; then
   echo "[dry-run] FAIL: expected ${BIN_PATH} after build" >&2
   exit 1
@@ -53,7 +53,7 @@ fi
 SIZE="$(du -h "${BIN_PATH}" | awk '{print $1}')"
 echo "[dry-run] ✓ ${BIN_PATH} (${SIZE})"
 
-# Smoke the binary with a no-side-effect command. `agentflow --version`
+# Smoke the binary with a no-side-effect command. `yanshi --version`
 # matches the canonical fresh-user invocation.
 "${BIN_PATH}" --version
 echo "[dry-run] ✓ --version exit ok"
@@ -77,7 +77,7 @@ case "${RUNTIME}" in
     docker buildx build \
       --platform linux/amd64,linux/arm64 \
       --file "${REPO_ROOT}/Dockerfile" \
-      --tag agentflow-server:dry-run \
+      --tag yanshi-server:dry-run \
       --output type=cacheonly \
       "${REPO_ROOT}"
     echo "[dry-run] ✓ multi-arch image build (cached only, no push, no load)"
@@ -85,7 +85,7 @@ case "${RUNTIME}" in
   container | *)
     echo "[dry-run] step 2: ${RUNTIME} build (single-arch local — multi-arch needs docker buildx)"
     "${RUNTIME}" build \
-      --tag agentflow-server:dry-run \
+      --tag yanshi-server:dry-run \
       --file "${REPO_ROOT}/Dockerfile" \
       "${REPO_ROOT}"
     echo "[dry-run] ✓ single-arch image build (${RUNTIME})"

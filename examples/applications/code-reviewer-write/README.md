@@ -10,7 +10,7 @@ events; model-loop and CLI gaps separately tracked).
 
 A2's original spec called for a code reviewer that BOTH reads PR diffs
 AND posts review comments back to GitHub — with the write side gated
-by the Harness Mode approval flow (`agentflow-harness`'s P-H.2
+by the Harness Mode approval flow (`yanshi-harness`'s P-H.2
 `HookedTool` + `ApprovalProvider`). The original A2
 [code-reviewer skill](../code-reviewer/) covered only the read side
 because the write side requires the approval gate.
@@ -21,13 +21,13 @@ disk via `file:write` — both tool calls intercepted by the approval
 gate so the operator can allow / deny / scope decisions before any
 mutation happens.
 
-## Why not `agentflow harness run --skill`?
+## Why not `yanshi harness run --skill`?
 
 Investigation while building this surfaced **F-A2-11**:
-`agentflow harness run` CLI today builds the agent via
+`yanshi harness run` CLI today builds the agent via
 `SkillBuilder::build` but does **NOT** call `wrap_registry(...)` to
 install the `HookedTool` + `ApprovalProvider` pipeline. Only
-`agentflow-server`'s `LiveHarnessExecutor` wires it. So if you want
+`yanshi-server`'s `LiveHarnessExecutor` wires it. So if you want
 to dogfood Harness approval from CLI today, you have to wire the
 pipeline yourself — which is what this binary does. The end-result
 is essentially the reduced form of what the CLI SHOULD eventually do
@@ -91,9 +91,9 @@ The `with_profile(HarnessProfile::Production)` is **load-bearing** —
 without it, the default `Local` profile silently auto-allows
 NonIdempotent calls and the approval gate never fires (F-A2-12).
 
-## What this validates in AgentFlow
+## What this validates in Yanshi
 
-- `agentflow-harness::wrap_registry` + `HookConfig` end-to-end:
+- `yanshi-harness::wrap_registry` + `HookConfig` end-to-end:
   every registered tool wrapped with hook + approval pipeline.
 - `HarnessProfile::Production` auto-escalation of `NonIdempotent`
   tools (shell, file:write) → `RequireApproval`.
@@ -107,13 +107,13 @@ NonIdempotent calls and the approval gate never fires (F-A2-12).
 - `ApprovalDecision` with `scope` (once / session / run) and
   `decided_by` carried through `approval_decided` events.
 - `StdoutEventSink` → JSONL on stdout, suitable for piping into
-  monitors / dashboards / `agentflow trace replay`.
+  monitors / dashboards / `yanshi trace replay`.
 
 ## External dependencies
 
 | Dep | How to satisfy |
 | --- | --- |
-| LLM API key | Default model `moonshot-v1-128k`; needs `MOONSHOT_API_KEY`. Auto-loaded from `~/.agentflow/.env` (P9.3). |
+| LLM API key | Default model `moonshot-v1-128k`; needs `MOONSHOT_API_KEY`. Auto-loaded from `~/.yanshi/.env` (P9.3). |
 | git | Required (binary calls `git show`). Any local repo with at least one commit. |
 
 ## Files
@@ -121,7 +121,7 @@ NonIdempotent calls and the approval gate never fires (F-A2-12).
 ```
 code-reviewer-write/
 ├── README.md     # ← this file
-├── Cargo.toml    # standalone Cargo project, path deps to agentflow-*
+├── Cargo.toml    # standalone Cargo project, path deps to yanshi-*
 └── src/main.rs   # CLI + registry wrap + ReActAgent
 ```
 
@@ -129,7 +129,7 @@ code-reviewer-write/
 
 ```bash
 cd examples/applications/code-reviewer-write
-# MOONSHOT_API_KEY auto-loaded from ~/.agentflow/.env
+# MOONSHOT_API_KEY auto-loaded from ~/.yanshi/.env
 
 # Auto-approve mode — CI smoke; both tool calls auto-allowed,
 # approval_* events still fire and are captured on stdout JSONL.
@@ -165,7 +165,7 @@ CLI flags:
 | --- | --- | --- |
 | `--commit <ref>` | (required) | git ref / hash, passed verbatim to `git show` |
 | `--ledger <path>` | `/tmp/pr-review-ledger.json` | output JSON path (must be under /tmp by sandbox policy) |
-| `--model <name>` | `moonshot-v1-128k` | any agentflow-llm-registered model |
+| `--model <name>` | `moonshot-v1-128k` | any yanshi-llm-registered model |
 | `--auto-approve` | off | bypass interactive approval (uses `AutoAllowApprovalProvider`) |
 | `--prefetch-diff` | off | run `git show` outside the agent, inline diff into the prompt, register only `FileTool` — isolates the file:write approval path from F-A2-13's shell-loop pathology |
 
@@ -255,7 +255,7 @@ it observes the deny and threads the reason into its final answer.
 See [`EXAMPLES_TODOs.md` § A2](../../../EXAMPLES_TODOs.md#a2--code-reviewer):
 
 - **F-A2-9 — Harness approval gate** ✅ CLOSED end-to-end via this binary.
-- **F-A2-11** — `agentflow harness run` CLI doesn't wire the
+- **F-A2-11** — `yanshi harness run` CLI doesn't wire the
   approval pipeline; manual wrap_registry needed today.
 - **F-A2-12** — `HarnessProfile::Local` (default) silently
   auto-allows; need `Production` (or explicit pre-hook) for the

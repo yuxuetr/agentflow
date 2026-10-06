@@ -2,11 +2,11 @@
 
 > Status: foundation shipped in v0.4.0 (P1 #11). Streaming, multimodal, and
 > live-LLM nightly CI all closed (see Closed follow-ups).
-> Crates: `agentflow-llm`. Test entries:
-> `agentflow-llm/tests/provider_consistency.rs` (offline, mocked) and
-> `agentflow-llm/tests/provider_consistency_live.rs` (opt-in, real APIs).
+> Crates: `yanshi-llm`. Test entries:
+> `yanshi-llm/tests/provider_consistency.rs` (offline, mocked) and
+> `yanshi-llm/tests/provider_consistency_live.rs` (opt-in, real APIs).
 
-AgentFlow's LLM abstraction targets seven providers/profiles. This document is the
+Yanshi's LLM abstraction targets seven providers/profiles. This document is the
 authoritative reference for what works on each, what doesn't, and how the
 behavior is verified.
 
@@ -15,7 +15,7 @@ behavior is verified.
 Every `LLMProvider` impl receives a `ProviderRequest` and returns a
 `ProviderResponse`. The wire fields are intentionally narrow so adapter
 behavior can stay consistent. **The field names below are exercised by
-`agentflow-llm/tests/provider_matrix_doc.rs` — adding or renaming a
+`yanshi-llm/tests/provider_matrix_doc.rs` — adding or renaming a
 field on `ProviderRequest` fails CI until this section is updated.**
 
 | Field | Type | Required | Description |
@@ -44,7 +44,7 @@ translate to their respective vocabularies.
 
 ## ModelCapabilities flags
 
-`ModelCapabilities` (in `agentflow-llm::model_types`) is the per-model
+`ModelCapabilities` (in `yanshi-llm::model_types`) is the per-model
 description loaded from the YAML registry. The flags below drive
 provider-side validation and ReAct fallback behavior:
 
@@ -63,15 +63,15 @@ provider-side validation and ReAct fallback behavior:
 
 ## Configuration source
 
-Provider definitions and model aliases are loaded with the shared AgentFlow
+Provider definitions and model aliases are loaded with the shared Yanshi
 configuration resolver:
 
-1. `AGENTFLOW_MODELS_CONFIG`
-2. `~/.agentflow/models.yml`
-3. `~/.agentflow/models.yaml`
+1. `YANSHI_MODELS_CONFIG`
+2. `~/.yanshi/models.yml`
+3. `~/.yanshi/models.yaml`
 4. bundled `default_models.yml`
 
-`~/.agentflow/.env` remains the default local API-key file. CLI diagnostics
+`~/.yanshi/.env` remains the default local API-key file. CLI diagnostics
 show the selected config path/source and redact credential values.
 
 ## Capability matrix
@@ -109,14 +109,14 @@ Status vocabulary: `supported`, `live_tested`, `mock_only`, `unsupported`,
 | Image generation | `live_tested` | `stepfun_live_image_generation_path` via `/images/generations` |
 | TTS | `live_tested` | `stepfun_live_tts_path` via `/audio/speech` |
 | ASR | `live_tested` | `stepfun_live_asr_path`; generates a tiny TTS fixture, then transcribes it |
-| Video generation | `unsupported` | No StepFun video API is implemented in `agentflow-llm` |
+| Video generation | `unsupported` | No StepFun video API is implemented in `yanshi-llm` |
 
 StepFun live tests use deterministic model selection. Environment overrides
-still win (`AGENTFLOW_LIVE_STEPFUN_TEXT_MODEL`,
-`AGENTFLOW_LIVE_STEPFUN_TOOLS_MODEL`, `AGENTFLOW_LIVE_STEPFUN_VISION_MODEL`,
-`AGENTFLOW_LIVE_STEPFUN_IMAGE_MODEL`, `AGENTFLOW_LIVE_STEPFUN_TTS_MODEL`,
-`AGENTFLOW_LIVE_STEPFUN_ASR_MODEL`); otherwise the harness picks from the
-loaded AgentFlow model config using a low-cost preference order before falling
+still win (`YANSHI_LIVE_STEPFUN_TEXT_MODEL`,
+`YANSHI_LIVE_STEPFUN_TOOLS_MODEL`, `YANSHI_LIVE_STEPFUN_VISION_MODEL`,
+`YANSHI_LIVE_STEPFUN_IMAGE_MODEL`, `YANSHI_LIVE_STEPFUN_TTS_MODEL`,
+`YANSHI_LIVE_STEPFUN_ASR_MODEL`); otherwise the harness picks from the
+loaded Yanshi model config using a low-cost preference order before falling
 back to built-in defaults.
 
 ### GLM live-test status
@@ -138,15 +138,15 @@ Status vocabulary: `supported`, `live_tested`, `mock_only`, `unsupported`,
 | OpenAI-compatible chat path | `live_tested` | `glm_live_openai_compatible_chat_path` |
 | Native tool calling / compatible fallback | `live_tested` | `glm_live_tool_calling_or_fallback_path`; OpenAI-compatible adapter normalizes non-empty `tool_calls` to `StopReason::ToolCalls` |
 | Vision understanding | `live_tested` | `glm_live_vision_path` using `glm-4.5v` and an HTTPS JPEG image URL |
-| Image generation | `unsupported` | BigModel exposes `/images/generations`, but AgentFlow has no GLM image-generation client/profile yet |
-| ASR | `unsupported` | BigModel exposes `/audio/transcriptions`, but AgentFlow has no GLM ASR client/profile yet |
-| TTS | `unsupported` | BigModel exposes `/audio/speech`, but AgentFlow has no GLM TTS client/profile yet |
-| Video generation | `unsupported` | BigModel exposes async `/videos/generations`, but AgentFlow has no GLM video client/profile yet |
+| Image generation | `unsupported` | BigModel exposes `/images/generations`, but Yanshi has no GLM image-generation client/profile yet |
+| ASR | `unsupported` | BigModel exposes `/audio/transcriptions`, but Yanshi has no GLM ASR client/profile yet |
+| TTS | `unsupported` | BigModel exposes `/audio/speech`, but Yanshi has no GLM TTS client/profile yet |
+| Video generation | `unsupported` | BigModel exposes async `/videos/generations`, but Yanshi has no GLM video client/profile yet |
 
 Environment overrides win for model selection:
-`AGENTFLOW_LIVE_GLM_TEXT_MODEL`, `AGENTFLOW_LIVE_GLM_TOOLS_MODEL`, and
-`AGENTFLOW_LIVE_GLM_VISION_MODEL`. Without overrides, the harness first checks
-the loaded AgentFlow model config and then falls back to low-cost defaults:
+`YANSHI_LIVE_GLM_TEXT_MODEL`, `YANSHI_LIVE_GLM_TOOLS_MODEL`, and
+`YANSHI_LIVE_GLM_VISION_MODEL`. Without overrides, the harness first checks
+the loaded Yanshi model config and then falls back to low-cost defaults:
 `glm-4.5-flash` for text/tools and `glm-4.5v` for vision.
 
 ## Model families & context windows
@@ -174,7 +174,7 @@ Status vocabulary:
 
 - `tested` — verified in unit + integration tests (and / or nightly live CI).
 - `best_effort` — provider supports the model and adapters wire it,
-  but no AgentFlow test asserts the exact wire shape.
+  but no Yanshi test asserts the exact wire shape.
 - `n/a` — Mock provider; not a real backend.
 
 ## Rate-limit handling
@@ -238,7 +238,7 @@ match err {
 }
 ```
 
-The `From<reqwest::Error>` impl in `agentflow-llm::error` does map 401 / 429 /
+The `From<reqwest::Error>` impl in `yanshi-llm::error` does map 401 / 429 /
 503 to `AuthenticationError` / `RateLimitExceeded` / `ServiceUnavailable`, but
 this only fires when the **transport itself** signals a status (e.g.
 `response.error_for_status()?`). All providers inspect `response.status()`
@@ -257,11 +257,11 @@ Each provider has its own unit test suite that pins down request body
 construction and response parsing against representative JSON fixtures:
 
 ```bash
-cargo test -p agentflow-llm --lib providers::openai     # 10 tests
-cargo test -p agentflow-llm --lib providers::anthropic  # 7 tests
-cargo test -p agentflow-llm --lib providers::google     # 8 tests
-cargo test -p agentflow-llm --lib providers::moonshot   # 5 tests
-cargo test -p agentflow-llm --lib providers::stepfun    # 8 tests
+cargo test -p yanshi-llm --lib providers::openai     # 10 tests
+cargo test -p yanshi-llm --lib providers::anthropic  # 7 tests
+cargo test -p yanshi-llm --lib providers::google     # 8 tests
+cargo test -p yanshi-llm --lib providers::moonshot   # 5 tests
+cargo test -p yanshi-llm --lib providers::stepfun    # 8 tests
 ```
 
 These tests don't make network calls — they construct `ProviderRequest` /
@@ -273,7 +273,7 @@ The integration suite drives the concrete HTTP providers through a hand-rolled
 tokio TCP listener and asserts a uniform contract:
 
 ```bash
-cargo test -p agentflow-llm --test provider_consistency  # 15 tests
+cargo test -p yanshi-llm --test provider_consistency  # 15 tests
 ```
 
 Coverage:
@@ -316,47 +316,47 @@ between model versions).
 Live tests are gated by:
 
 ```bash
-AGENTFLOW_LIVE_LLM_TESTS=1 \
+YANSHI_LIVE_LLM_TESTS=1 \
 OPENAI_API_KEY=sk-… \
 ANTHROPIC_API_KEY=sk-ant-… \
 GEMINI_API_KEY=… \
 MOONSHOT_API_KEY=… \
 STEPFUN_API_KEY=… \
 GLM_API_KEY=… \
-cargo test -p agentflow-llm --test provider_consistency_live
+cargo test -p yanshi-llm --test provider_consistency_live
 ```
 
 Additional live-test gates are reserved for modality-specific suites:
 
 ```bash
-AGENTFLOW_LIVE_MULTIMODAL_TESTS=1
-AGENTFLOW_LIVE_IMAGE_TESTS=1
-AGENTFLOW_LIVE_AUDIO_TESTS=1
-AGENTFLOW_LIVE_VIDEO_TESTS=1
+YANSHI_LIVE_MULTIMODAL_TESTS=1
+YANSHI_LIVE_IMAGE_TESTS=1
+YANSHI_LIVE_AUDIO_TESTS=1
+YANSHI_LIVE_VIDEO_TESTS=1
 ```
 
 StepFun modality smoke tests are enabled by those gates:
 
 ```bash
-AGENTFLOW_LIVE_LLM_TESTS=1 \
-AGENTFLOW_LIVE_MULTIMODAL_TESTS=1 \
-AGENTFLOW_LIVE_IMAGE_TESTS=1 \
-AGENTFLOW_LIVE_AUDIO_TESTS=1 \
-cargo test -p agentflow-llm --test provider_consistency_live stepfun_live
+YANSHI_LIVE_LLM_TESTS=1 \
+YANSHI_LIVE_MULTIMODAL_TESTS=1 \
+YANSHI_LIVE_IMAGE_TESTS=1 \
+YANSHI_LIVE_AUDIO_TESTS=1 \
+cargo test -p yanshi-llm --test provider_consistency_live stepfun_live
 ```
 
 GLM OpenAI-compatible smoke tests are enabled with:
 
 ```bash
-AGENTFLOW_LIVE_LLM_TESTS=1 \
-cargo test -p agentflow-llm --test provider_consistency_live glm_live
+YANSHI_LIVE_LLM_TESTS=1 \
+cargo test -p yanshi-llm --test provider_consistency_live glm_live
 
-AGENTFLOW_LIVE_MULTIMODAL_TESTS=1 \
-cargo test -p agentflow-llm --test provider_consistency_live glm_live_vision_path
+YANSHI_LIVE_MULTIMODAL_TESTS=1 \
+cargo test -p yanshi-llm --test provider_consistency_live glm_live_vision_path
 ```
 
 **Status**: live-test harness landed 2026-05-08. The default `cargo test`
-run is unaffected — without `AGENTFLOW_LIVE_LLM_TESTS` set, every test in
+run is unaffected — without `YANSHI_LIVE_LLM_TESTS` set, every test in
 `provider_consistency_live.rs` short-circuits before issuing a request and
 reports `ok` in milliseconds. With the gate set but a provider's API key
 env var missing, that single provider self-skips with a log line; the rest
@@ -364,19 +364,19 @@ still run.
 
 Behavior of the harness:
 
-1. Skips cleanly when `AGENTFLOW_LIVE_LLM_TESTS` is unset (test passes,
+1. Skips cleanly when `YANSHI_LIVE_LLM_TESTS` is unset (test passes,
    prints `[live] <provider>: skipped`).
-2. Calls `AgentFlow::init()` after the live gate is enabled, so
-   `~/.agentflow/.env`, `AGENTFLOW_MODELS_CONFIG`, `~/.agentflow/models.yml`,
-   and legacy `~/.agentflow/models.yaml` are loaded through the same resolver
+2. Calls `Yanshi::init()` after the live gate is enabled, so
+   `~/.yanshi/.env`, `YANSHI_MODELS_CONFIG`, `~/.yanshi/models.yml`,
+   and legacy `~/.yanshi/models.yaml` are loaded through the same resolver
    used by CLI and server code.
 3. Uses minimum-cost defaults per provider (`gpt-4o-mini`,
    `claude-3-5-haiku-20241022`, `gemini-1.5-flash`, `kimi-k2.6`,
    `step-1-8k`); each is overridable via
-   `AGENTFLOW_LIVE_<PROVIDER>_TEXT_MODEL`. The older
-   `AGENTFLOW_LIVE_<PROVIDER>_MODEL` form remains accepted for compatibility.
-   Examples: `AGENTFLOW_LIVE_STEPFUN_TEXT_MODEL`,
-   `AGENTFLOW_LIVE_GLM_TEXT_MODEL`.
+   `YANSHI_LIVE_<PROVIDER>_TEXT_MODEL`. The older
+   `YANSHI_LIVE_<PROVIDER>_MODEL` form remains accepted for compatibility.
+   Examples: `YANSHI_LIVE_STEPFUN_TEXT_MODEL`,
+   `YANSHI_LIVE_GLM_TEXT_MODEL`.
 4. One single-turn text request per provider with `max_tokens = 16` and
    `temperature = 0.0` for deterministic-as-possible cost.
 5. Runs nightly via `.github/workflows/llm-live.yml` (cron `30 9 * * *` UTC,
@@ -391,7 +391,7 @@ nightly CI with budget/rate-limit controls.
 
 ## Adding a new provider
 
-1. Implement `LLMProvider` in `agentflow-llm/src/providers/<name>.rs`.
+1. Implement `LLMProvider` in `yanshi-llm/src/providers/<name>.rs`.
 2. Provide both `new(...)` and `with_client(...)` constructors. The
    `with_client` constructor is mandatory for the consistency suite to be
    able to wire in a no-proxy test client.
@@ -500,7 +500,7 @@ nightly CI with budget/rate-limit controls.
     `build_multimodal_messages`), so an unsupported combination — e.g.
     video input against a non-Google model — fails at validation time with
     a clear `LLMError::InvalidModelConfig` naming the rejected modality,
-    per `agentflow-llm/tests/multimodal_input_validation.rs`.
+    per `yanshi-llm/tests/multimodal_input_validation.rs`.
   - Video and document remain unimplemented for every other provider by
     design: OpenAI's Chat Completions API has no video or document content
     block at all (its file/PDF support lives only in the separate
@@ -509,9 +509,9 @@ nightly CI with budget/rate-limit controls.
     supporting vendor is rejected by `validate_request`, not silently
     dropped or malformed.
 - **Live LLM nightly CI job** — landed 2026-05-08.
-  `agentflow-llm/tests/provider_consistency_live.rs` plus
+  `yanshi-llm/tests/provider_consistency_live.rs` plus
   `.github/workflows/llm-live.yml` (cron + `workflow_dispatch`). Tests
-  default to a clean skip; nightly CI sets `AGENTFLOW_LIVE_LLM_TESTS=1`
+  default to a clean skip; nightly CI sets `YANSHI_LIVE_LLM_TESTS=1`
   along with per-provider API keys from secrets. Each provider asserts the
   same contract as the offline suite: non-empty text, populated
   `TokenUsage`, `StopReason::Stop`.

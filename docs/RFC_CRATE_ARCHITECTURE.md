@@ -12,16 +12,16 @@
 
 ## TL;DR
 
-AgentFlow today supports four execution paradigms — static DAG workflows, native
+Yanshi today supports four execution paradigms — static DAG workflows, native
 agent loops, the harness governance shell, and (next) **dynamic workflows** (an
 agent that *generates* a `Flow` at runtime). They mostly coexist, but three
 seams keep them as semi-integrated parallel code paths instead of one coherent
 stack:
 
-1. `agentflow-harness` depends on the `agentflow-agents` **crate** (not a
+1. `yanshi-harness` depends on the `yanshi-agents` **crate** (not a
    contract), so the harness cannot govern anything but an agent loop.
 2. Reliability primitives (retry / timeout / cancellation) are implemented twice
-   — once in `agentflow-core`, once in the `agentflow-agents` loop.
+   — once in `yanshi-core`, once in the `yanshi-agents` loop.
 3. The DAG execution IR (`Flow`) is fused with the executor, so a runtime cannot
    *construct* a `Flow` without depending on the scheduler — which blocks
    dynamic workflows.
@@ -37,7 +37,7 @@ structure via Rust's trait system.
 A rewrite is justified only when no incremental path exists. None of the rewrite
 signals apply here:
 
-| Rewrite signal | AgentFlow reality |
+| Rewrite signal | Yanshi reality |
 |---|---|
 | Foundational tech choice is wrong (lang/runtime/data model) | ❌ Edition 2024, Tokio, `thiserror`, no-`unwrap` discipline — all sound |
 | No incremental path; changing A always breaks B | ❌ Target is reached by extracting contract crates + re-pointing deps |
@@ -72,14 +72,14 @@ dependent-set; split things whose dependent-sets differ.
   that **lowers** to *tools + context* at the runtime boundary.
 
 ```rust
-// agentflow-tools — atomic action (object-safe SPI)
+// yanshi-tools — atomic action (object-safe SPI)
 #[async_trait]
 pub trait Tool: Send + Sync {
   fn metadata(&self) -> ToolMetadata;                 // source / idempotency / permissions
   async fn call(&self, params: FlowValue) -> Result<ToolOutput, ToolError>;
 }
 
-// agentflow-agent-spi — a capability lowers to (tools + context)
+// yanshi-agent-spi — a capability lowers to (tools + context)
 pub struct Lowered { pub tools: Vec<Arc<dyn Tool>>, pub context: Vec<ContextFragment> }
 #[async_trait]
 pub trait Capability: Send + Sync {
@@ -93,9 +93,9 @@ into one `ToolRegistry` + `ContextBuilder` and hands it to a runtime. The runtim
 forever sees only **Tool + Context + AgentRuntime**.
 
 **Status (P-A4.3):** `Capability` + `Lowered { tools, context }` +
-`CapabilityError` live in `agentflow-agent-spi::capability`; `Lowered.context`
+`CapabilityError` live in `yanshi-agent-spi::capability`; `Lowered.context`
 reuses the kernel's existing `ContextItem` (so the RFC's "ContextFragment" is
-that type), and `Lowered::merge` is the flatten primitive. `agentflow-skills`
+that type), and `Lowered::merge` is the flatten primitive. `yanshi-skills`
 ships `SkillCapability`, which lowers a Skill to its tool registry contents + the
 persona as a `Critical` context fragment. Full surface adoption (merging a
 `Vec<Box<dyn Capability>>` in place of the direct `SkillBuilder::build` path) is
@@ -120,15 +120,15 @@ are `enum`s with `#[non_exhaustive]` (`FlowValue`, `HarnessEvent` kind,
 
 | Crate | Single responsibility | Dependents | Own deps | Priority |
 |---|---|---|---|---|
-| `agentflow-value` | Data contract: `FlowValue` + conversions | almost all | none | defer (re-export) |
-| `agentflow-tool`* | Action contract: `Tool` / `ToolRegistry` / `ToolMetadata` | tools, capabilities, runtimes | value | exists today |
-| `agentflow-graph` | Execution IR: `AsyncNode` / `GraphNode` / `Flow` / `NodeType` | core, nodes, agents, worker | value | **must** (split from core) |
-| `agentflow-store-spi` | `KnowledgeBackend` / `MemoryStore` | skills, rag, memory, agents | value | **must** |
-| `agentflow-agent-spi` | `AgentRuntime` / `AgentEvent` / `Capability` / `HarnessEvent` / `EventSink` / `Approval*` | agents, harness, tracing, server | value, tool | **must** |
-| `agentflow-async-util` | retry / timeout / cancellation combinators | core, agents | tokio, futures | must (de-dup) |
+| `yanshi-value` | Data contract: `FlowValue` + conversions | almost all | none | defer (re-export) |
+| `yanshi-tool`* | Action contract: `Tool` / `ToolRegistry` / `ToolMetadata` | tools, capabilities, runtimes | value | exists today |
+| `yanshi-graph` | Execution IR: `AsyncNode` / `GraphNode` / `Flow` / `NodeType` | core, nodes, agents, worker | value | **must** (split from core) |
+| `yanshi-store-spi` | `KnowledgeBackend` / `MemoryStore` | skills, rag, memory, agents | value | **must** |
+| `yanshi-agent-spi` | `AgentRuntime` / `AgentEvent` / `Capability` / `HarnessEvent` / `EventSink` / `Approval*` | agents, harness, tracing, server | value, tool | **must** |
+| `yanshi-async-util` | retry / timeout / cancellation combinators | core, agents | tokio, futures | must (de-dup) |
 
-*`agentflow-tool` = the `Tool` contract carved out of today's `agentflow-tools`;
-the built-in file/http/shell tools move to `agentflow-tools-builtin` (optional;
+*`yanshi-tool` = the `Tool` contract carved out of today's `yanshi-tools`;
+the built-in file/http/shell tools move to `yanshi-tools-builtin` (optional;
 may stay feature-gated in place initially).
 
 Safe merges are rare: `store-spi` cannot fold into `agent-spi` (that would force
@@ -138,8 +138,8 @@ coupling, not ceremony.
 
 ## 5. IR ≠ executor
 
-`Flow` (the DAG *type*) lives in `agentflow-graph`; the topological/concurrent
-scheduler `FlowExecutor` lives in `agentflow-core`. This single split lets
+`Flow` (the DAG *type*) lives in `yanshi-graph`; the topological/concurrent
+scheduler `FlowExecutor` lives in `yanshi-core`. This single split lets
 `agents` depend on `graph` to **construct** a `Flow` (the dynamic-workflow
 prerequisite) without ever depending on the executor — preserving "runtimes
 never depend on each other."
@@ -160,7 +160,7 @@ never depend on each other."
    (`impl<T: Tool + ?Sized> ToolExt for T {}`), never called through `dyn`.
 4. **Orphan rule dictates adapter placement.** Every cross-crate adapter needs a
    local newtype in the *assembling* crate (`McpToolAdapter`, `WorkflowTool`,
-   `AgentNode`). This is why the MCP→`Tool` adapter lives in `agentflow-skills`,
+   `AgentNode`). This is why the MCP→`Tool` adapter lives in `yanshi-skills`,
    and it generalizes to all adapters — adapters never pollute contract crates.
 5. **Type-state + newtypes eliminate whole bug classes** (per the project's own
    "encode invariants in types, don't `panic`" guidance):
@@ -207,7 +207,7 @@ workflow requires **no new sideways dependency**.
 
 ## 9. RAG repositioning
 
-RAG is on the *capability* axis, not a top-level mode. `agentflow-rag` becomes a
+RAG is on the *capability* axis, not a top-level mode. `yanshi-rag` becomes a
 `KnowledgeBackend` implementation behind a Skill's `knowledge:` declaration with
 tiered progressive disclosure (frontmatter → bundled files via grep/read → RAG
 vector retrieval → structured query). RAG fires only when bundled-file
@@ -215,8 +215,8 @@ navigation is insufficient (large / dynamic / multi-tenant corpora). The eval
 harness is retained — it is the only quality gate for the cases RAG is still
 for. The user-facing `rag search/index` CLI demotes to ops subcommands.
 
-**Status (P-A4.1):** the `KnowledgeBackend` SPI lives in `agentflow-store-spi`
-(alongside `MemoryStore`); `agentflow-rag` implements it as `Bm25KnowledgeBackend`
+**Status (P-A4.1):** the `KnowledgeBackend` SPI lives in `yanshi-store-spi`
+(alongside `MemoryStore`); `yanshi-rag` implements it as `Bm25KnowledgeBackend`
 (bundled-files tier) + `VectorStoreKnowledgeBackend` (vector tier) and exposes
 the `rag_search` `Tool` (`RagSearchTool`).
 
@@ -225,7 +225,7 @@ the `rag_search` `Tool` (`RagSearchTool`).
 expose the `rag_search` tool). `SkillBuilder` routes each entry independently.
 
 **Status (P-A4.1b):** the user-facing `rag search` / `rag index` /
-`rag collections` CLI is demoted under an `ops` group (`agentflow rag ops
+`rag collections` CLI is demoted under an `ops` group (`yanshi rag ops
 <cmd>`); `rag eval` stays top-level (it is the quality gate). The agent-facing
 retrieval path is the `rag_search` tool a Skill exposes.
 
@@ -279,21 +279,21 @@ internal dependency re-arrangement.
 src-confirmed dependency graph (per-edge symbol analysis, not just crate-level
 deps). Verdict: **direction confirmed, adopt as-is**, with these deltas folded in:
 
-- **R1 — `value` is promoted, not deferred.** §4 marked `agentflow-value` "defer
+- **R1 — `value` is promoted, not deferred.** §4 marked `yanshi-value` "defer
   (re-export)"; it is in fact a hard prerequisite of `graph` (which depends on
   `FlowValue`) and the most widely-imported leaf. Extract it **first** in P-A1.
 - **R2 — the `agents→core` split is risk-free.** Symbol analysis shows `agents`
   imports only IR symbols from `core` (`AsyncNode` / `Flow` / `FlowValue` /
-  `AsyncNodeInputs` / `AgentFlowError`) and **zero executor symbols** — so the §5
+  `AsyncNodeInputs` / `YanshiError`) and **zero executor symbols** — so the §5
   `graph` split resolves the edge with no residual coupling.
-- **R3 — `agentflow-nodes` needs an explicit decomposition decision** (the one
+- **R3 — `yanshi-nodes` needs an explicit decomposition decision** (the one
   genuine crate-division gap, tracked as P-A0.5). `nodes` straddles tool /
   capability / runtime tiers; split tool-tier nodes
   (`template`/`file`/`http`/`batch`/`conditional`/`arxiv`/`markmap` →
   `graph`+`tool` only) away from capability-backed nodes
   (`llm`/`asr`/`tts`/`image*`/`rag`/`mcp`). **Decided** in
-  `docs/RFC_NODES_DECOMPOSITION.md`: split into `agentflow-nodes` (tool-tier) +
-  a new `agentflow-nodes-ai` adapter crate; lands in P-A4 after the `graph` split.
+  `docs/RFC_NODES_DECOMPOSITION.md`: split into `yanshi-nodes` (tool-tier) +
+  a new `yanshi-nodes-ai` adapter crate; lands in P-A4 after the `graph` split.
 - **R4 — `llm→core` is already gone** (removed Q3.6.1); §1 seam #2 and the §4
   `llm` row overstate `llm`'s coupling. `llm` has no internal deps.
 - **R5 — track the full target-state edge map**, not just the 4 gate-enforced
@@ -306,24 +306,24 @@ deps). Verdict: **direction confirmed, adopt as-is**, with these deltas folded i
   (traceparent ambient only) → `agent-spi`/`value`. Keeps the kernel at six.
 
 **Status (U2.1, 2026-07-30):** the `harness→memory` edge R5 flagged is paid
-down — `agentflow-harness` now depends on `agentflow-store-spi` directly
+down — `yanshi-harness` now depends on `yanshi-store-spi` directly
 (production code only ever needed `MemoryStore`/`Message`, both plain
 `store-spi` re-exports), leaving `harness` with 4 impl edges instead of 5.
 The parallel `agents→memory` edge is **not** paid down and, on closer
-inspection, isn't the same kind of edge R5/R6 describe: `agentflow-agents`'s
+inspection, isn't the same kind of edge R5/R6 describe: `yanshi-agents`'s
 `ReActAgent` depends on `ProjectMemoryStore`/`ProjectFact`
 (project-memory feature, added after this RFC's writing), which have no
 `store-spi` contract yet — this needs a genuine contract extraction (T3.3's
-`Tool`/`agentflow-tool` split is the template), not just "inject the
+`Tool`/`yanshi-tool` split is the template), not just "inject the
 existing contract at the surface." See `docs/ARCHITECTURE_EVALUATION_
 2026-06-20.md`'s U2.1 update for the full accounting.
 
 **Status (U2.5, 2026-07-31):** the `ProjectMemoryStore`/`ProjectFact`
 contract extraction U2.1 called out is done — both now live in
-`agentflow-store-spi::project` (T3.3-shaped split, `agentflow-memory`
+`yanshi-store-spi::project` (T3.3-shaped split, `yanshi-memory`
 re-exports the contract types and keeps the concrete stores). The
 `agents→memory` edge still doesn't close, though: `ReActAgent` also
-depends on the concrete `agentflow_memory::SqlitePreferenceStore` +
+depends on the concrete `yanshi_memory::SqlitePreferenceStore` +
 `PreferenceScope` (added by U2.2, after U2.1's re-audit), and
 `PreferenceStore`'s `&mut self` write methods were explicitly left off
 `store-spi` in U2.2's own scope decision. That redesign+extraction is
@@ -333,10 +333,10 @@ now the real remaining prerequisite. See `docs/ARCHITECTURE_EVALUATION_
 **Status (U2.6, 2026-08-01):** the `PreferenceStore` redesign+extraction
 is also done — its `&mut self` constraint turned out not to be
 load-bearing (`SqlitePreferenceStore` only touches `&self.pool`), so
-the trait moved to `agentflow-store-spi::preference` as `&self`,
+the trait moved to `yanshi-store-spi::preference` as `&self`,
 matching `ProjectMemoryStore`/`TaskSummaryStore`. The `agents→memory`
 edge *still* doesn't close: a third reason surfaced —
-`agentflow-agents/src/dynamic.rs`'s `DynamicWorkflowAgent` constructs a
+`yanshi-agents/src/dynamic.rs`'s `DynamicWorkflowAgent` constructs a
 concrete `SessionMemory` as its default memory backend, which has no
 `store-spi` contract by design (not a gap to extract). Closing this
 edge for real now needs `DynamicWorkflowAgent`'s default memory to be

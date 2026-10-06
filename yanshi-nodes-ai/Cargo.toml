@@ -1,0 +1,32 @@
+[package]
+name = "yanshi-nodes-ai"
+version = "0.2.0"
+description = "Capability-backed AsyncNode adapters (LLM / audio / image / RAG / MCP) for Yanshi workflows"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[features]
+default = []
+mcp = ["yanshi-mcp"]
+rag = ["yanshi-rag"]
+
+[dependencies]
+# Shared node infra (common utils, error types) + the IR.
+yanshi-nodes = { path = "../yanshi-nodes", version = "0.2" }
+yanshi-core = { path = "../yanshi-core", version = "0.2" }
+yanshi-llm = { path = "../yanshi-llm", version = "0.2" }
+yanshi-mcp = { path = "../yanshi-mcp", version = "0.2", optional = true }
+yanshi-rag = { path = "../yanshi-rag", version = "0.3.0-alpha", optional = true }
+
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+base64 = "0.21"
+tokio = { workspace = true, features = ["full"] }
+
+# V1.7: structured logging for node execution — see yanshi-nodes'
+# Cargo.toml for why this is a plain, unconditional dependency here.
+tracing = "0.1"

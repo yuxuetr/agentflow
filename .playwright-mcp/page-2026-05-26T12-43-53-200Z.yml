@@ -1,7 +1,7 @@
 - main [ref=e3]:
   - generic [ref=e4]:
     - generic [ref=e5]:
-      - paragraph [ref=e6]: AgentFlow / Harness
+      - paragraph [ref=e6]: Yanshi / Harness
       - heading "New session" [level=1] [ref=e7]
     - navigation [ref=e8]:
       - link "← Sessions" [ref=e9] [cursor=pointer]:

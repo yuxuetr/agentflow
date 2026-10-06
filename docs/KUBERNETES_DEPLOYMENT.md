@@ -1,22 +1,22 @@
-# Kubernetes Deployment with AgentFlow Health Checks
+# Kubernetes Deployment with Yanshi Health Checks
 
 > **R2.1 (2026-07-28): the YAML in this doc predates the real Helm chart and
 > does not match it.** This guide is dated 2025-11-16 ("Phase 1.5 Complete"),
-> before `charts/agentflow/` existed. Its example manifests — the container
+> before `charts/yanshi/` existed. Its example manifests — the container
 > port (8080/9090 here vs. `3000` in the real chart), PersistentVolumeClaim +
 > RBAC for checkpoints, HorizontalPodAutoscaler, ServiceMonitor,
 > NetworkPolicy, PodDisruptionBudget, and Fluentd log shipping — are **not**
-> implemented as Helm templates anywhere in this repo (`charts/agentflow/templates/`
+> implemented as Helm templates anywhere in this repo (`charts/yanshi/templates/`
 > only has `deployment.yaml` / `service.yaml` / `serviceaccount.yaml` /
 > `secret.yaml`). For the actual, tested deployment path, see
-> [`docs/DEPLOYMENT.md`](DEPLOYMENT.md#helm) and `charts/agentflow/values.yaml`.
+> [`docs/DEPLOYMENT.md`](DEPLOYMENT.md#helm) and `charts/yanshi/values.yaml`.
 > The route shape below (`/health`, `/health/live`, `/health/ready`,
 > `/metrics`) is exactly what the real chart's liveness/readiness probes
 > call — but the "Implementing Health Endpoints" Rust sample (W5.3
 > correction) is illustrative only: `checker.is_alive()`/`checker.is_ready()`
 > never existed on the real `HealthChecker` (see
 > [`HEALTH_CHECKS.md`](HEALTH_CHECKS.md) for its actual, much smaller API).
-> `agentflow-server`'s real implementation doesn't route through
+> `yanshi-server`'s real implementation doesn't route through
 > `HealthChecker::is_ready()` at all: `/health` and `/health/live` are
 > unconditional `200`s, and `/health/ready` builds a fresh `HealthChecker`
 > per request with a single `"database"` `SELECT 1` check and returns `503`
@@ -25,7 +25,7 @@
 > HPA/PDB/NetworkPolicy/ServiceMonitor support themselves — adapt it, don't
 > `kubectl apply` it as-is.
 
-This guide demonstrates how to deploy AgentFlow workflows in Kubernetes with integrated health checks, leveraging Phase 1.5 features for production-ready deployments.
+This guide demonstrates how to deploy Yanshi workflows in Kubernetes with integrated health checks, leveraging Phase 1.5 features for production-ready deployments.
 
 ## Table of Contents
 
@@ -41,7 +41,7 @@ This guide demonstrates how to deploy AgentFlow workflows in Kubernetes with int
 
 ## Overview
 
-AgentFlow's Phase 1.5 health check system is designed to integrate seamlessly with Kubernetes health probes:
+Yanshi's Phase 1.5 health check system is designed to integrate seamlessly with Kubernetes health probes:
 
 - **Liveness Probes**: Detect if the application is alive and responsive
 - **Readiness Probes**: Determine if the application can accept traffic
@@ -61,13 +61,13 @@ Key Features:
 - Kubernetes cluster (v1.19+)
 - kubectl configured
 - Docker registry for images
-- AgentFlow application built with `observability` feature
+- Yanshi application built with `observability` feature
 
 ## Health Check Integration
 
 ### Health Check Endpoints
 
-AgentFlow provides three health check endpoints:
+Yanshi provides three health check endpoints:
 
 1. **`/health`** - Full health check (all registered checks)
 2. **`/health/live`** - Liveness check (basic responsiveness)
@@ -76,7 +76,7 @@ AgentFlow provides three health check endpoints:
 ### Implementing Health Endpoints
 
 ```rust
-use agentflow_core::health::{HealthChecker, HealthStatus};
+use yanshi_core::health::{HealthChecker, HealthStatus};
 use axum::{routing::get, Router, Json};
 use std::sync::Arc;
 
@@ -92,7 +92,7 @@ async fn setup_health_routes(checker: Arc<HealthChecker>) -> Router {
 /// Full health check handler
 async fn full_health_check(
     axum::extract::State(checker): axum::extract::State<Arc<HealthChecker>>,
-) -> Json<agentflow_core::health::HealthReport> {
+) -> Json<yanshi_core::health::HealthReport> {
     Json(checker.check_health().await)
 }
 
@@ -123,7 +123,7 @@ async fn readiness_check(
 
 > Reference sketch, not the shipped path — see the banner at the top of this
 > doc. For an actual deployment, use `helm install` with
-> `charts/agentflow/` as documented in
+> `charts/yanshi/` as documented in
 > [`docs/DEPLOYMENT.md`](DEPLOYMENT.md#helm).
 
 ### Basic Deployment
@@ -132,22 +132,22 @@ async fn readiness_check(
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: agentflow-workflow
+  name: yanshi-workflow
   namespace: default
   labels:
-    app: agentflow
+    app: yanshi
     component: workflow-runner
     version: v0.2.0
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: agentflow
+      app: yanshi
       component: workflow-runner
   template:
     metadata:
       labels:
-        app: agentflow
+        app: yanshi
         component: workflow-runner
         version: v0.2.0
       annotations:
@@ -156,14 +156,14 @@ spec:
         prometheus.io/path: "/metrics"
     spec:
       containers:
-      - name: agentflow
-        image: your-registry/agentflow:v0.2.0
+      - name: yanshi
+        image: your-registry/yanshi:v0.2.0
         imagePullPolicy: Always
 
         # Environment variables
         env:
         - name: RUST_LOG
-          value: "info,agentflow=debug"
+          value: "info,yanshi=debug"
         - name: ENV
           value: "production"
         - name: LOG_FORMAT
@@ -171,7 +171,7 @@ spec:
         - name: CHECKPOINT_DIR
           value: "/data/checkpoints"
 
-        # Resource limits (aligned with agentflow resource management)
+        # Resource limits (aligned with yanshi resource management)
         resources:
           requests:
             memory: "256Mi"
@@ -228,7 +228,7 @@ spec:
         - name: checkpoint-storage
           mountPath: /data/checkpoints
         - name: config
-          mountPath: /etc/agentflow
+          mountPath: /etc/yanshi
           readOnly: true
 
         # Security context
@@ -245,10 +245,10 @@ spec:
       volumes:
       - name: checkpoint-storage
         persistentVolumeClaim:
-          claimName: agentflow-checkpoint-pvc
+          claimName: yanshi-checkpoint-pvc
       - name: config
         configMap:
-          name: agentflow-config
+          name: yanshi-config
 
       # Restart policy
       restartPolicy: Always
@@ -257,7 +257,7 @@ spec:
       terminationGracePeriodSeconds: 30
 
       # Service account
-      serviceAccountName: agentflow
+      serviceAccountName: yanshi
 ```
 
 ### PersistentVolumeClaim for Checkpoints
@@ -266,7 +266,7 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: agentflow-checkpoint-pvc
+  name: yanshi-checkpoint-pvc
   namespace: default
 spec:
   accessModes:
@@ -283,15 +283,15 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: agentflow-service
+  name: yanshi-service
   namespace: default
   labels:
-    app: agentflow
+    app: yanshi
     component: workflow-runner
 spec:
   type: ClusterIP
   selector:
-    app: agentflow
+    app: yanshi
     component: workflow-runner
   ports:
   - name: http
@@ -311,7 +311,7 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: agentflow-config
+  name: yanshi-config
   namespace: default
 data:
   # Timeout configuration
@@ -359,25 +359,25 @@ data:
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: agentflow
+  name: yanshi
   labels:
-    name: agentflow
+    name: yanshi
 
 ---
 # ServiceAccount
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: agentflow
-  namespace: agentflow
+  name: yanshi
+  namespace: yanshi
 
 ---
 # Role for checkpoint management
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: agentflow-checkpoint-manager
-  namespace: agentflow
+  name: yanshi-checkpoint-manager
+  namespace: yanshi
 rules:
 - apiGroups: [""]
   resources: ["persistentvolumeclaims"]
@@ -391,15 +391,15 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: agentflow-checkpoint-manager-binding
-  namespace: agentflow
+  name: yanshi-checkpoint-manager-binding
+  namespace: yanshi
 subjects:
 - kind: ServiceAccount
-  name: agentflow
-  namespace: agentflow
+  name: yanshi
+  namespace: yanshi
 roleRef:
   kind: Role
-  name: agentflow-checkpoint-manager
+  name: yanshi-checkpoint-manager
   apiGroup: rbac.authorization.k8s.io
 
 ---
@@ -407,10 +407,10 @@ roleRef:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: agentflow-checkpoint-pvc
-  namespace: agentflow
+  name: yanshi-checkpoint-pvc
+  namespace: yanshi
   labels:
-    app: agentflow
+    app: yanshi
 spec:
   accessModes:
     - ReadWriteOnce
@@ -424,8 +424,8 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: agentflow-config
-  namespace: agentflow
+  name: yanshi-config
+  namespace: yanshi
 data:
   timeout.yaml: |
     environment: production
@@ -443,8 +443,8 @@ kind: Deployment
 apiVersion: v1
 kind: Service
 metadata:
-  name: agentflow-service
-  namespace: agentflow
+  name: yanshi-service
+  namespace: yanshi
 # ... (see above)
 
 ---
@@ -452,13 +452,13 @@ metadata:
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: agentflow-hpa
-  namespace: agentflow
+  name: yanshi-hpa
+  namespace: yanshi
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: agentflow-workflow
+    name: yanshi-workflow
   minReplicas: 2
   maxReplicas: 10
   metrics:
@@ -497,14 +497,14 @@ spec:
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: agentflow-metrics
-  namespace: agentflow
+  name: yanshi-metrics
+  namespace: yanshi
   labels:
-    app: agentflow
+    app: yanshi
 spec:
   selector:
     matchLabels:
-      app: agentflow
+      app: yanshi
       component: workflow-runner
   endpoints:
   - port: metrics
@@ -520,27 +520,27 @@ spec:
 ```bash
 # Grafana UI: Dashboards → Import → Upload JSON → pick a
 # Prometheus datasource at the import prompt.
-curl -O https://raw.githubusercontent.com/yuxuetr/agentflow/main/dashboards/grafana/agentflow-overview.json
+curl -O https://raw.githubusercontent.com/yuxuetr/yanshi/main/dashboards/grafana/yanshi-overview.json
 ```
 
-The dashboard is at `dashboards/grafana/agentflow-overview.json`
+The dashboard is at `dashboards/grafana/yanshi-overview.json`
 in the repo. It carries 9 panels covering health, workflow
 throughput / duration / failures, worker fleet, memory + state,
 retention sweep deletions, and Harness Mode sessions. See
 [`dashboards/README.md`](../dashboards/README.md) for the metric
 contract, import recipe, and conventions.
 
-**Status:** the `agentflow-server` binary exposes `/metrics`.
+**Status:** the `yanshi-server` binary exposes `/metrics`.
 All 14 dashboard series are live as of P10.14.2-FU6: the three
 workflow series from FU1
-(`agentflow_workflow_completed_total{status}`,
-`agentflow_workflow_duration_seconds`,
-`agentflow_nodes_failed_total{node_type}`), the three cleanup
+(`yanshi_workflow_completed_total{status}`,
+`yanshi_workflow_duration_seconds`,
+`yanshi_nodes_failed_total{node_type}`), the three cleanup
 counters from FU2, the two worker-fleet gauges from FU3, the
 two harness session gauges from FU4, three scrape-time process
-inspectors from FU5 (`agentflow_health_status{component}`,
-`agentflow_memory_usage_bytes`, `agentflow_workflow_runs_active`),
-and the live-state gauge from FU6 (`agentflow_state_size_bytes`).
+inspectors from FU5 (`yanshi_health_status{component}`,
+`yanshi_memory_usage_bytes`, `yanshi_workflow_runs_active`),
+and the live-state gauge from FU6 (`yanshi_state_size_bytes`).
 The scrape-time gauges are computed via
 `refresh_scrape_time_gauges(&state)` which runs before every
 render; DB query failures are logged and swallowed (fail-soft)
@@ -550,7 +550,7 @@ deployments emit `0`. The live-state gauge is sourced from an
 in-process `LiveStateRegistry` that the DAG executor writes
 to via `Flow::StateSizeObserver` after every node completes
 and deregisters from on terminal transitions. **V3.4:** both
-`agentflow_workflow_runs_active` and `agentflow_state_size_bytes`
+`yanshi_workflow_runs_active` and `yanshi_state_size_bytes`
 emit a single unlabeled aggregate (summed across tenants / active
 runs) rather than one series per `tenant` / `run_id` — `/metrics`
 is deliberately unauthenticated (see below), so per-identity labels
@@ -559,23 +559,23 @@ would let any scraper enumerate active tenant IDs and run IDs.
 Key metrics to monitor:
 
 1. **Health Status**
-   - `agentflow_health_status{component="system"}` - Overall system health
-   - `agentflow_health_check_duration_seconds` - Health check latency
+   - `yanshi_health_status{component="system"}` - Overall system health
+   - `yanshi_health_check_duration_seconds` - Health check latency
 
 2. **Resource Usage**
-   - `agentflow_memory_usage_bytes` - Current memory usage
-   - `agentflow_memory_limit_bytes` - Memory limit
-   - `agentflow_state_size_bytes` - Workflow state size
+   - `yanshi_memory_usage_bytes` - Current memory usage
+   - `yanshi_memory_limit_bytes` - Memory limit
+   - `yanshi_state_size_bytes` - Workflow state size
 
 3. **Workflow Execution**
-   - `agentflow_workflow_duration_seconds` - Workflow execution time
-   - `agentflow_node_execution_duration_seconds` - Node execution time
-   - `agentflow_workflow_failures_total` - Workflow failures
+   - `yanshi_workflow_duration_seconds` - Workflow execution time
+   - `yanshi_node_execution_duration_seconds` - Node execution time
+   - `yanshi_workflow_failures_total` - Workflow failures
 
 4. **Checkpoints**
-   - `agentflow_checkpoint_save_duration_seconds` - Checkpoint save latency
-   - `agentflow_checkpoint_load_duration_seconds` - Checkpoint load latency
-   - `agentflow_checkpoint_count` - Number of checkpoints
+   - `yanshi_checkpoint_save_duration_seconds` - Checkpoint save latency
+   - `yanshi_checkpoint_load_duration_seconds` - Checkpoint load latency
+   - `yanshi_checkpoint_count` - Number of checkpoints
 
 ### Logging Configuration
 
@@ -584,7 +584,7 @@ For JSON structured logging in production:
 ```yaml
 env:
 - name: RUST_LOG
-  value: "info,agentflow=debug"
+  value: "info,yanshi=debug"
 - name: LOG_FORMAT
   value: "json"
 ```
@@ -601,9 +601,9 @@ data:
   fluent.conf: |
     <source>
       @type tail
-      path /var/log/containers/*agentflow*.log
-      pos_file /var/log/fluentd-agentflow.pos
-      tag kubernetes.agentflow
+      path /var/log/containers/*yanshi*.log
+      pos_file /var/log/fluentd-yanshi.pos
+      tag kubernetes.yanshi
       <parse>
         @type json
         time_key timestamp
@@ -611,19 +611,19 @@ data:
       </parse>
     </source>
 
-    <filter kubernetes.agentflow>
+    <filter kubernetes.yanshi>
       @type record_transformer
       <record>
-        app agentflow
+        app yanshi
         environment production
       </record>
     </filter>
 
-    <match kubernetes.agentflow>
+    <match kubernetes.yanshi>
       @type elasticsearch
       host elasticsearch.logging.svc.cluster.local
       port 9200
-      index_name agentflow
+      index_name yanshi
       type_name _doc
     </match>
 ```
@@ -653,17 +653,17 @@ There is no YAML/env config surface for workflow-level memory limits today
 (`FlowExecutionConfig::resource_limits`, set programmatically by an
 embedder), and it is advisory-only: it emits a `WorkflowEvent::ResourceWarning`
 when the state pool exceeds the configured limit, but never evicts state or
-rejects work (W5.3; see `agentflow-core/src/scheduler.rs`). The `cleanup_threshold`/
+rejects work (W5.3; see `yanshi-core/src/scheduler.rs`). The `cleanup_threshold`/
 `auto_cleanup` knobs some earlier drafts of this doc described belonged to
 `StateMonitor`, which was deleted in W5.3 (its LRU eviction was unsafe for
 `Flow`'s state pool) and was never wired into `Flow` regardless.
 
 **What to actually align today:**
 - Set the Kubernetes container `resources.limits.memory` based on observed
-  process RSS for your workflows (`/metrics`'s `agentflow_memory_usage_bytes`
+  process RSS for your workflows (`/metrics`'s `yanshi_memory_usage_bytes`
   gauge, Linux only) — this is an OS-level cap, independent of any
-  AgentFlow-side accounting.
-- If you need AgentFlow to warn before OOM, construct a `ResourceLimits` and
+  Yanshi-side accounting.
+- If you need Yanshi to warn before OOM, construct a `ResourceLimits` and
   pass it via `FlowExecutionConfig::resource_limits` when you build the
   `Flow` in your own embedding code, and subscribe an `EventListener` for
   `WorkflowEvent::ResourceWarning`.
@@ -676,7 +676,7 @@ rejects work (W5.3; see `agentflow-core/src/scheduler.rs`). The `cleanup_thresho
 volumes:
 - name: checkpoint-storage
   persistentVolumeClaim:
-    claimName: agentflow-checkpoint-pvc
+    claimName: yanshi-checkpoint-pvc
 ```
 
 **Retention Policy:**
@@ -748,13 +748,13 @@ spec:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: agentflow-pdb
-  namespace: agentflow
+  name: yanshi-pdb
+  namespace: yanshi
 spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app: agentflow
+      app: yanshi
       component: workflow-runner
 ```
 
@@ -779,12 +779,12 @@ securityContext:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: agentflow-netpol
-  namespace: agentflow
+  name: yanshi-netpol
+  namespace: yanshi
 spec:
   podSelector:
     matchLabels:
-      app: agentflow
+      app: yanshi
   policyTypes:
   - Ingress
   - Egress
@@ -813,10 +813,10 @@ spec:
 cargo build --release --features observability
 
 # Build Docker image
-docker build -t your-registry/agentflow:v0.2.0 .
+docker build -t your-registry/yanshi:v0.2.0 .
 
 # Push to registry
-docker push your-registry/agentflow:v0.2.0
+docker push your-registry/yanshi:v0.2.0
 ```
 
 ### 2. Apply Kubernetes Resources
@@ -829,27 +829,27 @@ kubectl apply -f namespace.yaml
 kubectl apply -f kubernetes/
 
 # Verify deployment
-kubectl get all -n agentflow
+kubectl get all -n yanshi
 
 # Check health
 kubectl run -it --rm debug --image=curlimages/curl --restart=Never -- \
-  curl http://agentflow-service.agentflow/health
+  curl http://yanshi-service.yanshi/health
 ```
 
 ### 3. Monitor Deployment
 
 ```bash
 # Watch pod status
-kubectl get pods -n agentflow -w
+kubectl get pods -n yanshi -w
 
 # Check logs
-kubectl logs -f -n agentflow -l app=agentflow
+kubectl logs -f -n yanshi -l app=yanshi
 
 # Describe pod for events
-kubectl describe pod -n agentflow <pod-name>
+kubectl describe pod -n yanshi <pod-name>
 
 # Check health endpoints
-kubectl port-forward -n agentflow svc/agentflow-service 8080:80
+kubectl port-forward -n yanshi svc/yanshi-service 8080:80
 curl http://localhost:8080/health
 curl http://localhost:8080/health/live
 curl http://localhost:8080/health/ready
@@ -859,10 +859,10 @@ curl http://localhost:8080/health/ready
 
 ```bash
 # Simulate pod failure
-kubectl delete pod -n agentflow <pod-name>
+kubectl delete pod -n yanshi <pod-name>
 
 # Check checkpoint recovery in new pod logs
-kubectl logs -f -n agentflow <new-pod-name> | grep checkpoint
+kubectl logs -f -n yanshi <new-pod-name> | grep checkpoint
 ```
 
 ## Troubleshooting
@@ -873,14 +873,14 @@ kubectl logs -f -n agentflow <new-pod-name> | grep checkpoint
 
 ```bash
 # Check health check configuration
-kubectl describe pod -n agentflow <pod-name> | grep -A 10 Liveness
+kubectl describe pod -n yanshi <pod-name> | grep -A 10 Liveness
 
 # Check health endpoint manually
-kubectl exec -it -n agentflow <pod-name> -- \
+kubectl exec -it -n yanshi <pod-name> -- \
   curl http://localhost:8080/health/live
 
 # Review logs for health check errors
-kubectl logs -n agentflow <pod-name> | grep health
+kubectl logs -n yanshi <pod-name> | grep health
 ```
 
 **Common Issues**:
@@ -895,11 +895,11 @@ kubectl logs -n agentflow <pod-name> | grep health
 
 ```bash
 # Check resource usage
-kubectl top pods -n agentflow
+kubectl top pods -n yanshi
 
 # Review memory metrics
-kubectl exec -it -n agentflow <pod-name> -- \
-  curl http://localhost:9090/metrics | grep agentflow_memory
+kubectl exec -it -n yanshi <pod-name> -- \
+  curl http://localhost:9090/metrics | grep yanshi_memory
 ```
 
 **Solutions**:
@@ -914,26 +914,26 @@ kubectl exec -it -n agentflow <pod-name> -- \
 
 ```bash
 # Check checkpoint directory permissions
-kubectl exec -it -n agentflow <pod-name> -- ls -la /data/checkpoints
+kubectl exec -it -n yanshi <pod-name> -- ls -la /data/checkpoints
 
 # Verify PVC is mounted
-kubectl describe pod -n agentflow <pod-name> | grep -A 5 Mounts
+kubectl describe pod -n yanshi <pod-name> | grep -A 5 Mounts
 
 # Check checkpoint retention
-kubectl exec -it -n agentflow <pod-name> -- \
+kubectl exec -it -n yanshi <pod-name> -- \
   ls -lah /data/checkpoints/
 ```
 
 ## References
 
-- [AgentFlow Timeout Control Guide](./TIMEOUT_CONTROL.md)
-- [AgentFlow Health Checks Guide](./HEALTH_CHECKS.md)
-- [AgentFlow Checkpoint Recovery Guide](./CHECKPOINT_RECOVERY.md)
+- [Yanshi Timeout Control Guide](./TIMEOUT_CONTROL.md)
+- [Yanshi Health Checks Guide](./HEALTH_CHECKS.md)
+- [Yanshi Checkpoint Recovery Guide](./CHECKPOINT_RECOVERY.md)
 - [Kubernetes Liveness, Readiness, and Startup Probes](https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/)
 - [Kubernetes Best Practices](https://kubernetes.io/docs/concepts/configuration/overview/)
 
 ---
 
 **Last Updated**: 2025-11-16
-**AgentFlow Version**: 0.2.0 (Phase 1.5 Complete)
+**Yanshi Version**: 0.2.0 (Phase 1.5 Complete)
 **Kubernetes Version**: 1.19+

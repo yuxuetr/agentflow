@@ -10,10 +10,10 @@ R2-follow-up sweep retrospective and its 6 emergent patterns.
 queue. R2 stays as the authoritative source for the L1↔L3 selection
 rule (unchanged by this round), the per-application matrix (A1 / A1.5
 / A7 / A2 / A3 / A2-follow-up), and the original 40-finding inventory.
-R3 only synthesises the **sweep** that closed R2's open agentflow-side
+R3 only synthesises the **sweep** that closed R2's open yanshi-side
 items.
 **Trigger**: After R2 froze the action queue, a single multi-hour
-session worked the queue top-down and closed **all 8 agentflow-side
+session worked the queue top-down and closed **all 8 yanshi-side
 findings** (the only remaining open items are phonon-external or
 low-priority docs). The patterns that emerged from that sweep are
 worth recording before the next dogfooding pillar starts.
@@ -25,12 +25,12 @@ worth recording before the next dogfooding pillar starts.
 | # | Commit | Finding | Crate | Surface |
 | --- | --- | --- | --- | --- |
 | 1 | `83a9765` | F-A2-9 | new `examples/applications/code-reviewer-write/` | Harness approval gate validation binary |
-| 2 | `c552d3c` | F-A2-12 | `agentflow-harness` + `docs/HARNESS_MODE.md` | `HarnessProfile::Local` silent-auto-allow footgun docs |
-| 3 | `9d386b3` | F-A2-11 | `agentflow-cli` + `agentflow-agents` | `harness run --approve` flag wires `HookedTool` |
-| 4 | `bdaff36` | F-A7-4 | `agentflow-cli` doctor | `models.yml` source label with "overrides built-in" suffix |
-| 5 | `9a96058` | F-A2-6 | `agentflow-cli` skill | `skill run --output json` single-object mode |
-| 6 | `100c267` | F-AF-2 | `agentflow-skills` | SKILL.md frontmatter `model:` honoured (was dropped) |
-| 7 | `d7651f7` | F-A2-13 | `agentflow-agents` | ReAct steering note on repeat tool calls |
+| 2 | `c552d3c` | F-A2-12 | `yanshi-harness` + `docs/HARNESS_MODE.md` | `HarnessProfile::Local` silent-auto-allow footgun docs |
+| 3 | `9d386b3` | F-A2-11 | `yanshi-cli` + `yanshi-agents` | `harness run --approve` flag wires `HookedTool` |
+| 4 | `bdaff36` | F-A7-4 | `yanshi-cli` doctor | `models.yml` source label with "overrides built-in" suffix |
+| 5 | `9a96058` | F-A2-6 | `yanshi-cli` skill | `skill run --output json` single-object mode |
+| 6 | `100c267` | F-AF-2 | `yanshi-skills` | SKILL.md frontmatter `model:` honoured (was dropped) |
+| 7 | `d7651f7` | F-A2-13 | `yanshi-agents` | ReAct steering note on repeat tool calls |
 | 8 | `0d921aa` | F-A2-5 | `examples/applications/code-reviewer/README.md` + `examples/README.md` | "LLM review is non-deterministic" practice docs |
 
 **3 of 8 are pure-docs** (#2, #6 partial, #8), **4 of 8 are CLI/UX
@@ -43,7 +43,7 @@ correctness is mostly there; the gaps are observability and reach.
 ## 2. Patterns that emerged
 
 ### 2.1 The Harness-from-CLI gap was a single line of missing wiring
-F-A2-11 surfaced because `agentflow harness run` built a bare
+F-A2-11 surfaced because `yanshi harness run` built a bare
 `ReActAgent` and never called `wrap_registry(...)`. The fix added
 `--approve {none|cli|auto-allow|auto-deny}` and a `ReActAgent::
 with_tools` accessor; the actual diff that activates the approval gate
@@ -108,17 +108,17 @@ docs work to "we should write that down sometime".
 
 ## 3. What's now true that wasn't before this sweep
 
-- `agentflow harness run --approve cli --profile production` makes
+- `yanshi harness run --approve cli --profile production` makes
   every NonIdempotent tool call (shell, file:write, mutating http)
   surface an interactive operator prompt before executing. CLI
   parity with the HTTP gateway, no hand-rolled binaries needed.
-- `agentflow doctor` text output opens with the active `models.yml`
-  source labelled `"~/.agentflow/models.yml (overrides built-in)"`
+- `yanshi doctor` text output opens with the active `models.yml`
+  source labelled `"~/.yanshi/models.yml (overrides built-in)"`
   or `"built-in default_models.yml"`. The JSON shape gains
   `models_config_source_kind` as a stable snake_case enum
   (`user_models_yml` / `user_models_yaml` / `env_override` /
   `built_in_default`).
-- `agentflow skill run --output json` emits a single JSON object on
+- `yanshi skill run --output json` emits a single JSON object on
   stdout suitable for piping into jq or other tooling. Banners go
   to stderr; redaction still applies.
 - SKILL.md frontmatter `model: <name>` actually takes effect (was
@@ -130,7 +130,7 @@ docs work to "we should write that down sometime".
   drive-by readers can't miss it.
 - ReAct loop no longer burns through `MaxToolCalls` on the
   moonshot-v1-128k repeat-call pathology — second identical call
-  carries an `[agentflow steering note (F-A2-13): ...]` in the
+  carries an `[yanshi steering note (F-A2-13): ...]` in the
   memory message the model sees on its next turn.
 - `examples/applications/code-reviewer/README.md` carries the
   concrete finding-set comparison from the two A2 dogfooding runs
@@ -150,8 +150,8 @@ The remaining 15:
 
 | Tier | Count | Nature |
 | --- | --- | --- |
-| Medium (phonon-external) | 5 | F-PH-1/2 etc. — not in the agentflow workspace; not gating anything here |
-| Low (agentflow docs polish) | 4 | F-DOC-2/3/4, F-A7-5 — small docstring / inline-comment touches |
+| Medium (phonon-external) | 5 | F-PH-1/2 etc. — not in the yanshi workspace; not gating anything here |
+| Low (yanshi docs polish) | 4 | F-DOC-2/3/4, F-A7-5 — small docstring / inline-comment touches |
 | Low (LLM tooling polish) | 3 | F-A7-6 (`llm models --refresh-from-api`), F-A7-7 (dotenvy helper), F-AF-4 (Moonshot/Anthropic init error message) |
 | Low (examples convention) | 2 | F-EX-1 (A1.5 persona LUFS verify), F-PH-3 (phonon-mcp `audio_info.resampled_from`) |
 | Low (sandboxing) | 1 | (none currently flagged) |
@@ -177,7 +177,7 @@ A6 would validate:
   don't re-translate)
 - File batch write coordination
 
-The platform's `agentflow-core::Flow::execute` already has the
+The platform's `yanshi-core::Flow::execute` already has the
 `Concurrent` mode and `max_concurrency` knob; A6 would be the first
 real load test. Of the alternatives:
 - A4 (meeting-transcriber) requires an ASR API; out-of-pocket cost.
@@ -220,7 +220,7 @@ were closed in the next commit:
   `execute_map_node_parallel` now uses `tokio::sync::Semaphore`
   per-sub-flow. Unbounded behaviour preserved for `None`
   (back-compat). `Some(0)` rejected as config error rather than
-  deadlocking. Two new unit tests in `agentflow-core` assert the
+  deadlocking. Two new unit tests in `yanshi-core` assert the
   cap holds and zero is rejected. Live A6 re-run with
   `max_concurrent: 3` on N=4 inputs: 4/4 OK (was 3/4 before).
 - **F-A6-2** — `workflow validate` warned on undeclared map

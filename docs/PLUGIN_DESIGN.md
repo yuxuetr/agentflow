@@ -1,7 +1,7 @@
 # Plugin / Custom Node System — Design Evaluation
 
 Status: **Decision document for P2 #12 (v1.0.0-rc)**
-Owner: AgentFlow core
+Owner: Yanshi core
 Last updated: 2026-05-08
 
 ---
@@ -9,10 +9,10 @@ Last updated: 2026-05-08
 ## 1. Goals
 
 Let third-party developers ship `AsyncNode` implementations and (optionally)
-agent tools without forking the AgentFlow workspace. Concretely:
+agent tools without forking the Yanshi workspace. Concretely:
 
 1. **Out-of-tree distribution** — a plugin lives in its own repo / cargo
-   project / language, builds independently, and is loaded by AgentFlow at
+   project / language, builds independently, and is loaded by Yanshi at
    runtime.
 2. **Workflow integration** — once loaded, a plugin's node type works in
    `workflow.yml` exactly like the built-in `llm` / `http` / `template` nodes,
@@ -20,7 +20,7 @@ agent tools without forking the AgentFlow workspace. Concretely:
    participation.
 3. **Crash isolation** — a panicking or segfaulting plugin must not take down
    the host process; an erroring node must surface as a clean
-   `AgentFlowError::NodeExecutionFailed`.
+   `YanshiError::NodeExecutionFailed`.
 4. **Permission model** — plugins declare required capabilities (filesystem,
    network, shell). Host enforces a deny-by-default policy that mirrors the
    existing `Tool`/`Skill` permission story.
@@ -34,21 +34,21 @@ Non-goals for the v1.0.0-rc PoC:
 - Marketplace / signature verification (covered by P2 #16).
 - Hot-reload during a live `Flow::execute` run.
 - Cross-plugin shared state.
-- Streaming `AsyncNode` outputs (no AgentFlow node currently streams).
+- Streaming `AsyncNode` outputs (no Yanshi node currently streams).
 
 ---
 
 ## 2. Existing extension surface (what we already have)
 
-The plugin system must compose with, not duplicate, what AgentFlow already
+The plugin system must compose with, not duplicate, what Yanshi already
 ships:
 
 | Surface | Mechanism | Where it lives |
 | --- | --- | --- |
-| Built-in DAG nodes | `AsyncNode` impl + `NodeFactory` | `agentflow-nodes/src/factories/` |
-| External tools (agent-callable) | MCP stdio server | `agentflow-mcp` |
-| Reusable agent capability | Skill (TOML/Markdown manifest) | `agentflow-skills` |
-| Custom agent runtime | `AgentRuntime` trait | `agentflow-agents` |
+| Built-in DAG nodes | `AsyncNode` impl + `NodeFactory` | `yanshi-nodes/src/factories/` |
+| External tools (agent-callable) | MCP stdio server | `yanshi-mcp` |
+| Reusable agent capability | Skill (TOML/Markdown manifest) | `yanshi-skills` |
+| Custom agent runtime | `AgentRuntime` trait | `yanshi-agents` |
 
 Two consequences:
 
@@ -56,7 +56,7 @@ Two consequences:
   not reimplement MCP for the tool case — the new plugin boundary is for
   *DAG nodes* (and optionally for tools that don't fit MCP's request/response
   shape).
-- **`NodeRegistry` and `NodeFactory` (from `agentflow-nodes/src/factory_traits.rs`)
+- **`NodeRegistry` and `NodeFactory` (from `yanshi-nodes/src/factory_traits.rs`)
   already provide the in-process registration shape.** A plugin loader's job is
   to produce `NodeFactory` (or `AsyncNode`) instances from out-of-tree binaries
   and add them to that registry.
@@ -135,7 +135,7 @@ JSON-RPC 2.0 over stdio (or a unix socket), exchanging:
   response: outputs as `FlowValue` JSON, or error)
 - `plugin/shutdown` — graceful exit
 
-**Reference points**: AgentFlow's own MCP integration (`agentflow-mcp`),
+**Reference points**: Yanshi's own MCP integration (`yanshi-mcp`),
 Claude Code MCP servers, HashiCorp `go-plugin`, GitHub Copilot LSP-derived
 extensions, Terraform providers.
 
@@ -143,17 +143,17 @@ extensions, Terraform providers.
 | --- | --- |
 | ABI stability | Strong by construction. Wire format = JSON Schema'd JSON-RPC; versioned via `protocol_version` field. Plugin and host can be on different Rust/Go/Python/Node versions. |
 | Cross-platform | Excellent. Any OS that can spawn a child process and pipe stdio. |
-| Security sandbox | Medium. OS-level process isolation (separate address space, separate FDs). Capability constraints rely on OS sandbox (Apple `sandbox-exec`, Linux seccomp, NT job objects) — we already have this infrastructure in `agentflow-tools/src/sandbox/`. Re-using it for plugins is straightforward. |
+| Security sandbox | Medium. OS-level process isolation (separate address space, separate FDs). Capability constraints rely on OS sandbox (Apple `sandbox-exec`, Linux seccomp, NT job objects) — we already have this infrastructure in `yanshi-tools/src/sandbox/`. Re-using it for plugins is straightforward. |
 | Crash isolation | **Best.** Plugin segfault = `SIGCHLD` we observe; host stays up. Restart policy is straightforward. |
 | Call overhead | Highest of the three. JSON encode/decode + pipe IO + context switch: typically 100µs–1ms per call. For DAG nodes with sub-millisecond work this matters; for our actual use cases (LLM, HTTP, file IO) it's noise. |
 | Async story | Trivial. Host async-reads stdout, async-writes stdin; plugin's internal model is its own business. |
-| Ecosystem | Already proven inside AgentFlow via MCP. Same pattern, slightly different protocol verbs. |
+| Ecosystem | Already proven inside Yanshi via MCP. Same pattern, slightly different protocol verbs. |
 | Polyglot | Yes — any language that can read/write JSON to stdio. |
 | Dev experience | Easiest. Plugin author writes a normal program. Debug with `println!` to stderr. No special toolchain. |
 | Dependency cost (host) | Minimal — `tokio::process` (already used) + `serde_json` (already used). Zero new crates. |
 
 **Verdict**: Lowest engineering cost, highest crash safety, easiest contributor
-experience, reuses existing AgentFlow muscles (MCP transport, OS sandbox, tool
+experience, reuses existing Yanshi muscles (MCP transport, OS sandbox, tool
 permission policy). The cost is per-call latency that's only relevant for
 hot-path compute nodes (which are not what plugins are typically for).
 
@@ -187,12 +187,12 @@ latency.
 
 Rationale:
 
-1. **Latency budget**: AgentFlow node execution is dominated by LLM / HTTP /
+1. **Latency budget**: Yanshi node execution is dominated by LLM / HTTP /
    file IO (≥10 ms). A 200µs JSON-RPC round-trip is <2 % overhead. For the few
    compute-hot nodes (e.g., embedding postprocessing), built-in nodes remain
    the right answer.
-2. **Reuse**: `agentflow-mcp` already implements stdio JSON-RPC with
-   reconnect / timeout / latency benchmarks, and `agentflow-tools/src/sandbox/`
+2. **Reuse**: `yanshi-mcp` already implements stdio JSON-RPC with
+   reconnect / timeout / latency benchmarks, and `yanshi-tools/src/sandbox/`
    already implements macOS `sandbox-exec` and Linux seccomp wrappers. The
    plugin host is mostly composition of existing crates plus a new protocol.
 3. **Crash safety beats µs**: A plugin author writing a buggy node is the
@@ -217,7 +217,7 @@ Rationale:
 ### 6.1 Components
 
 ```
-agentflow-core/src/plugin/
+yanshi-core/src/plugin/
 ├── mod.rs              -- public surface
 ├── manifest.rs         -- `plugin.toml` parsing
 ├── protocol.rs         -- JSON-RPC request/response types
@@ -227,9 +227,9 @@ agentflow-core/src/plugin/
 ```
 
 ```
-agentflow-cli/src/commands/plugin/  (follow-up; not in PoC scope)
+yanshi-cli/src/commands/plugin/  (follow-up; not in PoC scope)
 ├── mod.rs
-├── install.rs   -- copy plugin dir into ~/.agentflow/plugins/
+├── install.rs   -- copy plugin dir into ~/.yanshi/plugins/
 ├── list.rs      -- list installed plugins + declared nodes
 ├── inspect.rs   -- print manifest + capabilities
 └── uninstall.rs
@@ -240,11 +240,11 @@ agentflow-cli/src/commands/plugin/  (follow-up; not in PoC scope)
 ```toml
 # Required
 [plugin]
-name        = "agentflow-plugin-image-ocr"
+name        = "yanshi-plugin-image-ocr"
 version     = "0.1.0"
 runtime     = "subprocess"        # "subprocess" (v1.0) | "wasm" (v1.1+)
 entrypoint  = "bin/ocr-plugin"    # path relative to manifest, or "$PATH" name
-protocol    = "agentflow.plugin/1"  # protocol version
+protocol    = "yanshi.plugin/1"  # protocol version
 
 # Required: enumerate node types this plugin contributes
 [[plugin.nodes]]
@@ -260,11 +260,11 @@ network     = []                  # empty = no outbound network
 processes   = []
 env_vars    = ["TESSDATA_PREFIX"]
 
-# Optional: signature (V3.5). When present, `agentflow plugin install`
+# Optional: signature (V3.5). When present, `yanshi plugin install`
 # verifies a real Ed25519 detached signature over the resolved
 # entrypoint file's bytes, loading the public key from
 # `<keys_dir>/<key_id>.pub` (--keys-dir, default
-# ~/.agentflow/marketplace-keys/, shared with `agentflow marketplace
+# ~/.yanshi/marketplace-keys/, shared with `yanshi marketplace
 # install/verify`). A present-but-invalid signature is a hard install
 # failure. Absent => unsigned; `production` profile denies unsigned
 # installs (PluginPolicy::require_signature).
@@ -274,7 +274,7 @@ key_id    = "publisher-a"
 value     = "<base64 detached signature>"
 
 # Optional (P3.4-PR.1): dry-run smoke invocation. When present, lets
-# `agentflow doctor` verify the entrypoint binary at least starts
+# `yanshi doctor` verify the entrypoint binary at least starts
 # cleanly without speaking the JSON-RPC protocol. Plugins are
 # expected to honor a fast, side-effect-free invocation that exits
 # `expected_exit` (default 0) well within the timeout.
@@ -294,7 +294,7 @@ expected_exit   = 0
 ```
 
 Why TOML, not YAML: matches `skill.toml` and `Cargo.toml` precedent in the
-workspace; `agentflow-skills` already builds against TOML manifests.
+workspace; `yanshi-skills` already builds against TOML manifests.
 
 ### 6.3 JSON-RPC protocol
 
@@ -331,7 +331,7 @@ plugin/event
 
 `FlowValue` is serialized exactly as it already is on the workflow checkpoint
 side (`{"type": "json"|"file"|"url", ...}`), so plugin authors and host share
-the existing schema in `agentflow-core::value`.
+the existing schema in `yanshi-core::value`.
 
 ### 6.4 Lifecycle
 
@@ -356,21 +356,21 @@ PluginHost::shutdown
 ```
 
 Crash recovery: if the plugin process dies mid-call, the in-flight
-`node/execute` returns `AgentFlowError::AsyncExecutionError { message: "plugin
+`node/execute` returns `YanshiError::AsyncExecutionError { message: "plugin
 '<name>' exited unexpectedly: <reason>" }`. The host marks the plugin
 "unavailable"; subsequent calls fail fast. A `--restart-on-crash` policy can
 respawn for `Idempotent` workflows but is opt-in.
 
 ### 6.5 Permission model
 
-Bridges to `agentflow-tools::sandbox` via the
-`agentflow_core::plugin::CommandPreparer` trait — `agentflow-core` itself
+Bridges to `yanshi-tools::sandbox` via the
+`yanshi_core::plugin::CommandPreparer` trait — `yanshi-core` itself
 takes no dependency on the platform sandbox crates, so an embedded host
 can opt into enforcement (or not) without dragging in libseccomp / a
 sandbox-exec profile generator. The CLI ships
-`OsSandboxPluginPreparer` (in `agentflow-cli/src/executor/plugin.rs`),
+`OsSandboxPluginPreparer` (in `yanshi-cli/src/executor/plugin.rs`),
 which is an adapter that reads a plugin's `[plugin.capabilities]` block,
-calls `agentflow_tools::sandbox::default_backend()`, and runs the
+calls `yanshi_tools::sandbox::default_backend()`, and runs the
 backend's `wrap_command` against the spawned subprocess.
 
 #### Translation rules
@@ -387,7 +387,7 @@ backend's `wrap_command` against the spawned subprocess.
 | `env_vars` non-empty        | `Capability::Env`     | No OS-level effect (recorded for audit only — neither macOS sandbox-exec nor Linux seccomp can scrub the env passed to `execve`). |
 
 Two permissive defaults match
-`agentflow_tools::builtin::shell::build_scope_from_policy`:
+`yanshi_tools::builtin::shell::build_scope_from_policy`:
 
 * The manifest directory is **always** added to `scope.read_paths` so the
   plugin executable can be resolved and exec'd.
@@ -402,11 +402,11 @@ Filesystem entries that fail to parse (e.g. `read:`) surface as
 #### Opt-in
 
 The CLI keeps the v0.3 PoC behaviour (no OS sandbox) by default. Set
-`AGENTFLOW_PLUGIN_SANDBOX=1` (any non-empty, non-`0` value) before
-`agentflow workflow run` to wrap plugin spawns in the platform backend:
+`YANSHI_PLUGIN_SANDBOX=1` (any non-empty, non-`0` value) before
+`yanshi workflow run` to wrap plugin spawns in the platform backend:
 
 ```bash
-AGENTFLOW_PLUGIN_SANDBOX=1 agentflow workflow run plugin_workflow.yml
+YANSHI_PLUGIN_SANDBOX=1 yanshi workflow run plugin_workflow.yml
 ```
 
 On macOS this materialises a `sandbox-exec` profile derived from the
@@ -421,7 +421,7 @@ through the new builder:
 
 ```rust
 use std::sync::Arc;
-use agentflow_core::plugin::PluginHost;
+use yanshi_core::plugin::PluginHost;
 
 let host = PluginHost::builder()
   .with_command_preparer(Arc::new(my_preparer))
@@ -431,7 +431,7 @@ let host = PluginHost::builder()
 
 This is the seam the CLI uses; it is also the seam custom hosts and
 tests use to record / reject preparer invocations without touching the
-real OS sandbox (see `agentflow-core/tests/plugin_poc.rs`).
+real OS sandbox (see `yanshi-core/tests/plugin_poc.rs`).
 
 #### Workflow-level allowlist
 
@@ -446,7 +446,7 @@ CommandPreparer wiring.)
 
 - Plugin logs (stderr or `plugin/log` notifications) → forwarded to `tracing`
   with `target = "plugin::{name}"`, automatically picked up by
-  `agentflow-tracing`.
+  `yanshi-tracing`.
 - `traceparent` from the active span is passed in `node/execute.params.span_context`.
   Plugin authors who care about distributed tracing can attach it to their own
   HTTP calls (host provides a small helper crate for Rust plugins).
@@ -474,7 +474,7 @@ manifest format and protocol surface, then add WASM without an SDK breakage.
 | 1 | Plugin → tool registration | A plugin should also be able to declare `[[plugin.tools]]` and have them flow into `ToolRegistry`. Out of PoC scope; design slot reserved in manifest. |
 | 2 | Streaming outputs | Some node types (LLM-like) want to stream tokens. JSON-RPC doesn't natively stream. Path: `node/execute_streaming` returns a notification stream `node/output_chunk` until `node/output_done`. Defer until a streaming built-in node exists. |
 | 3 | Hot reload | Plugin SIGHUP → re-read manifest, restart child. Useful for plugin authors; not v1.0 critical. |
-| 4 | Marketplace + signatures | ~~Owned by P2 #16.~~ Closed (V3.5): `[plugin.signature]` is a real, enforced Ed25519 verification over the entrypoint bytes at `agentflow plugin install` time — see `docs/TOOL_PERMISSIONS.md` and the schema example in §6.2 above. |
+| 4 | Marketplace + signatures | ~~Owned by P2 #16.~~ Closed (V3.5): `[plugin.signature]` is a real, enforced Ed25519 verification over the entrypoint bytes at `yanshi plugin install` time — see `docs/TOOL_PERMISSIONS.md` and the schema example in §6.2 above. |
 | 5 | Plugin-to-plugin calls | Forbidden in v1.0. All inter-plugin coordination goes through workflow DAG edges. |
 
 ---
@@ -484,11 +484,11 @@ manifest format and protocol surface, then add WASM without an SDK breakage.
 The accompanying PoC demonstrates the **smallest end-to-end loop** that proves
 the chosen path is viable:
 
-- `agentflow-core/src/plugin/` — manifest, JSON-RPC protocol, host, node
+- `yanshi-core/src/plugin/` — manifest, JSON-RPC protocol, host, node
   adapter, registry.
-- `agentflow-core/examples/plugins/echo_plugin/` — standalone cargo binary
+- `yanshi-core/examples/plugins/echo_plugin/` — standalone cargo binary
   that registers one node type (`echo_uppercase`).
-- `agentflow-core/examples/plugin_host_demo.rs` — host-side demo: load
+- `yanshi-core/examples/plugin_host_demo.rs` — host-side demo: load
   manifest, register, execute, assert result.
 - Integration test: spawn the example plugin, run `node/execute`, verify
   output, verify clean shutdown, verify crash isolation (kill plugin
@@ -496,7 +496,7 @@ the chosen path is viable:
 
 Out of PoC scope (deferred to follow-up tasks within #12):
 
-- `agentflow plugin install/list/inspect/uninstall` CLI.
+- `yanshi plugin install/list/inspect/uninstall` CLI.
 - OS sandbox enforcement (the `SandboxedCommand` integration is mechanical
   but adds platform branches; first prove the protocol).
 - Signature verification.
@@ -506,7 +506,7 @@ Out of PoC scope (deferred to follow-up tasks within #12):
 
 Once the host is in place, plugin nodes are addressable from `workflow.yml`
 via the dedicated `plugin` node type. The CLI exposes this behind the
-`plugin` cargo feature on `agentflow-cli` so the default build stays free
+`plugin` cargo feature on `yanshi-cli` so the default build stays free
 of the subprocess runtime.
 
 ```yaml
@@ -523,7 +523,7 @@ nodes:
 Resolution rules:
 
 - `manifest` is required; relative paths resolve against the current working
-  directory of the `agentflow workflow run` invocation.
+  directory of the `yanshi workflow run` invocation.
 - `node_type` is required and must match one of the `[[plugin.nodes]]` types
   declared in the manifest.
 - All other `parameters` keys (other than `manifest` and `node_type`) become
@@ -543,11 +543,11 @@ Lifecycle inside the CLI:
 Build and run:
 
 ```bash
-cargo build -p agentflow-core --features plugin --bin agentflow-echo-plugin
-cargo run  -p agentflow-cli  --features plugin -- workflow run plugin_workflow.yml
+cargo build -p yanshi-core --features plugin --bin yanshi-echo-plugin
+cargo run  -p yanshi-cli  --features plugin -- workflow run plugin_workflow.yml
 ```
 
-Failure modes surface as `AgentFlowError`:
+Failure modes surface as `YanshiError`:
 
 - Missing/invalid manifest path → `NodeInputError` at execute time.
 - Manifest parse / protocol mismatch / handshake failure →
@@ -557,16 +557,16 @@ Failure modes surface as `AgentFlowError`:
 
 ## 10. CLI reference
 
-`agentflow plugin` ships behind the `plugin` cargo feature on
-`agentflow-cli`. It manages plugins on disk only — none of the four verbs
+`yanshi plugin` ships behind the `plugin` cargo feature on
+`yanshi-cli`. It manages plugins on disk only — none of the four verbs
 spawn the plugin subprocess. The `workflow run` path (§9) is the only thing
 that talks JSON-RPC to plugins.
 
-The default plugins root is `~/.agentflow/plugins/`. Each verb accepts
+The default plugins root is `~/.yanshi/plugins/`. Each verb accepts
 `--dir <path>` to override it (used by tests and by users with
 non-standard layouts).
 
-### `agentflow plugin install <source-dir> [--dir <plugins-dir>] [--force]`
+### `yanshi plugin install <source-dir> [--dir <plugins-dir>] [--force]`
 
 Validates the manifest at `<source-dir>/plugin.toml`, then copies the
 whole source tree into `<plugins-dir>/<name>/`. Refuses to copy if the
@@ -577,7 +577,7 @@ manifest's declared entrypoint is missing in the source — that is
 common for plugins that build the entrypoint via `cargo build` in a
 separate step.
 
-### `agentflow plugin list [--dir <plugins-dir>]`
+### `yanshi plugin list [--dir <plugins-dir>]`
 
 Scans every direct subdirectory of `<plugins-dir>` that contains a
 `plugin.toml`. For each one prints `name@version`, runtime, the
@@ -586,7 +586,7 @@ and a one-line capability summary (`fs:N net:N proc:N env:N`).
 Invalid manifests are surfaced as `❌ <path> — <error>` so a broken
 install doesn't hide the rest.
 
-### `agentflow plugin inspect <plugin-dir-or-manifest>`
+### `yanshi plugin inspect <plugin-dir-or-manifest>`
 
 Accepts either a plugin directory or a `plugin.toml` path directly.
 Prints the full manifest in human form: name / version / runtime /
@@ -596,7 +596,7 @@ status, every declared node, and the four capability lists. Reports
 command never spawns the plugin; use it to diagnose a misbehaving
 install before reaching for `workflow run`.
 
-### `agentflow plugin uninstall <name> [--dir <plugins-dir>] [--force]`
+### `yanshi plugin uninstall <name> [--dir <plugins-dir>] [--force]`
 
 Removes `<plugins-dir>/<name>/`. Refuses to remove a directory that
 does not contain a `plugin.toml` (so a typoed `<name>` cannot wipe an
@@ -607,10 +607,10 @@ plugins succeed silently rather than erroring.
 
 ```bash
 # Build the in-tree reference plugin and install it under the default
-# plugins root (~/.agentflow/plugins/).
-cargo build -p agentflow-core --features plugin --bin agentflow-echo-plugin
+# plugins root (~/.yanshi/plugins/).
+cargo build -p yanshi-core --features plugin --bin yanshi-echo-plugin
 mkdir -p ./echo-plugin/bin
-cp target/debug/agentflow-echo-plugin ./echo-plugin/bin/echo-plugin
+cp target/debug/yanshi-echo-plugin ./echo-plugin/bin/echo-plugin
 cat > ./echo-plugin/plugin.toml <<'TOML'
 [plugin]
 name = "echo-plugin"
@@ -623,8 +623,8 @@ type = "echo_uppercase"
 description = "Uppercase a JSON string."
 TOML
 
-agentflow plugin install ./echo-plugin
-agentflow plugin list
-agentflow plugin inspect ~/.agentflow/plugins/echo-plugin
-agentflow plugin uninstall echo-plugin
+yanshi plugin install ./echo-plugin
+yanshi plugin list
+yanshi plugin inspect ~/.yanshi/plugins/echo-plugin
+yanshi plugin uninstall echo-plugin
 ```

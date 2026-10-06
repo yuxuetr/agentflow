@@ -2,36 +2,36 @@ services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: agentflow
-      POSTGRES_USER: agentflow
-      POSTGRES_PASSWORD: agentflow
+      POSTGRES_DB: yanshi
+      POSTGRES_USER: yanshi
+      POSTGRES_PASSWORD: yanshi
     ports:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U agentflow -d agentflow"]
+      test: ["CMD-SHELL", "pg_isready -U yanshi -d yanshi"]
       interval: 5s
       timeout: 3s
       retries: 20
 
-  agentflow-server:
+  yanshi-server:
     build:
       context: .
       args:
-        PACKAGE: agentflow-server
-        BIN: agentflow-server
+        PACKAGE: yanshi-server
+        BIN: yanshi-server
     environment:
-      DATABASE_URL: postgres://agentflow:agentflow@postgres:5432/agentflow
+      DATABASE_URL: postgres://yanshi:yanshi@postgres:5432/yanshi
       PORT: "3000"
       RUST_LOG: info
-      # U1.2: AGENTFLOW_SECURITY_PROFILE defaults to `local` when unset.
+      # U1.2: YANSHI_SECURITY_PROFILE defaults to `local` when unset.
       # Set this to `production` for any deployment reachable by other
       # users/hosts: CORS defaults to an explicit origin allow-list
       # instead of permissive, and (if you also run a worker gRPC
       # control plane) worker admission becomes fail-closed. See
       # docs/DEPLOYMENT.md § Security profile / docs/SECURITY_PROFILES.md.
-      # AGENTFLOW_SECURITY_PROFILE: "production"
+      # YANSHI_SECURITY_PROFILE: "production"
       # V3.1: bearer auth for /v1/* routes. Because PORT above makes the
       # container bind 0.0.0.0 (never loopback-only), the gateway now
       # *refuses to start* under every profile — not just `production`
@@ -42,11 +42,11 @@ services:
       # zero-config local trial. Replace it with a real, private value
       # before this compose stack (or its published `3000:3000` port)
       # is reachable by anyone but you.
-      AGENTFLOW_API_TOKEN: "local-dev-change-me"
+      YANSHI_API_TOKEN: "local-dev-change-me"
       # Path to a skills.index.toml on the container's filesystem. Mount
       # the host directory under /skills if you want skill listing /
       # invocation. Leaving this unset just means GET /v1/skills returns [].
-      # AGENTFLOW_SKILLS_INDEX: "/skills/skills.index.toml"
+      # YANSHI_SKILLS_INDEX: "/skills/skills.index.toml"
     # volumes:
     #   - ./skills:/skills:ro
     ports:

@@ -1,4 +1,4 @@
-# AgentFlow 下一阶段开发实施计划
+# Yanshi 下一阶段开发实施计划
 
 最后更新: 2026-05-09
 
@@ -16,12 +16,12 @@
 
 复评结论:
 
-- 当前 workspace 包含 `agentflow-core`、`agentflow-nodes`、`agentflow-llm`、`agentflow-tools`、`agentflow-mcp`、`agentflow-rag`、`agentflow-memory`、`agentflow-agents`、`agentflow-skills`、`agentflow-cli`、`agentflow-tracing`、`agentflow-viz`、`agentflow-db`、`agentflow-server`、`agentflow-worker`，另有 `agentflow-ui`。
+- 当前 workspace 包含 `yanshi-core`、`yanshi-nodes`、`yanshi-llm`、`yanshi-tools`、`yanshi-mcp`、`yanshi-rag`、`yanshi-memory`、`yanshi-agents`、`yanshi-skills`、`yanshi-cli`、`yanshi-tracing`、`yanshi-viz`、`yanshi-db`、`yanshi-server`、`yanshi-worker`，另有 `yanshi-ui`。
 - 默认 feature 下已验证:
 
 ```bash
-cargo check --workspace --all-targets --target-dir /tmp/agentflow-target
-cargo test --workspace --all-targets --target-dir /tmp/agentflow-target
+cargo check --workspace --all-targets --target-dir /tmp/yanshi-target
+cargo test --workspace --all-targets --target-dir /tmp/yanshi-target
 ```
 
 - 总体判断:
@@ -46,8 +46,8 @@ cargo test --workspace --all-targets --target-dir /tmp/agentflow-target
 
 目标:
 
-- 让 `agentflow-server` 的 `/v1/runs` 真正执行 workflow，而不是停留在 stub executor。
-- 让 `~/.agentflow/models.yml`、历史 `~/.agentflow/models.yaml`、`~/.agentflow/.env` 的配置约定兼容稳定。
+- 让 `yanshi-server` 的 `/v1/runs` 真正执行 workflow，而不是停留在 stub executor。
+- 让 `~/.yanshi/models.yml`、历史 `~/.yanshi/models.yaml`、`~/.yanshi/.env` 的配置约定兼容稳定。
 - 让 server、CLI、live tests 都使用同一套模型配置加载逻辑。
 
 ### P0.1 配置文件兼容性
@@ -56,8 +56,8 @@ cargo test --workspace --all-targets --target-dir /tmp/agentflow-target
 
 问题:
 
-- 当前代码主路径是 `~/.agentflow/models.yml`。
-- 早期项目约定可能使用 `~/.agentflow/models.yaml`。
+- 当前代码主路径是 `~/.yanshi/models.yml`。
+- 早期项目约定可能使用 `~/.yanshi/models.yaml`。
 - live provider tests 需要明确、可覆盖、可诊断的配置加载优先级。
 
 方案:
@@ -65,49 +65,49 @@ cargo test --workspace --all-targets --target-dir /tmp/agentflow-target
 - 增加模型配置解析优先级:
 
 ```text
-AGENTFLOW_MODELS_CONFIG
--> ~/.agentflow/models.yml
--> ~/.agentflow/models.yaml
+YANSHI_MODELS_CONFIG
+-> ~/.yanshi/models.yml
+-> ~/.yanshi/models.yaml
 -> built-in default_models.yml
 ```
 
-- 保持 `~/.agentflow/.env` 作为默认本地 API Key 文件。
+- 保持 `~/.yanshi/.env` 作为默认本地 API Key 文件。
 - 如果 `models.yml` 和 `models.yaml` 同时存在，使用 `models.yml` 并给出 warning。
-- `agentflow config show`、`agentflow config validate`、`agentflow doctor` 显示实际加载的配置文件路径。
+- `yanshi config show`、`yanshi config validate`、`yanshi doctor` 显示实际加载的配置文件路径。
 
 子任务:
 
-- [x] 在 `agentflow-llm` 配置初始化路径中支持 `AGENTFLOW_MODELS_CONFIG`。
+- [x] 在 `yanshi-llm` 配置初始化路径中支持 `YANSHI_MODELS_CONFIG`。
 - [x] 支持 `models.yaml` fallback。
 - [x] CLI config/doctor 输出实际配置来源。
 - [x] 增加测试覆盖:
   - [x] 只存在 `models.yml`。
   - [x] 只存在 `models.yaml`。
   - [x] 两者同时存在。
-  - [x] `AGENTFLOW_MODELS_CONFIG` 覆盖默认路径。
+  - [x] `YANSHI_MODELS_CONFIG` 覆盖默认路径。
   - [x] `.env` 中 API key 可被加载但不会在输出中泄露。
 - [x] 更新 `docs/CONFIGURATION.md`、`docs/SECRET_MANAGEMENT.md`、`docs/LLM_PROVIDERS_MATRIX.md`。
 
 涉及文件:
 
-- `agentflow-llm/src/lib.rs`
-- `agentflow-cli/src/commands/config/*`
-- `agentflow-cli/src/commands/doctor.rs`
+- `yanshi-llm/src/lib.rs`
+- `yanshi-cli/src/commands/config/*`
+- `yanshi-cli/src/commands/doctor.rs`
 - `docs/CONFIGURATION.md`
 - `docs/SECRET_MANAGEMENT.md`
 
 验证:
 
 ```bash
-cargo test -p agentflow-llm -p agentflow-cli --target-dir /tmp/agentflow-target
-agentflow config validate
-agentflow doctor --format json
+cargo test -p yanshi-llm -p yanshi-cli --target-dir /tmp/yanshi-target
+yanshi config validate
+yanshi doctor --format json
 ```
 
 验收标准:
 
-- 老用户保留 `~/.agentflow/models.yaml` 也能正常运行。
-- 新用户继续使用 `~/.agentflow/models.yml`。
+- 老用户保留 `~/.yanshi/models.yaml` 也能正常运行。
+- 新用户继续使用 `~/.yanshi/models.yml`。
 - 所有命令都能说清楚实际加载了哪个配置文件。
 - API Key 只从环境或 `.env` 读取，不写入模型配置。
 
@@ -117,7 +117,7 @@ agentflow doctor --format json
 
 问题:
 
-- `agentflow-server` 已经有 run routes、DB、SSE、event broker、Web UI，但默认 `RunExecutor` 仍偏 stub。
+- `yanshi-server` 已经有 run routes、DB、SSE、event broker、Web UI，但默认 `RunExecutor` 仍偏 stub。
 - `/v1/runs` 需要真正执行 workflow，才能成为平台入口。
 
 方案:
@@ -125,17 +125,17 @@ agentflow doctor --format json
 - 新增 `FlowRunExecutor`:
   - 解析 request 中的 workflow YAML。
   - 复用 CLI config-first executor 或抽取共享 executor 层。
-  - 调用 `agentflow-core::Flow` 执行。
+  - 调用 `yanshi-core::Flow` 执行。
   - 将 `WorkflowEvent` 经 `WorkflowEventListener` 写入 DB 并推送 SSE。
   - 更新 run 状态: `queued -> running -> succeeded/failed`。
 
 子任务:
 
-- [x] 梳理 `agentflow-cli/src/executor` 与 server 可复用边界。
+- [x] 梳理 `yanshi-cli/src/executor` 与 server 可复用边界。
 - [x] 将 config-first workflow 构建逻辑抽成 library 级 API，避免 server 依赖 CLI main 层。
 - [x] 实现 `FlowRunExecutor`。
 - [x] 支持 `run_dir` 策略:
-  - [x] server 默认使用 `AGENTFLOW_RUN_DIR` 或 DB/run-id 派生目录。
+  - [x] server 默认使用 `YANSHI_RUN_DIR` 或 DB/run-id 派生目录。
   - [x] 每个 run 的 artifacts 路径可查询。
 - [x] 将 workflow event 持久化到 `events` 表。
 - [x] 将 node 状态映射到 `/v1/runs/{id}/graph`。
@@ -143,17 +143,17 @@ agentflow doctor --format json
 
 涉及文件:
 
-- `agentflow-server/src/runs.rs`
-- `agentflow-server/src/events_stream.rs`
-- `agentflow-cli/src/executor/*`
-- `agentflow-db/src/repo.rs`
-- `agentflow-core/src/events.rs`
+- `yanshi-server/src/runs.rs`
+- `yanshi-server/src/events_stream.rs`
+- `yanshi-cli/src/executor/*`
+- `yanshi-db/src/repo.rs`
+- `yanshi-core/src/events.rs`
 
 验证:
 
 ```bash
-cargo test -p agentflow-server -p agentflow-cli --target-dir /tmp/agentflow-target
-cargo run -p agentflow-server
+cargo test -p yanshi-server -p yanshi-cli --target-dir /tmp/yanshi-target
+cargo run -p yanshi-server
 ```
 
 手动验收:
@@ -211,15 +211,15 @@ POST /v1/runs/{id}:cancel
 
 涉及文件:
 
-- `agentflow-server/src/runs.rs`
-- `agentflow-core/src/flow.rs`
-- `agentflow-agents/src/runtime.rs`
-- `agentflow-db/src/models.rs`
+- `yanshi-server/src/runs.rs`
+- `yanshi-core/src/flow.rs`
+- `yanshi-agents/src/runtime.rs`
+- `yanshi-db/src/models.rs`
 
 验证:
 
 ```bash
-cargo test -p agentflow-server -p agentflow-core -p agentflow-agents --target-dir /tmp/agentflow-target
+cargo test -p yanshi-server -p yanshi-core -p yanshi-agents --target-dir /tmp/yanshi-target
 ```
 
 ---
@@ -243,7 +243,7 @@ cargo test -p agentflow-server -p agentflow-core -p agentflow-agents --target-di
 
 方案:
 
-- 建立 `agentflow-tools/tests/sandbox_matrix.rs` 或拆分为平台文件。
+- 建立 `yanshi-tools/tests/sandbox_matrix.rs` 或拆分为平台文件。
 - 覆盖:
   - path traversal。
   - symlink / hardlink escape。
@@ -262,20 +262,20 @@ cargo test -p agentflow-server -p agentflow-core -p agentflow-agents --target-di
 - [x] Linux sandbox 测试扩展。
 - [x] Noop sandbox 降级测试: 必须输出 warning/doctor risk。
 - [x] `ToolPolicyDecision` 记录 deny reason。
-- [x] `agentflow doctor` 增加 sandbox capability 报告。
+- [x] `yanshi doctor` 增加 sandbox capability 报告。
 
 涉及文件:
 
-- `agentflow-tools/src/sandbox/*`
-- `agentflow-tools/tests/sandbox_*.rs`
-- `agentflow-cli/src/commands/doctor.rs`
+- `yanshi-tools/src/sandbox/*`
+- `yanshi-tools/tests/sandbox_*.rs`
+- `yanshi-cli/src/commands/doctor.rs`
 - `docs/TOOL_PERMISSIONS.md`
 
 验证:
 
 ```bash
-cargo test -p agentflow-tools --target-dir /tmp/agentflow-target
-agentflow doctor --format json
+cargo test -p yanshi-tools --target-dir /tmp/yanshi-target
+yanshi doctor --format json
 ```
 
 验收标准:
@@ -309,20 +309,20 @@ agentflow doctor --format json
 - [x] 扩展 marketplace CLI tests。
 - [x] 扩展 remote marketplace cache tests。
 - [x] 增加 plugin install 安全校验。
-- [x] `agentflow marketplace verify --strict` 设计或实现。
+- [x] `yanshi marketplace verify --strict` 设计或实现。
 - [x] 文档写明签名策略与 bootstrap checksum verifier 边界。
 
 涉及文件:
 
-- `agentflow-skills/src/remote_marketplace.rs`
-- `agentflow-cli/src/commands/marketplace.rs`
-- `agentflow-cli/tests/marketplace_cli_tests.rs`
+- `yanshi-skills/src/remote_marketplace.rs`
+- `yanshi-cli/src/commands/marketplace.rs`
+- `yanshi-cli/tests/marketplace_cli_tests.rs`
 - `docs/MARKETPLACE.md`
 
 验证:
 
 ```bash
-cargo test -p agentflow-skills -p agentflow-cli --target-dir /tmp/agentflow-target
+cargo test -p yanshi-skills -p yanshi-cli --target-dir /tmp/yanshi-target
 ```
 
 验收标准:
@@ -339,7 +339,7 @@ cargo test -p agentflow-skills -p agentflow-cli --target-dir /tmp/agentflow-targ
 
 - 使用真实 API 验证文本、视觉、多模态、音频、图像生成、视频生成 provider 行为。
 - live tests 默认不进入普通 CI，必须显式 opt-in。
-- 所有 key 只从 `~/.agentflow/.env` 或环境变量读取。
+- 所有 key 只从 `~/.yanshi/.env` 或环境变量读取。
 
 ### P2.1 Live Test 基础设施
 
@@ -350,20 +350,20 @@ cargo test -p agentflow-skills -p agentflow-cli --target-dir /tmp/agentflow-targ
 - 环境变量开关:
 
 ```bash
-AGENTFLOW_LIVE_LLM_TESTS=1
-AGENTFLOW_LIVE_MULTIMODAL_TESTS=1
-AGENTFLOW_LIVE_IMAGE_TESTS=1
-AGENTFLOW_LIVE_AUDIO_TESTS=1
-AGENTFLOW_LIVE_VIDEO_TESTS=1
+YANSHI_LIVE_LLM_TESTS=1
+YANSHI_LIVE_MULTIMODAL_TESTS=1
+YANSHI_LIVE_IMAGE_TESTS=1
+YANSHI_LIVE_AUDIO_TESTS=1
+YANSHI_LIVE_VIDEO_TESTS=1
 ```
 
 - Provider-specific model override:
 
 ```bash
-AGENTFLOW_LIVE_STEPFUN_TEXT_MODEL=...
-AGENTFLOW_LIVE_GLM_TEXT_MODEL=...
-AGENTFLOW_LIVE_STEPFUN_VISION_MODEL=...
-AGENTFLOW_LIVE_GLM_VISION_MODEL=...
+YANSHI_LIVE_STEPFUN_TEXT_MODEL=...
+YANSHI_LIVE_GLM_TEXT_MODEL=...
+YANSHI_LIVE_STEPFUN_VISION_MODEL=...
+YANSHI_LIVE_GLM_VISION_MODEL=...
 ```
 
 - 默认:
@@ -374,22 +374,22 @@ AGENTFLOW_LIVE_GLM_VISION_MODEL=...
 子任务:
 
 - [x] 统一 live test helper。
-- [x] 从 `AgentFlow::init()` 加载 `~/.agentflow/.env` 和 models config。
+- [x] 从 `Yanshi::init()` 加载 `~/.yanshi/.env` 和 models config。
 - [x] 增加 provider capability probing。
 - [x] 增加 skip reason 输出。
 - [x] 增加费用/速率限制文档。
 
 涉及文件:
 
-- `agentflow-llm/tests/provider_consistency_live.rs`
-- `agentflow-llm/src/providers/*`
+- `yanshi-llm/tests/provider_consistency_live.rs`
+- `yanshi-llm/src/providers/*`
 - `docs/LLM_PROVIDERS_MATRIX.md`
 
 验证:
 
 ```bash
-cargo test -p agentflow-llm --test provider_consistency_live --target-dir /tmp/agentflow-target
-AGENTFLOW_LIVE_LLM_TESTS=1 cargo test -p agentflow-llm --test provider_consistency_live --target-dir /tmp/agentflow-target
+cargo test -p yanshi-llm --test provider_consistency_live --target-dir /tmp/yanshi-target
+YANSHI_LIVE_LLM_TESTS=1 cargo test -p yanshi-llm --test provider_consistency_live --target-dir /tmp/yanshi-target
 ```
 
 ### P2.2 StepFun Live Tests
@@ -427,8 +427,8 @@ AGENTFLOW_LIVE_LLM_TESTS=1 cargo test -p agentflow-llm --test provider_consisten
 - [x] OpenAI-compatible chat path。
 - [x] tool calling，如果支持。
 - [x] 视觉理解，如果支持。
-- [x] 图像生成，如果支持（BigModel 服务支持，当前 AgentFlow GLM profile 未接入，矩阵标记 `unsupported`）。
-- [x] 音频或视频能力，如果当前 GLM 服务支持（BigModel 服务支持独立音频/视频端点，当前 AgentFlow GLM profile 未接入，矩阵标记 `unsupported`）。
+- [x] 图像生成，如果支持（BigModel 服务支持，当前 Yanshi GLM profile 未接入，矩阵标记 `unsupported`）。
+- [x] 音频或视频能力，如果当前 GLM 服务支持（BigModel 服务支持独立音频/视频端点，当前 Yanshi GLM profile 未接入，矩阵标记 `unsupported`）。
 
 验收标准:
 
@@ -441,7 +441,7 @@ AGENTFLOW_LIVE_LLM_TESTS=1 cargo test -p agentflow-llm --test provider_consisten
 
 请准备:
 
-- [x] `~/.agentflow/.env` 中的真实 API Key:
+- [x] `~/.yanshi/.env` 中的真实 API Key:
 
 ```bash
 STEPFUN_API_KEY=...
@@ -472,7 +472,7 @@ GOOGLE_API_KEY=...
 建议本地配置样例:
 
 ```yaml
-# ~/.agentflow/models.yml 或 ~/.agentflow/models.yaml
+# ~/.yanshi/models.yml 或 ~/.yanshi/models.yaml
 providers:
   stepfun:
     api_key_env: STEPFUN_API_KEY
@@ -505,7 +505,7 @@ models:
 
 问题:
 
-- 当前 `WorkerProtocol`、`WorkerControlPlane`、`agentflow-worker` 已存在。
+- 当前 `WorkerProtocol`、`WorkerControlPlane`、`yanshi-worker` 已存在。
 - 远程 tonic adapter 和真实 DAG scheduler 接入尚未完成。
 
 方案:
@@ -526,14 +526,14 @@ models:
 
 涉及文件:
 
-- `agentflow-server/src/scheduler/*`
-- `agentflow-worker/src/*`
+- `yanshi-server/src/scheduler/*`
+- `yanshi-worker/src/*`
 - `docs/DISTRIBUTED.md`
 
 验证:
 
 ```bash
-cargo test -p agentflow-server -p agentflow-worker --target-dir /tmp/agentflow-target
+cargo test -p yanshi-server -p yanshi-worker --target-dir /tmp/yanshi-target
 ```
 
 验收标准:
@@ -588,16 +588,16 @@ cargo test -p agentflow-server -p agentflow-worker --target-dir /tmp/agentflow-t
 
 涉及文件:
 
-- `agentflow-ui/src/main.tsx`
-- `agentflow-ui/src/styles.css`
-- `agentflow-server/src/ui.rs`
+- `yanshi-ui/src/main.tsx`
+- `yanshi-ui/src/styles.css`
+- `yanshi-server/src/ui.rs`
 - `docs/WEB_UI.md`
 
 验证:
 
 ```bash
-cargo test -p agentflow-server ui::tests --target-dir /tmp/agentflow-target
-cd agentflow-ui && npm test
+cargo test -p yanshi-server ui::tests --target-dir /tmp/yanshi-target
+cd yanshi-ui && npm test
 ```
 
 ---
@@ -698,7 +698,7 @@ cd agentflow-ui && npm test
 
 请准备以下信息，但不要提交到仓库:
 
-- [x] 本地 `~/.agentflow/.env`。
+- [x] 本地 `~/.yanshi/.env`。
 - [x] StepFun API Key。
 - [x] GLM API Key。
 - [x] 每个 provider 的 base URL。
@@ -717,8 +717,8 @@ cd agentflow-ui && npm test
 本地建议:
 
 ```bash
-chmod 700 ~/.agentflow
-chmod 600 ~/.agentflow/.env ~/.agentflow/models.yml 2>/dev/null || true
+chmod 700 ~/.yanshi
+chmod 600 ~/.yanshi/.env ~/.yanshi/models.yml 2>/dev/null || true
 ```
 
 ## 质量门禁
@@ -728,11 +728,11 @@ chmod 600 ~/.agentflow/.env ~/.agentflow/models.yml 2>/dev/null || true
 ```bash
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --all-targets --target-dir /tmp/agentflow-target
+cargo test --workspace --all-targets --target-dir /tmp/yanshi-target
 ```
 
 涉及 live provider 的任务默认不进入普通 CI，使用显式 opt-in:
 
 ```bash
-AGENTFLOW_LIVE_LLM_TESTS=1 cargo test -p agentflow-llm --test provider_consistency_live --target-dir /tmp/agentflow-target
+YANSHI_LIVE_LLM_TESTS=1 cargo test -p yanshi-llm --test provider_consistency_live --target-dir /tmp/yanshi-target
 ```

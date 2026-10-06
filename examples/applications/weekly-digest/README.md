@@ -28,11 +28,11 @@ schedule (weekly Mon 09:00) →
 | --- | --- |
 | Email provider | SendGrid / Mailgun (HTTPS API) or raw SMTP |
 | Persistent RAG index | Pre-existing — e.g. A3's output |
-| Scheduling | OS cron, AgentFlow's `/schedule` system, or systemd timer |
+| Scheduling | OS cron, Yanshi's `/schedule` system, or systemd timer |
 
-## What this validates in AgentFlow
+## What this validates in Yanshi
 
-- Long-running scheduled execution (not just interactive `agentflow run`)
+- Long-running scheduled execution (not just interactive `yanshi run`)
 - RAG `search` with date / time-range filters
 - HTTP node calling an external API with bearer auth
 - Failure tolerance: retry + last-success timestamp persistence

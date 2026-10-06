@@ -21,7 +21,7 @@ sequenceDiagram
     LLM1-->>Flow: Return prepared prompt
     
     Flow->>LLM1: exec_async(prep_result)
-    LLM1->>Moonshot: AgentFlow::model("moonshot-v1-8k")<br/>.prompt("You are a helpful assistant...")<br/>.execute()
+    LLM1->>Moonshot: Yanshi::model("moonshot-v1-8k")<br/>.prompt("You are a helpful assistant...")<br/>.execute()
     Moonshot-->>LLM1: "Deep Learning is a subset of ML<br/>that uses neural networks..."
     LLM1-->>Flow: LLM response object
     
@@ -65,7 +65,7 @@ sequenceDiagram
     Terminal-->>Flow: Return prepared prompt
     
     Flow->>Terminal: exec_async(prep_result)
-    Terminal->>Moonshot: AgentFlow::model("moonshot-v1-8k")<br/>.prompt("Summarize previous response...")<br/>.execute()
+    Terminal->>Moonshot: Yanshi::model("moonshot-v1-8k")<br/>.prompt("Summarize previous response...")<br/>.execute()
     Moonshot-->>Terminal: "Deep Learning uses neural networks<br/>to learn patterns."
     Terminal-->>Flow: Final LLM response
     

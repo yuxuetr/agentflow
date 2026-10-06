@@ -3,7 +3,7 @@ import json
 import sys
 
 
-PLUGIN_NAME = "agentflow-data-transform-plugin"
+PLUGIN_NAME = "yanshi-data-transform-plugin"
 PLUGIN_VERSION = "1.0.0"
 NODES = [
   {

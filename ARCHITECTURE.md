@@ -1,4 +1,4 @@
-# AgentFlow V2 Architecture
+# Yanshi V2 Architecture
 
 > Historical reference: this document captured the early V2 refactor's
 > design intent (layered SDK/CLI/plugin vision) before most of the
@@ -6,14 +6,14 @@
 > architecture (L0–L4, `cargo xtask check-arch`), see `docs/ARCHITECTURE.md`
 > and `CLAUDE.md`; for current status, see `docs/CURRENT_STATUS.md`.
 
-This document outlines the core architectural principles and design of AgentFlow V2. It serves as the foundational guide for the refactoring and future development of the framework.
+This document outlines the core architectural principles and design of Yanshi V2. It serves as the foundational guide for the refactoring and future development of the framework.
 
 ## 1. Core Philosophy: A Layered, Extensible Framework
 
-AgentFlow is designed as a layered framework to cater to different user groups, from core framework developers to non-technical users.
+Yanshi is designed as a layered framework to cater to different user groups, from core framework developers to non-technical users.
 
-- **Layer 1: Core SDK (Code-First)**: A comprehensive Rust library (`agentflow-core`, etc.) providing maximum power, performance, and type-safety for developers to create custom nodes or embed AgentFlow into larger applications.
-- **Layer 2: Runtime & CLI (Config-First)**: A standalone binary (`agentflow-cli`) that executes workflows defined in declarative YAML files. This layer prioritizes ease of use, dynamic execution, and accessibility for non-programmers.
+- **Layer 1: Core SDK (Code-First)**: A comprehensive Rust library (`yanshi-core`, etc.) providing maximum power, performance, and type-safety for developers to create custom nodes or embed Yanshi into larger applications.
+- **Layer 2: Runtime & CLI (Config-First)**: A standalone binary (`yanshi-cli`) that executes workflows defined in declarative YAML files. This layer prioritizes ease of use, dynamic execution, and accessibility for non-programmers.
 - **Layer 3: Plugin Ecosystem (Hybrid)**: The synergy of the first two layers. Developers use the Core SDK to build and distribute custom node packages (plugins), which can then be used by anyone in their YAML workflows.
 
 ## 2. DataFlow and State Management

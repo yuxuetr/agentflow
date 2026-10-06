@@ -1,7 +1,7 @@
-# AgentFlow 项目深度评估报告 (2026-08-05)
+# Yanshi 项目深度评估报告 (2026-08-05)
 
 - 评估日期：2026-08-05
-- 评估范围：workspace 全部 **24 个 `agentflow-*` Rust crate + `xtask`**（共 25 个成员）+ `agentflow-ui`（TypeScript SPA），约 **20 万行 Rust**（含测试）+ ~5.3K 行 TS。
+- 评估范围：workspace 全部 **24 个 `yanshi-*` Rust crate + `xtask`**（共 25 个成员）+ `yanshi-ui`（TypeScript SPA），约 **20 万行 Rust**（含测试）+ ~5.3K 行 TS。
 - 评估方法：**6 个独立 agent 并行只读审计**（按 L1 执行内核 / L2 LLM·工具·MCP / L2 RAG·记忆·节点·配置 / L3 Agent 框架 / L4 服务平台 / CLI·示例·文档 分工，互不共享结论），**外加编排者在本机实跑** `cargo test --workspace` / `cargo clippy` / `cargo fmt` / `cargo tree` 做证据校验。子代理只读源码不跑 cargo；编排者补齐编译期与运行期证据，并**逐行复核了 5 个被列为 P0/P1 的关键缺陷**。
 - 与既往评估关系：延续 `docs/archive/PROJECT_EVALUATION_2026-07-30.md`（U 段依据，综合 A-（有条件））。本轮是一次**从零重扫的全维度评审 + 生产就绪度专项判断**，不以旧清单为基线，独立挖掘问题。
 
@@ -24,7 +24,7 @@
 - `cargo fmt --check`：**干净**。
 - `cargo clippy --workspace --all-targets --no-deps -- -D warnings`：**0 告警**。
 - `cargo clippy --workspace --lib -- -D clippy::unwrap_used -D clippy::expect_used`：**通过** → 生产库代码确实无 `unwrap/expect`(源码里 ~6900 处几乎全落在 `#[cfg(test)]`)。
-- `cargo test --workspace`：**除 1 例外全绿**。唯一失败 `agentflow-skills` 的 `builder::tests::build_registers_code_exec_tool` 报 `code_exec exited with code 1: XPC connection error: Connection invalid`——是本机 macOS 沙箱运行时无法建连导致 `code_exec` 拉容器失败,属**环境限制,非代码缺陷**。少量 `#[ignore]` 均为真实 API/网络/Qdrant/ONNX 集成测试。实际执行的测试函数总量远超历史文档所称的 "479"。
+- `cargo test --workspace`：**除 1 例外全绿**。唯一失败 `yanshi-skills` 的 `builder::tests::build_registers_code_exec_tool` 报 `code_exec exited with code 1: XPC connection error: Connection invalid`——是本机 macOS 沙箱运行时无法建连导致 `code_exec` 拉容器失败,属**环境限制,非代码缺陷**。少量 `#[ignore]` 均为真实 API/网络/Qdrant/ONNX 集成测试。实际执行的测试函数总量远超历史文档所称的 "479"。
 - 依赖:422 个唯一依赖,~30 个 crate 存在双版本;`cargo-audit` 未安装(未能核验 CVE)。
 
 **关键判断:测试全绿 ≠ 正确。** 下文 §7 列出的多个 P0/P1 缺陷都位于**当前测试未覆盖的路径**上——编排者已逐行确认它们是真实潜伏 bug,而非误报。
@@ -36,12 +36,12 @@
 **结论:分层是本项目的强项,抽象合理、非过度设计。**
 
 - 四层心智模型(L1 执行内核 / L2 能力适配 / L3 Agent 编排 / L4 运维平台)在代码里成立;依赖法则由 `xtask check-arch` 用 **8 条依赖律**在 CI 强制,`value→graph→async-util→core` 单向,未发现 core 反向依赖。
-- **契约/SPI 抽取都是有 RFC、有回归测试、re-export 完整的完成态迁移**:`agentflow-tool`(契约)vs `agentflow-tools`(实现)(T3.3)、`agentflow-nodes`(工具层)vs `agentflow-nodes-ai`(能力层)、`store-spi`/`agent-spi`。harness/server/tracing 确实依赖契约而非实现。
-- 早前担心的 **CLI 分层违规已不存在**:executor/schema 已迁到 `agentflow-config`(P-A2.4),CLI 仅做 clap 胶水 + 委派。
+- **契约/SPI 抽取都是有 RFC、有回归测试、re-export 完整的完成态迁移**:`yanshi-tool`(契约)vs `yanshi-tools`(实现)(T3.3)、`yanshi-nodes`(工具层)vs `yanshi-nodes-ai`(能力层)、`store-spi`/`agent-spi`。harness/server/tracing 确实依赖契约而非实现。
+- 早前担心的 **CLI 分层违规已不存在**:executor/schema 已迁到 `yanshi-config`(P-A2.4),CLI 仅做 clap 胶水 + 委派。
 
 轻度卫生债:
-- `agentflow-store-spi` 为一个 `From<sqlx::Error>` 硬拖 `sqlx`(runtime-tokio-rustls+sqlite)进每个消费者(含 agent-spi),注释已自认待清理。
-- `agentflow-async-util` 仅为借用错误类型而依赖 `agentflow-graph`,方向倒置(已被注释承认)。
+- `yanshi-store-spi` 为一个 `From<sqlx::Error>` 硬拖 `sqlx`(runtime-tokio-rustls+sqlite)进每个消费者(含 agent-spi),注释已自认待清理。
+- `yanshi-async-util` 仅为借用错误类型而依赖 `yanshi-graph`,方向倒置(已被注释承认)。
 - 双 crate 命名(单/复数 `tool`/`tools`、`nodes`/`nodes-ai`)对新人有混淆成本。
 
 ---
@@ -50,17 +50,17 @@
 
 **多数模块完成度高、职责单一,但有两类系统性缺口:**
 
-**(1) 可靠性栈是引擎级门面。** `agentflow-core` 的 `retry` / `timeout` / `ConcurrencyLimiter` / `ResourceManager` / `StateMonitor` / `HealthChecker` 均**未接入 DAG 执行器**:DAG 路径无逐节点超时/重试,`WorkflowEvent::RetryAttempt` 全仓从未发出,`execute_with_retry` 零生产调用者。README/历史文档所称的"生产级容错"描述的是**孤立模块**,不是执行行为。(注:CLI 侧 `agentflow-config` 的 `TimeoutRetryNode` 装饰器为 YAML 工作流补齐了节点级 timeout/retry,但 `agentflow-core::Flow` 直接 API 路径仍无。)
+**(1) 可靠性栈是引擎级门面。** `yanshi-core` 的 `retry` / `timeout` / `ConcurrencyLimiter` / `ResourceManager` / `StateMonitor` / `HealthChecker` 均**未接入 DAG 执行器**:DAG 路径无逐节点超时/重试,`WorkflowEvent::RetryAttempt` 全仓从未发出,`execute_with_retry` 零生产调用者。README/历史文档所称的"生产级容错"描述的是**孤立模块**,不是执行行为。(注:CLI 侧 `yanshi-config` 的 `TimeoutRetryNode` 装饰器为 YAML 工作流补齐了节点级 timeout/retry,但 `yanshi-core::Flow` 直接 API 路径仍无。)
 
-**(2) 部分已实现能力不可达。** `agentflow-rag` 的 `SemanticChunker` 已实现,但 `create_chunker(ChunkingStrategy::Semantic, …)` 硬报 "not yet implemented" → 配置优先/YAML 语义分块不可达。`agentflow-nodes-ai` 的 rag 节点 "hybrid"/"keyword" 模式实为 BM25 over 已语义召回的 top-k,非真正的语料级混合检索,静默返回低质量结果。
+**(2) 部分已实现能力不可达。** `yanshi-rag` 的 `SemanticChunker` 已实现,但 `create_chunker(ChunkingStrategy::Semantic, …)` 硬报 "not yet implemented" → 配置优先/YAML 语义分块不可达。`yanshi-nodes-ai` 的 rag 节点 "hybrid"/"keyword" 模式实为 BM25 over 已语义召回的 top-k,非真正的语料级混合检索,静默返回低质量结果。
 
-其余:`agentflow-cli/src/main.rs` 2678 行 clap 胶水持续增长(项目自评 P3);`agentflow-db` 的 `PgStepRepo`/`PgArtifactRepo` 已定义但无路由调用(schema 与代码的完整度缺口)。
+其余:`yanshi-cli/src/main.rs` 2678 行 clap 胶水持续增长(项目自评 P3);`yanshi-db` 的 `PgStepRepo`/`PgArtifactRepo` 已定义但无路由调用(schema 与代码的完整度缺口)。
 
 ---
 
 ## 3. Agent 框架完整度(A-,用户重点)
 
-**结论:`agentflow-agents` 是全项目最成熟的部分,AGENTS.md 的能力声明基本属实。**
+**结论:`yanshi-agents` 是全项目最成熟的部分,AGENTS.md 的能力声明基本属实。**
 
 已实现且有竞争力:
 - **运行时限额全部真实强制**(非建议性):`max_steps` / `max_tool_calls` / 墙钟 `timeout`(剩余预算传入每次 LLM/工具 race)/ `token_budget`(真实 tokenizer 每轮核对)/ `cost_limit_usd`(按 PricingTable 累计)+ 滑窗 `LoopDetected` + 连续同调用引导 nudge。见 `react/agent.rs::check_turn_limits`。
@@ -92,7 +92,7 @@
 - 优雅 SIGTERM/SIGINT 关停 + 有界 trace flush;统一错误信封 + 全局/路由体积上限。
 - Worker↔Server gRPC 支持 TLS/mTLS + JWT/PSK 准入(生产 fail-closed),有端到端测试。
 
-主要风险(见 §7 与 §6):**执行未沙箱化**(默认 `FlowRunExecutor` 进程内跑客户端提交的 YAML,`http`/`file` 节点无运行时沙箱强制,`lib.rs:140-142` 自认强制"由后续 P1 任务推出")、**默认 fail-open**(`SecurityProfile::Local`)、**`/v1/runs` 无限流/无 per-tenant 并发上限**、`/metrics` 未鉴权且带 `tenant` 标签。`agentflow-tracing` 的 OTLP 仅 trait,无真实 wire 传输(文档"OTLP exporter"略有夸大)。
+主要风险(见 §7 与 §6):**执行未沙箱化**(默认 `FlowRunExecutor` 进程内跑客户端提交的 YAML,`http`/`file` 节点无运行时沙箱强制,`lib.rs:140-142` 自认强制"由后续 P1 任务推出")、**默认 fail-open**(`SecurityProfile::Local`)、**`/v1/runs` 无限流/无 per-tenant 并发上限**、`/metrics` 未鉴权且带 `tenant` 标签。`yanshi-tracing` 的 OTLP 仅 trait,无真实 wire 传输(文档"OTLP exporter"略有夸大)。
 
 ---
 
@@ -116,11 +116,11 @@
 
 以下缺陷编排者已在指定行号亲眼确认,并确认当前测试套件**未覆盖**对应路径(故全绿):
 
-1. **[P0][正确性] ReAct 热路径 UTF-8 字节切片 panic** — `agentflow-agents/src/react/agent.rs:1843` 与 `:3066` 的 `&observation[..observation.len().min(200)]`、`:3695` 的 `content.truncate(160)` 均按**字节**切/截断,非字符边界即 `panic`。任何 >200 字节的 CJK/emoji 工具输出会直接 crash agent 循环;对 CJK 受众尤其致命。测试用 ASCII echo 故从未触发。修复:`chars().take(n)` 或 `floor_char_boundary`(项目 `rag/chunking/recursive.rs` 已有正确实现可复用)。
-2. **[P0][安全] config-first `file` 节点默认 permissive** — `agentflow-nodes/src/nodes/file.rs:40-48` `Default` 用 `SandboxPolicy::permissive()`;唯一守卫是 `:149` 的 `..` 组件检查,绝对路径(如 `/etc/passwd`、`~/.ssh/id_rsa`)无 `..` 即通过,`path_denial_reason` 在 permissive 下返回 `None`。若 `path` 由 input_mapping / LLM 输出数据驱动 = **任意文件读写**。修复:factory 默认改 deny-by-default(空 allowed_paths),工作流显式 opt-in。
-3. **[P0][安全] worker-gRPC `submit_task` 无鉴权** — `agentflow-server/src/scheduler/grpc.rs:82-104` 显式无凭据接受(其余 `claim_task`/`report_result`/`heartbeat` 三方法都 `extract_admission_token` 并校验)。该 gRPC 绑独立 socket、**不在** HTTP bearer 中间件后 → 任何能到达该端口者可投递任意 WorkerTask,链式放大执行侧 SSRF/文件访问。
-4. **[P1][安全] HTTP 工具 SSRF 绕过(IPv4-mapped IPv6)** — `agentflow-tools/src/builtin/http.rs:345` `classify_network_address` 对 `IpAddr::V6` 只查 loopback/fe80/fc00,`CLOUD_METADATA_IPS` 是 V4 字面量;`http://[::ffff:169.254.169.254]/…` 归类为空 → 被默认策略放行。修复:分类前 `to_ipv4_mapped()` 归一。另有 DNS-rebinding TOCTOU(校验后 reqwest 重新解析,未 pin IP)。
-5. **[P1][正确性] DAG 良性跳过被计为整体失败** — `agentflow-core/src/flow.rs:441` 把 `Err(AgentFlowError::NodeSkipped)` 存入 state_pool,`:467`/`:848` 的 `state_pool.values().any(Result::is_err)` 将其计为 `workflow_failed` → 一个 `run_if` 跳过就发 `WorkflowFailed` + 存 checkpoint `status=Failed`(错误的保留类别与 server 终态)。纯跳过→Completed 的情形无测试覆盖。修复:跳过用独立标记而非 `Err`,或终态判定排除 `NodeSkipped`。
+1. **[P0][正确性] ReAct 热路径 UTF-8 字节切片 panic** — `yanshi-agents/src/react/agent.rs:1843` 与 `:3066` 的 `&observation[..observation.len().min(200)]`、`:3695` 的 `content.truncate(160)` 均按**字节**切/截断,非字符边界即 `panic`。任何 >200 字节的 CJK/emoji 工具输出会直接 crash agent 循环;对 CJK 受众尤其致命。测试用 ASCII echo 故从未触发。修复:`chars().take(n)` 或 `floor_char_boundary`(项目 `rag/chunking/recursive.rs` 已有正确实现可复用)。
+2. **[P0][安全] config-first `file` 节点默认 permissive** — `yanshi-nodes/src/nodes/file.rs:40-48` `Default` 用 `SandboxPolicy::permissive()`;唯一守卫是 `:149` 的 `..` 组件检查,绝对路径(如 `/etc/passwd`、`~/.ssh/id_rsa`)无 `..` 即通过,`path_denial_reason` 在 permissive 下返回 `None`。若 `path` 由 input_mapping / LLM 输出数据驱动 = **任意文件读写**。修复:factory 默认改 deny-by-default(空 allowed_paths),工作流显式 opt-in。
+3. **[P0][安全] worker-gRPC `submit_task` 无鉴权** — `yanshi-server/src/scheduler/grpc.rs:82-104` 显式无凭据接受(其余 `claim_task`/`report_result`/`heartbeat` 三方法都 `extract_admission_token` 并校验)。该 gRPC 绑独立 socket、**不在** HTTP bearer 中间件后 → 任何能到达该端口者可投递任意 WorkerTask,链式放大执行侧 SSRF/文件访问。
+4. **[P1][安全] HTTP 工具 SSRF 绕过(IPv4-mapped IPv6)** — `yanshi-tools/src/builtin/http.rs:345` `classify_network_address` 对 `IpAddr::V6` 只查 loopback/fe80/fc00,`CLOUD_METADATA_IPS` 是 V4 字面量;`http://[::ffff:169.254.169.254]/…` 归类为空 → 被默认策略放行。修复:分类前 `to_ipv4_mapped()` 归一。另有 DNS-rebinding TOCTOU(校验后 reqwest 重新解析,未 pin IP)。
+5. **[P1][正确性] DAG 良性跳过被计为整体失败** — `yanshi-core/src/flow.rs:441` 把 `Err(YanshiError::NodeSkipped)` 存入 state_pool,`:467`/`:848` 的 `state_pool.values().any(Result::is_err)` 将其计为 `workflow_failed` → 一个 `run_if` 跳过就发 `WorkflowFailed` + 存 checkpoint `status=Failed`(错误的保留类别与 server 终态)。纯跳过→Completed 的情形无测试覆盖。修复:跳过用独立标记而非 `Err`,或终态判定排除 `NodeSkipped`。
 
 来自子代理源码分析、编排者未逐行复核但列为需修的其他高危项(§8 汇总):serial 模式中途 `?` abort 无终态事件/checkpoint(`flow.rs:759-772`,checkpoint 永停 Running);checkpoint 路径穿越 + `delete_all_checkpoints("..")` 破坏性 `remove_dir_all`(`checkpoint.rs:403`);resume 对 DAG 不健全(部分失败被静默升级为 Ok);`AgentCancellationToken` 漏唤醒竞态(`agent-spi/src/runtime.rs:335`);MCP stdio 无界 `read_line` OOM;`SemanticMemory` 不稳定 ID 回归(`semantic.rs:547`);Parallel supervisor 错误路径泄露 sibling agent。
 
@@ -153,7 +153,7 @@
 | **P2** | expr 解析器无递归深度上限 → 服务端执行 YAML 栈溢出 DoS | 执行内核/安全 | 低 |
 | **P2** | `input_mapping` 空格漂移:validate 通过但 factory 静默丢弃 | 完整度 | 低 |
 | **P3** | `AGENTS.md` 严重过时(见 §9),污染所有 agent 上下文 | 文档 | 低 |
-| **P3** | `~/.agentflow/runs` 无保留/清理,无界增长 | 执行内核 | 低 |
+| **P3** | `~/.yanshi/runs` 无保留/清理,无界增长 | 执行内核 | 低 |
 | **P3** | `main.rs` 2678 行 clap 胶水持续增长 | 完整度 | 中 |
 | **P3** | 依赖双版本 ~30 处;无 `cargo-audit` CI 门 | 供应链 | 低 |
 
@@ -163,11 +163,11 @@
 
 **`AGENTS.md`(根,Last Updated 2026-05-03)严重过时且会误导每一个在本仓工作的 agent(它是 agent 规则文件):**
 - 称 "14 crates + 2 scaffold"——实际 25 个成员;
-- 称 `agentflow-server` 是 "130 LOC scaffold, 0 tests"——实际 19.5K LOC 完整网关;
-- 称 `agentflow-db` "48 LOC"——实际 2370 LOC / 9 表 / 9 仓;
+- 称 `yanshi-server` 是 "130 LOC scaffold, 0 tests"——实际 19.5K LOC 完整网关;
+- 称 `yanshi-db` "48 LOC"——实际 2370 LOC / 9 表 / 9 仓;
 - 称 "479 tests(2025-11-17 verified)"——实际 ~8000+;`~244ns 开销`等为 2025-11 陈迹;
-- 完全没提 `agentflow-harness`(8.2K LOC)、config、value/graph/spi、worker、ui;
-- 仍称 `agentflow-nodes` 含 "16+ 节点 + factory_traits.rs"——那些已迁到 `nodes-ai`,factory_traits 已删;RAG eval 说成 pending——实际已实现。
+- 完全没提 `yanshi-harness`(8.2K LOC)、config、value/graph/spi、worker、ui;
+- 仍称 `yanshi-nodes` 含 "16+ 节点 + factory_traits.rs"——那些已迁到 `nodes-ai`,factory_traits 已删;RAG eval 说成 pending——实际已实现。
 
 对照之下 `CLAUDE.md` / `docs/CURRENT_STATUS.md`(2026-07-28)是最新的。**建议用后两者重新生成 `AGENTS.md`,并给根目录遗留设计文档(`ARCHITECTURE.md`、`TERA_INTEGRATION_*`、`LOOP_NODES_IMPLEMENTATION.md`、`MIGRATION_V2.md`)加"历史参考"横幅或移入 `docs/archive/`。** 这是单点杠杆最高的修复。
 

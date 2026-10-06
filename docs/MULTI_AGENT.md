@@ -1,6 +1,6 @@
 # Multi-Agent Collaboration
 
-AgentFlow's `agentflow-agents` crate ships three multi-agent supervisors. Each
+Yanshi's `yanshi-agents` crate ships three multi-agent supervisors. Each
 implements the `AgentRuntime` trait, so they compose with the rest of the
 framework — embed them in `AgentNode`, drive them from a YAML workflow via the
 `multi_agent` node type, or call them directly from Rust.
@@ -36,10 +36,10 @@ only when independent verification is worth the cost.
 
 ```rust
 use std::sync::Arc;
-use agentflow_agents::supervisor::HandoffSupervisorBuilder;
-use agentflow_agents::react::{ReActAgent, ReActConfig};
-use agentflow_memory::SessionMemory;
-use agentflow_tools::ToolRegistry;
+use yanshi_agents::supervisor::HandoffSupervisorBuilder;
+use yanshi_agents::react::{ReActAgent, ReActConfig};
+use yanshi_memory::SessionMemory;
+use yanshi_tools::ToolRegistry;
 
 let mut supervisor = HandoffSupervisorBuilder::new()
   .add_agent("triage", "Front-desk router", |handoff| {
@@ -85,7 +85,7 @@ to, message }` step + one `AgentEvent::HandoffOccurred` event.
 
 ```rust
 use std::sync::Arc;
-use agentflow_agents::supervisor::{
+use yanshi_agents::supervisor::{
   Blackboard, BlackboardReadTool, BlackboardSchedule, BlackboardStop,
   BlackboardSupervisorBuilder, BlackboardWriteTool,
 };
@@ -141,7 +141,7 @@ and `result.answer` is `None` — callers should use `result.steps` /
 ## Debate supervisor
 
 ```rust
-use agentflow_agents::supervisor::DebateSupervisorBuilder;
+use yanshi_agents::supervisor::DebateSupervisorBuilder;
 
 let mut supervisor = DebateSupervisorBuilder::new()
   .add_participant("performance", agent_for_persona("performance reviewer"))
@@ -285,7 +285,7 @@ Matching event variants (`HandoffOccurred`, `BlackboardWritten`,
 `DebateRoundStarted`, `DebateVerdictRendered`) carry the same data on the
 event bus and are serialised verbatim into trace JSONL files.
 
-`agentflow trace replay <run_id>` and `agentflow trace tui` will render the
+`yanshi trace replay <run_id>` and `yanshi trace tui` will render the
 new step kinds; older trace logs that pre-date 0.4.0 simply do not contain
 them and are unaffected.
 
@@ -298,7 +298,7 @@ agents see the same token and exit at their next safe checkpoint).
 
 ## Migration from the legacy `Supervisor`
 
-The original `agentflow_agents::supervisor::Supervisor` /
+The original `yanshi_agents::supervisor::Supervisor` /
 `SupervisorBuilder` API still works and is unchanged. It is best understood as
 a degenerate "delegate" pattern (one orchestrator, sub-agents wrapped as tools)
 and remains available for backward compatibility. New code should prefer

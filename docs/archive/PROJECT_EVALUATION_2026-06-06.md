@@ -1,13 +1,13 @@
-# AgentFlow 项目深度评估报告 (2026-06-06)
+# Yanshi 项目深度评估报告 (2026-06-06)
 
 - 评估日期：2026-06-06
-- 评估范围：workspace 全部 **15 个 Rust crate + 1 个 xtask + 1 个 Web UI crate (`agentflow-ui`)**，`docs/`、`docs/audit/`、`RoadMap.md`、`TODOs.md`、CLI 执行路径、agent runtime、DAG 调度器、Harness Agent Mode、平台化（server/db/worker）、Web UI、插件/Skill/MCP/RAG/Tracing 全链路、9-provider live nightly CI、Q-段审计修复
+- 评估范围：workspace 全部 **15 个 Rust crate + 1 个 xtask + 1 个 Web UI crate (`yanshi-ui`)**，`docs/`、`docs/audit/`、`RoadMap.md`、`TODOs.md`、CLI 执行路径、agent runtime、DAG 调度器、Harness Agent Mode、平台化（server/db/worker）、Web UI、插件/Skill/MCP/RAG/Tracing 全链路、9-provider live nightly CI、Q-段审计修复
 - 与上一版报告 (`docs/archive/PROJECT_EVALUATION_2026-05-19.md`) 的关系：上一版评估在 18 天前定稿（HEAD `daaa912`），记录 16 个 Rust crate，整体评级 **A**，留下"v1.0.0-rc.1 tag cut 是人工 ops"作为唯一 gating。本版基于 `main` HEAD `76a8814`（2026-05-26）重新校核全部代码、测试与文档，覆盖 18 天内 **153 commits** 落地的所有变更
 - **本周期的关键事件**：
   1. `v1.0.0-rc.1` 标签 **已切版**（`a8db47b 2026-05-21`，含 release notes 与 release workflow）
   2. `2026-05-24` 自动化 **16-crate 深度审计**（`docs/audit/`）暴露了上次评估未触及的 **26 CRITICAL / 110 MAJOR / 184 MINOR** finding，主要集中在多租户边界、沙箱默认值、worker gRPC 认证、harness 凭据脱敏、SQLite 健壮性、graceful shutdown
   3. 新的 **Q1–Q5 五波修复段**接管 TODOs.md，覆盖 33 个 Q-section / 108+ 子任务，**目前全部 DONE**（无 open Q-item）
-  4. `agentflow-viz` 在 P10.13.1 被 **删除**（孤立未联动），workspace 从 16 crate 收敛到 15 crate
+  4. `yanshi-viz` 在 P10.13.1 被 **删除**（孤立未联动），workspace 从 16 crate 收敛到 15 crate
   5. LLM 层引入 **统一 `.thinking()` API**（Anthropic / OpenAI / Google + DeepSeek-R1 surfacing）跨 provider 推理控制
 - 编译/测试基线（本评估实测重跑）：
   - `cargo test --workspace --lib`：**1,635** 个 lib 测试全过（5/19: 1,183，+38%）
@@ -19,16 +19,16 @@
 
 ## 0. TL;DR
 
-18 天内（2026-05-19 → 2026-06-06）AgentFlow 完成了一次**深审驱动的全面硬化**：
+18 天内（2026-05-19 → 2026-06-06）Yanshi 完成了一次**深审驱动的全面硬化**：
 
 1. **v1.0.0-rc.1 标签切版**（`a8db47b`），release.yml workflow 就绪，仅缺人工推 tag → GHCR / GitHub Release artefact 触发；531 commits 自 `v0.2.0` 累计的 RC 候选完整跨过
-2. **16-crate 自动化深度审计**（2026-05-24，每 crate 独立 agent，独立 finding 表）首次系统暴露了 5/19 评估遗漏的 26 个 CRITICAL —— 包括 ShellTool `sh -c` 元字符旁路、Linux seccomp `openat(O_CREAT)` 不拦、macOS SBPL `/Library` 过宽、`SandboxPolicy.allowed_paths` 空集放行、`FileNode`/`HttpNode` 完全绕过 `agentflow-tools` 沙箱、`list_runs ?tenant_id=` 跨租户读写、Worker gRPC 无 TLS 无 auth 通道、Google API key 入 URL 串、Harness `params_summary` 不脱敏直接进 JSONL/SSE 等
+2. **16-crate 自动化深度审计**（2026-05-24，每 crate 独立 agent，独立 finding 表）首次系统暴露了 5/19 评估遗漏的 26 个 CRITICAL —— 包括 ShellTool `sh -c` 元字符旁路、Linux seccomp `openat(O_CREAT)` 不拦、macOS SBPL `/Library` 过宽、`SandboxPolicy.allowed_paths` 空集放行、`FileNode`/`HttpNode` 完全绕过 `yanshi-tools` 沙箱、`list_runs ?tenant_id=` 跨租户读写、Worker gRPC 无 TLS 无 auth 通道、Google API key 入 URL 串、Harness `params_summary` 不脱敏直接进 JSONL/SSE 等
 3. **Q1–Q5 五波修复段全部 DONE**：Q1（生产阻断性安全）→ Q2（正确性/数据完整性）→ Q3（生产化卫生）→ Q4（文档↔现实对齐）→ Q5（unwrap/expect / redaction / 信号横切 sweep）
-4. **`agentflow-viz` 退出 workspace**（P10.13.1, `d4a1b2d`）—— 与 trace 实时联动从未联通，独立 Mermaid/DOT 渲染 责任并入 `agentflow-ui` + 既有 CLI graph 输出
+4. **`yanshi-viz` 退出 workspace**（P10.13.1, `d4a1b2d`）—— 与 trace 实时联动从未联通，独立 Mermaid/DOT 渲染 责任并入 `yanshi-ui` + 既有 CLI graph 输出
 5. **跨 provider 统一 `.thinking()` API**（`419f991`）—— Anthropic `thinking={type:enabled,budget_tokens}` / OpenAI Reasoning / Google `generationConfig.thinkingConfig.thinkingBudget` / DeepSeek-R1 reasoning content 统一抽象到 `ThinkingConfig::{Auto, Low, Medium, High, Disabled}` 五档，response 侧 `LLMResponse::thinking` 字段携带 provider raw thinking trace
-6. **Q5.1 production-clean unwrap/expect sweep + CI deny-lint**：`agentflow-llm` 6 个 `HeaderValue::from_str(api_key).expect(...)` panic 站点（`.env` 里 trailing newline 就 crash 整个进程）全部改为 `Result`；`agentflow-agents` batch dispatch / `Blackboard.write_internal` poison 路径全部清理；CI 落 `quality.yml::clippy-lib-deny` 把 `clippy::unwrap_used` / `clippy::expect_used` 钉死在生产库代码
-7. **Q5.3 unified shutdown 助手**（`dc57dea`）—— CLI / server / worker 三处 SIGINT/SIGTERM 处理统一到 `agentflow-core::shutdown`，server 路径不再 `.expect()` panic
-8. **Q5.2 redaction CI lint**（`abd6a6f`）—— `xtask redaction-lint` 扫描全 workspace `tracing::{debug,info,warn,error}!` 宏，禁止裸 prompt/response/content/body/params 插值未经 `agentflow_tracing::redaction::redact_text` / `prompt_fingerprint`
+6. **Q5.1 production-clean unwrap/expect sweep + CI deny-lint**：`yanshi-llm` 6 个 `HeaderValue::from_str(api_key).expect(...)` panic 站点（`.env` 里 trailing newline 就 crash 整个进程）全部改为 `Result`；`yanshi-agents` batch dispatch / `Blackboard.write_internal` poison 路径全部清理；CI 落 `quality.yml::clippy-lib-deny` 把 `clippy::unwrap_used` / `clippy::expect_used` 钉死在生产库代码
+7. **Q5.3 unified shutdown 助手**（`dc57dea`）—— CLI / server / worker 三处 SIGINT/SIGTERM 处理统一到 `yanshi-core::shutdown`，server 路径不再 `.expect()` panic
+8. **Q5.2 redaction CI lint**（`abd6a6f`）—— `xtask redaction-lint` 扫描全 workspace `tracing::{debug,info,warn,error}!` 宏，禁止裸 prompt/response/content/body/params 插值未经 `yanshi_tracing::redaction::redact_text` / `prompt_fingerprint`
 
 | 维度 | 上次评级 (5/19) | 本次评级 (6/6) | 一句话判断 |
 | --- | --- | --- | --- |
@@ -56,32 +56,32 @@
 
 | 层 | Crate | 角色 | LOC | 测试数 | 版本 | edition | 成熟度 | Δ vs 5/19 |
 | --- | --- | --- | ---: | ---: | --- | --- | :---: | --- |
-| **L1 执行内核** | `agentflow-core` | DAG 引擎、AsyncNode、FlowValue、scheduler、checkpoint、retry、timeout、health、events、expression engine、plugin host、**新统一 shutdown 助手 (Q5.3)** | 13,447 | 242 | 0.2.0 | 2024 | ⭐⭐⭐ | LOC -4%（robustness.rs 清理）/ tests +6 |
-| **L2 能力适配** | `agentflow-nodes` | 内置 16+ 节点；Q1.3 `FileNode/HttpNode/TextToImageNode` 安全旁路全部修；Q3.8 arxiv main-file 检测 + while.rs 空文件清理 + per-modality feature-gate shape 测试 | 4,860 | 54 | 0.2.0 | 2024 | ⭐⭐⭐ | LOC +7% / tests +9 |
-| **L2 能力适配** | `agentflow-llm` | **9 provider**（含 dashscope/deepseek/minimax 共享 `OpenAIProvider`）+ 多模态 + streaming + provider-native tool_calls/tool_choice + OTel traceparent + **统一 `.thinking()` API** + DeepSeek-R1 reasoning content surfacing + Q1.8 Google key 脱敏 + Q2.5 streaming termination 修复 + Q5.4 sorted reports | 14,159 | 192 | 0.2.0 | 2024 | ⭐⭐⭐ | LOC +16% / tests -21（重构合并） |
-| **L2 能力适配** | `agentflow-tools` | Tool/Registry/Policy/OS Sandbox (macOS sandbox-exec / Linux seccomp 含 clone/fork/execve 拦截 / no-op)/SSRF/ToolIdempotency；**Q1.1 ShellInterpretation::{Argv,Shell} 默认 Argv 拒元字符；seccomp `openat`/`open`/`creat`/`openat2` 按 flag bit MaskedEq 拦 O_CREAT；SBPL `/Library` + `/private/etc` blanket 收紧；Q1.2 `SandboxPolicy.allowed_paths` 空集翻转到 fail-closed + `HttpTool::new` 返回 Result** | 5,741 | 114 | 0.1.0 | 2024 | ⭐⭐⭐⭐ | LOC +23% / tests +26 |
-| **L2 能力适配** | `agentflow-mcp` | client/server/stdio + retry/timeout/重连 + traceparent JSON-RPC meta；**Q2.6 stdio response demux by id + stderr 排空到 tracing + Drop kill_on_drop 避免死锁；Q3.2 Transport per-request demux 移除外层 Mutex + env sandbox + experimental→beta 提升** | 6,906 | 194 | 0.2.0 | 2024 | ⭐⭐⭐ | LOC +4% / tests +12 |
-| **L2 能力适配** | `agentflow-rag` | chunk/embed/Qdrant/retrieval/rerank + eval harness (Recall@K, MRR, nDCG@K) + paired sign test + CI baseline + **Q2.8 OpenAI batch sizing（inputs vs tokens 分离）+ Q3.9 RecursiveChunker UTF-8 safe overlap + PDF/HTML loader size caps + Qdrant compat + BM25 IDF lazy + parallelize IndexingPipeline + chunker overlap 校验** + **P10.6.1 pluggable retriever trait + DenseEval / HybridEval (RRF) + `--chunk-size` 维度** | 10,873 | 195 | 0.3.0-alpha | 2024 | ⭐⭐⭐ | LOC +27% / tests +49 |
-| **L2 能力适配** | `agentflow-memory` | MemoryStore + Session/SQLite/Semantic + 4 层 layering + **Q2.1 SQLite shared pool + WAL/busy_timeout/FK + 安全 sqlite:// URL builder；Q2.10 row_to_message 错误传播 + `add_message` 取 `&self`；P10.7.2 `AgeEncryptedPreferenceStore<S>` age-based encryption-at-rest + identity-file 帮助器 (chmod 0600)** | 3,764 | 60 | 0.1.0 | 2024 | ⭐⭐⭐ | LOC +36% / tests +23 |
-| **L3 智能体/编排** | `agentflow-agents` | ReAct + PlanExecute + Handoff/Blackboard/Debate Supervisor + AgentNode + WorkflowTool + Reflection + MemorySummary + eval framework + cost tracking + **Q2.9 三个契约违反闭口；Q3.12 cancellation 文档钉契约 + Blackboard poison-tolerant version lock** | 14,377 | 193 | 0.2.0 | 2024 | ⭐⭐⭐ | LOC +4% / tests +6 |
-| **L3 智能体/编排** | `agentflow-skills` | SKILL.md/skill.toml + SkillBuilder + Marketplace + MCP adapter + registry + Validator protocol + **Q1.10 真 Ed25519 marketplace 签名验证器 + bound marketplace fetches + 拒绝 knowledge-path escape；P10.4.1 per-tool `os_sandbox` override；P10.9.1 MCP discovery default-on + 24h 缓存** | 6,478 | 128 | 0.1.0 | 2024 | ⭐⭐⭐ | LOC +12% / tests +12 |
-| **L3 智能体/编排** | `agentflow-harness` | Harness Agent Mode：HarnessRuntime + hooks/approval + parallel tool calls + background tasks + JSONL persistence + 4 default context providers；**Q1.7 seq counter 跨 runtime+hook 合并 + `redact_secrets` in `params_summary`；Q3.10 真 `step_index` + paired Requested for cached approvals + synthetic gate events on stop_after_deny + ExecutionTraceSink for `HarnessEvent → ExecutionTrace`** | 6,736 | 88 | 0.1.0 | 2024 | ⭐⭐⭐ | LOC +18% / tests +11 |
-| **L3 智能体/编排** | `agentflow-cli` | workflow / skill / llm / image / audio / mcp / trace / rag / plugin / doctor / harness / serve / cleanup / eval / **marketplace** / **memory prune** / **agent replay --diff** / **harness replay** / **backup** + `CliJsonEnvelope<T>` 统一 JSON；**Q3.5 余下 MAJOR + `workflow logs --follow` reconnect on mid-stream drop + audio asr --prompt/--output 拆分 + plugin+rag 进 default features** | 21,510 | 484 | 0.2.0 | 2024 | ⭐⭐⭐ | LOC +32% / tests +143 |
-| **L4 运维/产品化** | `agentflow-tracing` | EventListener + JSONL/SQLite/Postgres + replay + TUI + OTel OTLP + W3C traceparent + redaction + `context::scope` 助手 + **Q2.2 drain panic 隔离 + W3C random IDs + inbound traceparent；Q2.3 backpressure + file safety + redaction + retry rows；Q3.10.4 ExecutionTraceSink** | 5,800 | 67 | 0.1.0 | 2024 | ⭐⭐⭐ | LOC +32% / tests +29 |
-| ~~`agentflow-viz`~~ | **已删除** (P10.13.1) — 与 trace 实时联动从未联通，独立 Mermaid/DOT 渲染并入 `agentflow-ui` + `workflow graph` 输出 | — | — | — | — | — | -1,801 LOC |
-| **L4 运维/产品化** | `agentflow-server` | Axum gateway：Run/Cancel/SSE/Graph/Resume-plan/Bearer auth/profile/CORS+body limit/Web UI/分布式 control plane + Harness routes + tenant 边界 + retention/cleanup + diagnostics + user preferences；**Q1.4 多租户边界（list + submit + GET/SSE/action 全部 fixed）+ multi-row 测试覆盖；Q3.3 H/2 channel 共享 + Semaphore-spawn + worker.proto 对齐；Q3.4 余下 MAJOR + body cap + const-time PSK + cap concurrent live harness sessions；Prometheus /metrics 14 series + live-state size gauge + worker fleet gauges + harness session gauges + cleanup sweep metrics** | 13,353 | 296 | 0.1.0 | 2024 | ⭐⭐⭐ | LOC +45% / tests +126 |
-| **L4 运维/产品化** | `agentflow-db` | Postgres schema (**9 表**, +`run_retention_overrides` migration `0005` + `mcp_sessions.tenant_id` migration `0006`) + sqlx migrations + 9 个 repos + tenant_id 列 + 完整 CRUD 测试；**Q1.5 SkillInstallRepo::list 租户过滤 + EventRepo / HarnessEventRepo tenant scope；Q3.11 O(1) max_seq for next_event_seq + pool test_before_acquire + max_lifetime + 大表 migration 0003 操作 playbook** | 1,629 | 23 | 0.1.0 | 2024 | ⭐⭐⭐ | LOC +33% / tests +8 |
-| **L4 运维/产品化** | `agentflow-worker` | 分布式 worker (in-memory + gRPC transport)，claim/heartbeat/execute/report；6 类 node payload；admission/credential/PSK rotation + 资源限制 + 6 类 failure-domain 测试；**Q1.6 authenticate gRPC channel via PSK admission metadata；Q3.1.3/3.3.2 SIGINT/SIGTERM + recoverable Transport backoff + Semaphore-enforced free_slots + spawn-per-permit；P10.16.1 signed-JWT worker admission flavour + capability + locality hints** | 2,100 | 19 | 0.1.0 | 2024 | ⭐⭐⭐ | LOC +85% / tests -4（合并 + 删除冗余） |
-| **L4 运维/产品化** | `agentflow-ui` | React 19 + Vite 7 + TypeScript 5.8 SPA + **zod 4.4.3** 运行时校验；零额外运行时依赖；编译期 `include_str!` 嵌入 server；**run 列表 + DAG 图 + 事件回放 + run creation form + 诊断面板 + trace 比较 + 偏好同步 + 客户端 event filter + Harness Mode 完整 UI（list/new/detail + SSE + approval cards + resume）+ Q3.7 顶层 ErrorBoundary + 页面组件抽取 + 共享 helpers + SSE reconnect uses live seq + polling guards；Q1.9 tab-scoped API token + fetch-based SSE that carries auth** | 20 TS 文件（含 5 个测试），dist 336 KB | UI 测试 16+ (vitest) | 0.1.0 | n/a | ⭐⭐⭐ | TS 文件 +30%；从单文件 SPA 上升到组件分层 |
+| **L1 执行内核** | `yanshi-core` | DAG 引擎、AsyncNode、FlowValue、scheduler、checkpoint、retry、timeout、health、events、expression engine、plugin host、**新统一 shutdown 助手 (Q5.3)** | 13,447 | 242 | 0.2.0 | 2024 | ⭐⭐⭐ | LOC -4%（robustness.rs 清理）/ tests +6 |
+| **L2 能力适配** | `yanshi-nodes` | 内置 16+ 节点；Q1.3 `FileNode/HttpNode/TextToImageNode` 安全旁路全部修；Q3.8 arxiv main-file 检测 + while.rs 空文件清理 + per-modality feature-gate shape 测试 | 4,860 | 54 | 0.2.0 | 2024 | ⭐⭐⭐ | LOC +7% / tests +9 |
+| **L2 能力适配** | `yanshi-llm` | **9 provider**（含 dashscope/deepseek/minimax 共享 `OpenAIProvider`）+ 多模态 + streaming + provider-native tool_calls/tool_choice + OTel traceparent + **统一 `.thinking()` API** + DeepSeek-R1 reasoning content surfacing + Q1.8 Google key 脱敏 + Q2.5 streaming termination 修复 + Q5.4 sorted reports | 14,159 | 192 | 0.2.0 | 2024 | ⭐⭐⭐ | LOC +16% / tests -21（重构合并） |
+| **L2 能力适配** | `yanshi-tools` | Tool/Registry/Policy/OS Sandbox (macOS sandbox-exec / Linux seccomp 含 clone/fork/execve 拦截 / no-op)/SSRF/ToolIdempotency；**Q1.1 ShellInterpretation::{Argv,Shell} 默认 Argv 拒元字符；seccomp `openat`/`open`/`creat`/`openat2` 按 flag bit MaskedEq 拦 O_CREAT；SBPL `/Library` + `/private/etc` blanket 收紧；Q1.2 `SandboxPolicy.allowed_paths` 空集翻转到 fail-closed + `HttpTool::new` 返回 Result** | 5,741 | 114 | 0.1.0 | 2024 | ⭐⭐⭐⭐ | LOC +23% / tests +26 |
+| **L2 能力适配** | `yanshi-mcp` | client/server/stdio + retry/timeout/重连 + traceparent JSON-RPC meta；**Q2.6 stdio response demux by id + stderr 排空到 tracing + Drop kill_on_drop 避免死锁；Q3.2 Transport per-request demux 移除外层 Mutex + env sandbox + experimental→beta 提升** | 6,906 | 194 | 0.2.0 | 2024 | ⭐⭐⭐ | LOC +4% / tests +12 |
+| **L2 能力适配** | `yanshi-rag` | chunk/embed/Qdrant/retrieval/rerank + eval harness (Recall@K, MRR, nDCG@K) + paired sign test + CI baseline + **Q2.8 OpenAI batch sizing（inputs vs tokens 分离）+ Q3.9 RecursiveChunker UTF-8 safe overlap + PDF/HTML loader size caps + Qdrant compat + BM25 IDF lazy + parallelize IndexingPipeline + chunker overlap 校验** + **P10.6.1 pluggable retriever trait + DenseEval / HybridEval (RRF) + `--chunk-size` 维度** | 10,873 | 195 | 0.3.0-alpha | 2024 | ⭐⭐⭐ | LOC +27% / tests +49 |
+| **L2 能力适配** | `yanshi-memory` | MemoryStore + Session/SQLite/Semantic + 4 层 layering + **Q2.1 SQLite shared pool + WAL/busy_timeout/FK + 安全 sqlite:// URL builder；Q2.10 row_to_message 错误传播 + `add_message` 取 `&self`；P10.7.2 `AgeEncryptedPreferenceStore<S>` age-based encryption-at-rest + identity-file 帮助器 (chmod 0600)** | 3,764 | 60 | 0.1.0 | 2024 | ⭐⭐⭐ | LOC +36% / tests +23 |
+| **L3 智能体/编排** | `yanshi-agents` | ReAct + PlanExecute + Handoff/Blackboard/Debate Supervisor + AgentNode + WorkflowTool + Reflection + MemorySummary + eval framework + cost tracking + **Q2.9 三个契约违反闭口；Q3.12 cancellation 文档钉契约 + Blackboard poison-tolerant version lock** | 14,377 | 193 | 0.2.0 | 2024 | ⭐⭐⭐ | LOC +4% / tests +6 |
+| **L3 智能体/编排** | `yanshi-skills` | SKILL.md/skill.toml + SkillBuilder + Marketplace + MCP adapter + registry + Validator protocol + **Q1.10 真 Ed25519 marketplace 签名验证器 + bound marketplace fetches + 拒绝 knowledge-path escape；P10.4.1 per-tool `os_sandbox` override；P10.9.1 MCP discovery default-on + 24h 缓存** | 6,478 | 128 | 0.1.0 | 2024 | ⭐⭐⭐ | LOC +12% / tests +12 |
+| **L3 智能体/编排** | `yanshi-harness` | Harness Agent Mode：HarnessRuntime + hooks/approval + parallel tool calls + background tasks + JSONL persistence + 4 default context providers；**Q1.7 seq counter 跨 runtime+hook 合并 + `redact_secrets` in `params_summary`；Q3.10 真 `step_index` + paired Requested for cached approvals + synthetic gate events on stop_after_deny + ExecutionTraceSink for `HarnessEvent → ExecutionTrace`** | 6,736 | 88 | 0.1.0 | 2024 | ⭐⭐⭐ | LOC +18% / tests +11 |
+| **L3 智能体/编排** | `yanshi-cli` | workflow / skill / llm / image / audio / mcp / trace / rag / plugin / doctor / harness / serve / cleanup / eval / **marketplace** / **memory prune** / **agent replay --diff** / **harness replay** / **backup** + `CliJsonEnvelope<T>` 统一 JSON；**Q3.5 余下 MAJOR + `workflow logs --follow` reconnect on mid-stream drop + audio asr --prompt/--output 拆分 + plugin+rag 进 default features** | 21,510 | 484 | 0.2.0 | 2024 | ⭐⭐⭐ | LOC +32% / tests +143 |
+| **L4 运维/产品化** | `yanshi-tracing` | EventListener + JSONL/SQLite/Postgres + replay + TUI + OTel OTLP + W3C traceparent + redaction + `context::scope` 助手 + **Q2.2 drain panic 隔离 + W3C random IDs + inbound traceparent；Q2.3 backpressure + file safety + redaction + retry rows；Q3.10.4 ExecutionTraceSink** | 5,800 | 67 | 0.1.0 | 2024 | ⭐⭐⭐ | LOC +32% / tests +29 |
+| ~~`yanshi-viz`~~ | **已删除** (P10.13.1) — 与 trace 实时联动从未联通，独立 Mermaid/DOT 渲染并入 `yanshi-ui` + `workflow graph` 输出 | — | — | — | — | — | -1,801 LOC |
+| **L4 运维/产品化** | `yanshi-server` | Axum gateway：Run/Cancel/SSE/Graph/Resume-plan/Bearer auth/profile/CORS+body limit/Web UI/分布式 control plane + Harness routes + tenant 边界 + retention/cleanup + diagnostics + user preferences；**Q1.4 多租户边界（list + submit + GET/SSE/action 全部 fixed）+ multi-row 测试覆盖；Q3.3 H/2 channel 共享 + Semaphore-spawn + worker.proto 对齐；Q3.4 余下 MAJOR + body cap + const-time PSK + cap concurrent live harness sessions；Prometheus /metrics 14 series + live-state size gauge + worker fleet gauges + harness session gauges + cleanup sweep metrics** | 13,353 | 296 | 0.1.0 | 2024 | ⭐⭐⭐ | LOC +45% / tests +126 |
+| **L4 运维/产品化** | `yanshi-db` | Postgres schema (**9 表**, +`run_retention_overrides` migration `0005` + `mcp_sessions.tenant_id` migration `0006`) + sqlx migrations + 9 个 repos + tenant_id 列 + 完整 CRUD 测试；**Q1.5 SkillInstallRepo::list 租户过滤 + EventRepo / HarnessEventRepo tenant scope；Q3.11 O(1) max_seq for next_event_seq + pool test_before_acquire + max_lifetime + 大表 migration 0003 操作 playbook** | 1,629 | 23 | 0.1.0 | 2024 | ⭐⭐⭐ | LOC +33% / tests +8 |
+| **L4 运维/产品化** | `yanshi-worker` | 分布式 worker (in-memory + gRPC transport)，claim/heartbeat/execute/report；6 类 node payload；admission/credential/PSK rotation + 资源限制 + 6 类 failure-domain 测试；**Q1.6 authenticate gRPC channel via PSK admission metadata；Q3.1.3/3.3.2 SIGINT/SIGTERM + recoverable Transport backoff + Semaphore-enforced free_slots + spawn-per-permit；P10.16.1 signed-JWT worker admission flavour + capability + locality hints** | 2,100 | 19 | 0.1.0 | 2024 | ⭐⭐⭐ | LOC +85% / tests -4（合并 + 删除冗余） |
+| **L4 运维/产品化** | `yanshi-ui` | React 19 + Vite 7 + TypeScript 5.8 SPA + **zod 4.4.3** 运行时校验；零额外运行时依赖；编译期 `include_str!` 嵌入 server；**run 列表 + DAG 图 + 事件回放 + run creation form + 诊断面板 + trace 比较 + 偏好同步 + 客户端 event filter + Harness Mode 完整 UI（list/new/detail + SSE + approval cards + resume）+ Q3.7 顶层 ErrorBoundary + 页面组件抽取 + 共享 helpers + SSE reconnect uses live seq + polling guards；Q1.9 tab-scoped API token + fetch-based SSE that carries auth** | 20 TS 文件（含 5 个测试），dist 336 KB | UI 测试 16+ (vitest) | 0.1.0 | n/a | ⭐⭐⭐ | TS 文件 +30%；从单文件 SPA 上升到组件分层 |
 | **工具链** | `xtask` | workspace 自动化：`verify-edition` / `examples-smoke` / `bench-gate` / `check-agent-sdk-doc` / **`redaction-lint`** / **`refresh-live-models`** / **`test-gate`** | 3,765 | 20 | 0.1.0 | 2024 | ⭐⭐⭐ | LOC +200%（3 个新子命令） |
 
 **关键观察**：
 
-- **总 Rust LOC ≈ 131.7K**（5/19: ~127.7K, +3%），增量主要来自 `agentflow-cli`（16,281 → 21,510, +32%）、`agentflow-server`（9,185 → 13,353, +45%）、`agentflow-rag`（8,580 → 10,873, +27%）、`agentflow-tracing`（4,401 → 5,800, +32%）；`agentflow-viz` 删除净降 -1,801 LOC
-- **总 Rust 测试 ≈ 1,635 lib + 集成**（5/19: 1,183 lib，+38%），主要增量集中在 `agentflow-cli`（341 → 484, +143）、`agentflow-server`（170 → 296, +126）、`agentflow-rag`（146 → 195, +49）、`agentflow-tracing`（38 → 67, +29）
-- **crate 数下降**：16 → **15 publishable + 1 xtask + 1 UI**（`agentflow-viz` 退出）
+- **总 Rust LOC ≈ 131.7K**（5/19: ~127.7K, +3%），增量主要来自 `yanshi-cli`（16,281 → 21,510, +32%）、`yanshi-server`（9,185 → 13,353, +45%）、`yanshi-rag`（8,580 → 10,873, +27%）、`yanshi-tracing`（4,401 → 5,800, +32%）；`yanshi-viz` 删除净降 -1,801 LOC
+- **总 Rust 测试 ≈ 1,635 lib + 集成**（5/19: 1,183 lib，+38%），主要增量集中在 `yanshi-cli`（341 → 484, +143）、`yanshi-server`（170 → 296, +126）、`yanshi-rag`（146 → 195, +49）、`yanshi-tracing`（38 → 67, +29）
+- **crate 数下降**：16 → **15 publishable + 1 xtask + 1 UI**（`yanshi-viz` 退出）
 - **DB 表数**：8 → **9**（+`run_retention_overrides`），migration 总数 4 → 6（+`0005_run_retention_overrides.sql` + `0006_mcp_sessions_tenant_id.sql`）
-- **agentflow-tools 成熟度升级**：原 ⭐⭐⭐ → ⭐⭐⭐⭐（在审计揭出 6 个 CRITICAL 沙箱旁路后，本期全部修复并补 regression test + 真 sandbox-exec / seccomp 集成测试）
+- **yanshi-tools 成熟度升级**：原 ⭐⭐⭐ → ⭐⭐⭐⭐（在审计揭出 6 个 CRITICAL 沙箱旁路后，本期全部修复并补 regression test + 真 sandbox-exec / seccomp 集成测试）
 - **CLI 测试数**：341 → **484**（+143）—— 反映 Q3.5 / P10 / P-H 阶段的命令族扩张（marketplace search / memory prune / agent replay / harness replay / backup / `workflow logs`）
 
 ### 1.2 四层心智模型（仍然成立，且更清晰）
@@ -99,10 +99,10 @@
 +----------------------------------------------------------------+
 ```
 
-- L1 唯一执行核；Q5.3 把 SIGINT/SIGTERM 助手收敛到 `agentflow-core::shutdown`，所有 binary（CLI / server / worker）共享同一退出码 / 信号语义 / `ShutdownReason` 枚举
+- L1 唯一执行核；Q5.3 把 SIGINT/SIGTERM 助手收敛到 `yanshi-core::shutdown`，所有 binary（CLI / server / worker）共享同一退出码 / 信号语义 / `ShutdownReason` 枚举
 - L2 全部以 `AsyncNode` / `Tool` / `EmbedClient` / `MemoryStore` / `LLMProvider` 等抽象被 L3 使用；本期 L2 没有新增 crate，但每个 L2 都过了一遍审计 + 修复
-- L3 **三轨入口**保持不变：`agentflow-agents`（agent-native）、`agentflow-nodes + agentflow-cli`（DAG）、`agentflow-harness`（长期会话 + workspace-aware + governable agent）。三轨通过 `AgentNode` × `WorkflowTool` × `HarnessRuntime::wrap` 互通
-- L4 横切面：删除 `agentflow-viz` 后只剩 5 个 crate，每个都是生产路径上的强依赖（tracing / server / db / worker / ui）；交付物边界更利落
+- L3 **三轨入口**保持不变：`yanshi-agents`（agent-native）、`yanshi-nodes + yanshi-cli`（DAG）、`yanshi-harness`（长期会话 + workspace-aware + governable agent）。三轨通过 `AgentNode` × `WorkflowTool` × `HarnessRuntime::wrap` 互通
+- L4 横切面：删除 `yanshi-viz` 后只剩 5 个 crate，每个都是生产路径上的强依赖（tracing / server / db / worker / ui）；交付物边界更利落
 
 ---
 
@@ -137,7 +137,7 @@
 - `P10.0.2` `[workspace.package]` 集中包 metadata（消除 `cargo publish --dry-run` 警告）
 - `P10.0.3` release notes + bracket CHANGELOG
 - `P10.0.4` `release.yml` workflow + 多架构 GHCR push
-- `P10.0.5` 可复现 fresh-VM `agentflow doctor` smoke
+- `P10.0.5` 可复现 fresh-VM `yanshi doctor` smoke
 - **tag `v1.0.0-rc.1`** 切于 `a8db47b`（2026-05-21）
 
 #### 主题 B — P10 优化 backlog 收尾（5/20–5/21，~30 commits）
@@ -153,7 +153,7 @@
 - **P10.8.1** ReAct trace replay diff
 - **P10.10.2** harness session replay pacing
 - **P10.4.1** per-tool `os_sandbox` override
-- **P10.13.1** **删除 `agentflow-viz` crate** 及依赖面
+- **P10.13.1** **删除 `yanshi-viz` crate** 及依赖面
 - **P10.19.1** WASM plugin runtime 1-pager + v2 deferral
 - **P10.19.3** `docs/ROADMAP_v2.md` consolidating post-v1.0 direction
 
@@ -212,7 +212,7 @@
 
 `419f991 feat(llm): unified .thinking() API across Anthropic/OpenAI/Google + DeepSeek-R1 surfacing`
 
-- 新 `agentflow_llm::thinking::{ThinkingConfig, ThinkingKind}`
+- 新 `yanshi_llm::thinking::{ThinkingConfig, ThinkingKind}`
   - `ThinkingConfig::{Auto, Low, Medium, High, Disabled}` 五档 + `Custom { kind, budget_tokens }`
   - Cross-provider mapping：
     - Anthropic: `thinking: { type: enabled, budget_tokens: N }` 请求体（Low=1024, Med=4096, High=16384, Auto=None→provider default）
@@ -220,14 +220,14 @@
     - OpenAI: Reasoning（`reasoning_effort: low|medium|high`）+ provider-specific 字段
     - DeepSeek: `reasoning_content` 字段 surfacing 到 `LLMResponse::thinking`
 - 响应侧新增 `ProviderResponse::thinking: Option<String>` / `LLMResponse::thinking` —— 调用端可拿到 raw thinking trace
-- Fluent API：`AgentFlow::model(...).thinking(ThinkingConfig::High).prompt(...).execute()`
+- Fluent API：`Yanshi::model(...).thinking(ThinkingConfig::High).prompt(...).execute()`
 - 注：`provider_consistency` 旧 bench / 部分集成测试因新增 `thinking` 字段需要 round 2 sweep；本期 lib 测试已 green，bench 编译需要补字段
 
 ---
 
 ## 3. 每 crate 细评（基于本期变更）
 
-### 3.1 `agentflow-core` ⭐⭐⭐ 成熟度：A
+### 3.1 `yanshi-core` ⭐⭐⭐ 成熟度：A
 
 - ✅ Flow / scheduler / FlowValue / expression / plugin host 全部 production-ready
 - ✅ **Q2.4 7 hygiene/determinism fixes**：`topological_sort` 用 BTreeMap 保证 deterministic 节点顺序；`openai_tools_array` 同样；`ScopedPermit::Drop` 不再 `tokio::spawn`（drop outside runtime 不再 panic）
@@ -236,7 +236,7 @@
 - ✅ **P10.1.1** FlowValue + checkpoint hot-path criterion benches 进 bench-gate
 - 不足：未发现
 
-### 3.2 `agentflow-nodes` ⭐⭐⭐ 成熟度：A
+### 3.2 `yanshi-nodes` ⭐⭐⭐ 成熟度：A
 
 - ✅ 16+ 内置节点全 production-ready
 - ✅ **Q1.3 三个 CRITICAL 安全旁路修复**：`FileNode` 现走 `FileTool` 沙箱（路径遍历 guard）；`HttpNode` 走 `HttpTool` 沙箱（SSRF 防护、超时）；`TextToImageNode` 不再 silent fake-data mock
@@ -244,7 +244,7 @@
 - ✅ **P10.2.1** per-node latency criterion benches 进 bench-gate
 - 不足：未发现
 
-### 3.3 `agentflow-llm` ⭐⭐⭐ 成熟度：A
+### 3.3 `yanshi-llm` ⭐⭐⭐ 成熟度：A
 
 - ✅ **9 provider 端到端**（含 nightly live 验证）：OpenAI / Anthropic / Google / Moonshot / StepFun / GLM·Zhipu / DashScope / DeepSeek / MiniMax
 - ✅ **统一 `.thinking()` API**（横切特性）：5 档 + Custom，Anthropic / OpenAI / Google native + DeepSeek-R1 reasoning content surfacing；response 携带 raw thinking trace
@@ -257,7 +257,7 @@
 - ✅ **fe69594** `LLMConfig::validate` 在缺 key 时 lenient（warn-only），strict 变体 opt-in
 - 不足：新 `thinking` 字段导致 `benches/provider_hop.rs` 需要补 init（非 production path）
 
-### 3.4 `agentflow-tools` ⭐⭐⭐⭐ 成熟度：A（升级）
+### 3.4 `yanshi-tools` ⭐⭐⭐⭐ 成熟度：A（升级）
 
 - ✅ **Q1.1 ShellTool / seccomp / SBPL 沙箱旁路 6 CRITICAL 全部修**：
   - **C1 修复**：引入 `ShellInterpretation::{Argv, Shell}` 枚举，默认 `Argv`，inline parser 拒元字符（`;` / `|` / `&` / `$` / `` ` `` / `>` / `<` / `(` / `)` / `\n`）；Shell 模式要求 `backend.is_enforcing() == true`
@@ -269,7 +269,7 @@
 - ✅ 安全核心类型（`SandboxPolicy` / `SandboxBackend` / `EffectiveCapabilities` / `ToolPermission` / `ToolMetadata` / `SecurityProfile`）现在与 wire/trace 契约对齐
 - 不足：未发现
 
-### 3.5 `agentflow-mcp` ⭐⭐⭐ 成熟度：A-
+### 3.5 `yanshi-mcp` ⭐⭐⭐ 成熟度：A-
 
 - ✅ client / server / stdio + retry / timeout / 重连
 - ✅ **Q2.6 协议正确性 2 CRITICAL**：stdio response demux by id（避免响应错配）+ stderr 排空到 tracing（避免 pipe deadlock）
@@ -279,7 +279,7 @@
 - ✅ P3.8 W3C traceparent 注入到 MCP JSON-RPC `_meta` envelope（5/19 已落地）
 - 不足：未发现
 
-### 3.6 `agentflow-rag` ⭐⭐⭐ 成熟度：A
+### 3.6 `yanshi-rag` ⭐⭐⭐ 成熟度：A
 
 - ✅ 全链路 + eval harness + CI baseline + paired regression gate
 - ✅ **Q2.8 OpenAI 批处理性能**：`MAX_BATCH_SIZE` 拆分成 inputs vs tokens 两个独立维度（之前 150× 欠批）
@@ -289,16 +289,16 @@
 - ✅ Dense + Hybrid eval baselines ship + dual-shape reader（`0adcf5d`）
 - 不足：未发现
 
-### 3.7 `agentflow-memory` ⭐⭐⭐ 成熟度：A-（升级）
+### 3.7 `yanshi-memory` ⭐⭐⭐ 成熟度：A-（升级）
 
 - ✅ 4 层 trait 表面（5/19 基线）
 - ✅ **Q2.1 SQLite 生产硬化**：shared `sqlite_pool` with WAL + `busy_timeout` + `foreign_keys` + 安全 `sqlite://` URL builder；4 个后端统一
 - ✅ **Q2.10 数据完整性**：`add_message` 取 `&self`（解锁 H3 并行 tool-call memory writes）；`row_to_message` 在解析失败时 propagate 错误而非 silently 假造 UUID
 - ✅ **P10.7.2 age-based encryption-at-rest**：`AgeEncryptedPreferenceStore<S: PreferenceStore>` 透明 age-encrypt 每个 `value`；keys 留 plaintext；on-disk shape `"age:v1:<base64>"` 拒绝 plaintext bleed-through；`generate_identity_file` / `load_identity_file` 拒绝覆盖 + chmod 0600；12 hermetic 测试
-- ✅ **P10.7.1** `agentflow memory prune` CLI（preference + entity_facts layer）
+- ✅ **P10.7.1** `yanshi memory prune` CLI（preference + entity_facts layer）
 - 不足：cloud KMS / envelope re-keying / multi-user 推迟到 v2（`docs/ROADMAP_v2.md` Theme B）
 
-### 3.8 `agentflow-agents` ⭐⭐⭐ 成熟度：A-
+### 3.8 `yanshi-agents` ⭐⭐⭐ 成熟度：A-
 
 - ✅ ReAct + PlanExecute + 三种 Supervisor + AgentNode + WorkflowTool + Reflection + MemorySummary + cancellation + RuntimeLimits + eval framework + cost tracking
 - ✅ **Q2.9 三个契约违反闭口**：`expect("every prepared call must have an output...")` 在 batch dispatch 改为 propagate；`Blackboard.write_internal` 的 `.expect("blackboard version poisoned")` 改为 graceful；PlanExecute `token_budget` 现在被消费
@@ -306,24 +306,24 @@
 - ✅ **Q3.12.2 Blackboard poison-tolerant version lock**：write 路径在 poisoned mutex 上不再 panic 整个 supervisor
 - 不足：未发现
 
-### 3.9 `agentflow-skills` ⭐⭐⭐ 成熟度：A-
+### 3.9 `yanshi-skills` ⭐⭐⭐ 成熟度：A-
 
 - ✅ SKILL.md / skill.toml / SkillBuilder / Marketplace / MCP adapter / registry / Validator protocol
 - ✅ **Q1.10 marketplace 完整性**：`d79dced` 真 Ed25519 marketplace signature verifier（之前是 self-checksum 不是签名）；`b89d1d0` bound marketplace fetches + 拒绝 `knowledge-path` escape；`2300647` validator stdin broken-pipe 在 child early-exit 时容错
-- ✅ **P10.4.1 per-tool `os_sandbox` override** on `[[tools]]`：`Option<bool>`，`None` 继承 manifest-level，`Some(true)/Some(false)` 单独 opt-in/out；只对 `shell` / `script` 生效；`agentflow skill inspect --explain-permissions` 打表
+- ✅ **P10.4.1 per-tool `os_sandbox` override** on `[[tools]]`：`Option<bool>`，`None` 继承 manifest-level，`Some(true)/Some(false)` 单独 opt-in/out；只对 `shell` / `script` 生效；`yanshi skill inspect --explain-permissions` 打表
 - ✅ **P10.9.1 MCP capability discovery default-on + 24h cache + spinner**（5/19 是 opt-in，现在默认开）
-- ✅ **P10.9.2 `agentflow marketplace search --format text|json|json-envelope`**
+- ✅ **P10.9.2 `yanshi marketplace search --format text|json|json-envelope`**
 - 不足：未发现
 
-### 3.10 `agentflow-harness` ⭐⭐⭐ 成熟度：A-
+### 3.10 `yanshi-harness` ⭐⭐⭐ 成熟度：A-
 
 - ✅ H0/H1/H2/H3/H4/H5 全 5 phase 完成（5/19 基线）
-- ✅ **Q1.7 冻结契约 + 凭据/PII 泄漏 2 CRITICAL**：`2ac0a84` `HarnessRuntime` 内部 `seq` 与 `HookConfig.seq` 合并到单一 source of truth（恢复 Beta 冻结契约里"monotonic, never gap"承诺）；`9f819e2` `ApprovalRequest.params_summary` / `ToolCallRequestedPayload.params_summary` 调用 `agentflow-tracing::redaction::redact_secrets` 后才 emit 到 JSONL / SSE
-- ✅ **Q3.10 余下 MAJOR**：`9c0ce21` synthetic gate events on `stop_after_deny`（恢复 trace 完整性）；`180144d` 真 `step_index`（不是 0 占位）+ paired Requested for cached approvals；`030bbda` `ExecutionTraceSink` 把 `HarnessEvent` 流翻译成 `agentflow_tracing::ExecutionTrace`，持久化任意 `TraceStorage` backend（关闭 `tracing_bridge` 只能写 JSONL 的缺口）
+- ✅ **Q1.7 冻结契约 + 凭据/PII 泄漏 2 CRITICAL**：`2ac0a84` `HarnessRuntime` 内部 `seq` 与 `HookConfig.seq` 合并到单一 source of truth（恢复 Beta 冻结契约里"monotonic, never gap"承诺）；`9f819e2` `ApprovalRequest.params_summary` / `ToolCallRequestedPayload.params_summary` 调用 `yanshi-tracing::redaction::redact_secrets` 后才 emit 到 JSONL / SSE
+- ✅ **Q3.10 余下 MAJOR**：`9c0ce21` synthetic gate events on `stop_after_deny`（恢复 trace 完整性）；`180144d` 真 `step_index`（不是 0 占位）+ paired Requested for cached approvals；`030bbda` `ExecutionTraceSink` 把 `HarnessEvent` 流翻译成 `yanshi_tracing::ExecutionTrace`，持久化任意 `TraceStorage` backend（关闭 `tracing_bridge` 只能写 JSONL 的缺口）
 - ✅ `25455b5` server 端 cap concurrent live harness sessions
 - 不足：H6 advanced compatibility 仍 DEFERRED 到 Later Tracks（`docs/H6_PROMOTION_CRITERIA.md`）
 
-### 3.11 `agentflow-cli` ⭐⭐⭐ 成熟度：A-
+### 3.11 `yanshi-cli` ⭐⭐⭐ 成熟度：A-
 
 - ✅ 14+ 命令族 + `CliJsonEnvelope<T>` 统一信封（5/19 基线）
 - ✅ **本期新增 4 个子命令**：`marketplace search` / `memory prune` / `agent replay --diff` / `harness replay` / `backup`（`pg_dump` + tar 编排）
@@ -333,7 +333,7 @@
 - ✅ **484 个测试**（5/19 比 341，+143）
 - 不足：未发现
 
-### 3.12 `agentflow-tracing` ⭐⭐⭐ 成熟度：A
+### 3.12 `yanshi-tracing` ⭐⭐⭐ 成熟度：A
 
 - ✅ EventListener / JSONL / SQLite / Postgres / replay / TUI / OTel OTLP / W3C traceparent / redaction / `context::scope` 助手
 - ✅ **Q2.2 drain panic 隔离 + W3C 合规 random IDs + inbound traceparent**：drain task panic 后不再 silent event loss；OTel `trace_id` / `span_id` 用真 random 而不是 FNV hash（W3C 合规）
@@ -341,7 +341,7 @@
 - ✅ **Q3.10.4 ExecutionTraceSink**：Harness `HarnessEvent` 流可翻译并持久化到任意 `TraceStorage` backend，恢复"tracing_bridge 一致性"的 CLAUDE.md 承诺
 - 不足：第一方 OTLP transport（HTTP/gRPC + TLS + auth）仍 deferred；操作员仍需 BYO `OtelSpanSink` 实现
 
-### 3.13 `agentflow-server` ⭐⭐⭐ 成熟度：A
+### 3.13 `yanshi-server` ⭐⭐⭐ 成熟度：A
 
 - ✅ Run / Cancel / Graph / Event History / SSE / Skill API / Bearer auth / 安全 profile / CORS+body limit / embedded Web UI / Harness routes / tenant / retention / diagnostics / preferences（5/19 基线）
 - ✅ **Q1.4 多租户边界 3 CRITICAL 全部修**：`7fafb2e` list + submit；`ddc497c` 每个 `:id`-bound GET / SSE / action 端点；`60b3987` test 不再用 global TRUNCATE race；`55a5fa9` 每个 endpoint pin tenant boundary
@@ -353,15 +353,15 @@
 - ✅ **P10.16.1 signed-JWT worker admission flavour** + capability + locality hints
 - 不足：未发现
 
-### 3.14 `agentflow-db` ⭐⭐⭐ 成熟度：A-
+### 3.14 `yanshi-db` ⭐⭐⭐ 成熟度：A-
 
 - ✅ **9 表 schema**（+`run_retention_overrides`）+ migration 0001-0006
 - ✅ **Q1.5 租户过滤 1 CRITICAL + 2 MAJOR**：`b67bd6b` `SkillInstallRepo::list` + `EventRepo` + `HarnessEventRepo` 全部 tenant-scope；migration `0006_mcp_sessions_tenant_id.sql` 补缺列
 - ✅ **Q3.11 余下 MAJOR**：`f700b98` O(1) `max_seq` for `next_event_seq`（之前是 phantom "running" row 风险）；`8131c8d` pool `test_before_acquire` + `max_lifetime` defaults（cloud LB reaping）；`0d04cf8` 大表 migration `0003_tenant_id_columns.sql` 操作 playbook
 - ✅ `432bfb0` `PgRunRepo::list_filtered` 现在 SELECT retention 列
-- 不足：backup/restore 仍是文档 + CLI 编排（`agentflow backup` 在 CLI 端，`pg_dump` + tar）
+- 不足：backup/restore 仍是文档 + CLI 编排（`yanshi backup` 在 CLI 端，`pg_dump` + tar）
 
-### 3.15 `agentflow-worker` ⭐⭐⭐ 成熟度：B+
+### 3.15 `yanshi-worker` ⭐⭐⭐ 成熟度：B+
 
 - ✅ 6 类 node payload（5/19 基线）+ admission / credential / PSK rotation + resource limits + 6 failure-domain tests
 - ✅ **Q1.6 gRPC 通道认证 CRITICAL**：`c688a02` worker 客户端把 PSK 注入 gRPC metadata；服务端 `AuthenticatedControlPlane` 在 wire 上强制（之前是配了但从未在 wire 上 enforce）
@@ -371,7 +371,7 @@
 - ✅ **P10.16.2-FU1 capability + locality hints across gRPC**
 - 不足：TLS 仍是 operator 责任（reverse proxy / mTLS sidecar），第一方 TLS 内置仍是 v1.x
 
-### 3.16 `agentflow-ui` ⭐⭐⭐ 成熟度：B+
+### 3.16 `yanshi-ui` ⭐⭐⭐ 成熟度：B+
 
 - ✅ Run list / DAG 图 / 事件回放 + SSE 实时更新 + Run creation form + 诊断面板 + trace 比较 + 偏好同步 + 客户端 event filter + Harness Mode 完整 UI（5/19 基线）
 - ✅ **Q1.9 Token 与 EventSource 安全**：`6748a43` tab-scoped API token + fetch-based SSE that carries auth（之前是 `localStorage` + 裸 EventSource 静默降级 polling）
@@ -398,7 +398,7 @@
 
 | 主题维度 | 当前对齐情况 | 偏离风险 | 较 5/19 变化 |
 | --- | --- | --- | --- |
-| **DAG 底座** | ✅ `agentflow-core` 全部 production；Q2.4 determinism + Q5.3 unified shutdown | 无 | + 7 hygiene fixes + 统一 shutdown |
+| **DAG 底座** | ✅ `yanshi-core` 全部 production；Q2.4 determinism + Q5.3 unified shutdown | 无 | + 7 hygiene fixes + 统一 shutdown |
 | **Native-Agent 底座** | ✅ ReAct + PlanExecute + 三 Supervisor + AgentNode + WorkflowTool + cancellation + eval | 无 | + Q2.9 / Q3.12 contract closure |
 | **Harness Agent Mode** | ✅ 5 phase 全 closed；envelope/hooks/approval/parallel/tasks/server+UI 完整；Q1.7 seq + redaction 修复后 Beta 冻结承诺重新可信 | 无 | + Q1.7 + Q3.10 全部 |
 | **LLM / VLM 组件** | ✅ 9 provider 原生 tool calling + 多模态 + streaming + cross-provider invariants + 统一 `.thinking()` API | 无 | + thinking + Q1.8 + Q2.5 + Q3.6 |
@@ -435,7 +435,7 @@
 | R12 | Web UI 是 alpha 形态 | — | ✅ 升级到 B+（Q3.7 ErrorBoundary + 组件分层） |
 | R13 | Memory layering / 长期记忆 schema 初级 | — | ✅ 已解决 + **P10.7.2 age-based encryption** |
 | R14 | CLI feature 矩阵 CI 覆盖不足 | — | ✅ 已解决 |
-| R15 | `AgentFlow::init()` fail-close 全 provider key | — | ✅ 已解决（`fe69594` lenient + strict opt-in） |
+| R15 | `Yanshi::init()` fail-close 全 provider key | — | ✅ 已解决（`fe69594` lenient + strict opt-in） |
 | R16 | DashScope / DeepSeek / MiniMax 共享 OpenAIProvider | 低 | 未变（按个案 promote 策略保持） |
 | R17 | v1.0.0-rc.1 tag 切版未执行 | — | ✅ **已切**（`a8db47b 2026-05-21`，含 release.yml） |
 | **R18 (新)** | 多租户边界曾是软提示而非安全边界 | — | ✅ **已修**（Q1.4 + Q1.5 + 测试每端点 pin） |
@@ -448,9 +448,9 @@
 | **R25 (新)** | 全 workspace 无 graceful shutdown | — | ✅ **已修**（Q3.1 + Q5.3 统一助手） |
 | **R26 (新)** | Production unwrap/expect 违反全局规则 | — | ✅ **已修**（Q5.1 wave 1 + 2 + CI deny-lint） |
 | **R27 (新)** | rustc 1.96 升级带来 3 个新 clippy lint 在 lib 上触发 | — | ✅ **已修**（2026-06-06 housekeeping commit `97e4b8c`）：批量修复 11 个 clippy 1.96 新 lint 类型（`manual_pattern_char_comparison` / `derivable_impls` / `collapsible_if` / `doc_lazy_continuation` / `needless_borrow` / `unnecessary_cast` / `unnecessary_sort_by` / `assertions_on_constants` / `field_reassign_with_default` / `manual_contains` / `unused_mut`）跨 11 个 crate；`cargo clippy --workspace --all-targets -- -D warnings` 全 clean |
-| **R28 (新)** | `agentflow-viz` 删除后，旧用户文档中"VisualGraph → Mermaid/DOT/JSON" 引用可能产生死链 | 低 | CLAUDE.md 已修；外部用户引用需要在 RC release notes 显式提醒 |
+| **R28 (新)** | `yanshi-viz` 删除后，旧用户文档中"VisualGraph → Mermaid/DOT/JSON" 引用可能产生死链 | 低 | CLAUDE.md 已修；外部用户引用需要在 RC release notes 显式提醒 |
 | **R29 (新)** | `provider_consistency` bench/integration 测试新 `thinking` 字段未覆盖 | — | ✅ **已修**（2026-06-06 housekeeping commit `97e4b8c`）：`benches/provider_hop.rs` 的 `ProviderRequest` 构造点补 `thinking: None` |
-| **R30 (新)** | UI E2E nightly 长期红（2026-05-23 起 14 连续夜失败） | — | ✅ **已修**（2026-06-06 commits `e7997e8` + `e2b67b6`）：根因是 Q1.4.2/3 多租户硬边界落地后 UI `apiFetch` 没传 `X-Agentflow-Tenant` header；body tenant ≠ auth header tenant → 403。修复：`apiFetch` 新增可选 4th 参数 `tenant`；`HarnessSubmitForm` / `HarnessSessionList` / `HarnessSessionDetail` / `RunCreateForm` 全部传 tenant；detail 页通过 URL `?tenant=` 串联 tenant；harness e2e regex 拓宽允许 `?tenant=` 后缀。CI cargo cache 隐藏了之前 14 天的真实失败 —— 直到 dist asset 变更触发 cache invalidation 才暴露 |
+| **R30 (新)** | UI E2E nightly 长期红（2026-05-23 起 14 连续夜失败） | — | ✅ **已修**（2026-06-06 commits `e7997e8` + `e2b67b6`）：根因是 Q1.4.2/3 多租户硬边界落地后 UI `apiFetch` 没传 `X-Yanshi-Tenant` header；body tenant ≠ auth header tenant → 403。修复：`apiFetch` 新增可选 4th 参数 `tenant`；`HarnessSubmitForm` / `HarnessSessionList` / `HarnessSessionDetail` / `RunCreateForm` 全部传 tenant；detail 页通过 URL `?tenant=` 串联 tenant；harness e2e regex 拓宽允许 `?tenant=` 后缀。CI cargo cache 隐藏了之前 14 天的真实失败 —— 直到 dist asset 变更触发 cache invalidation 才暴露 |
 
 ---
 
@@ -460,9 +460,9 @@
 
 ### 6.1 v1.0 GA 前（建议短期 polish）
 
-1. **Toolchain housekeeping**：3 个新 rustc 1.96 lint 在 `agentflow-tracing` / `agentflow-tools` / `agentflow-rag` 触发；批量修复 `manual_char_comparison` / `derive Default` / `collapsible_if` 让 `clippy --all-targets` 再次 clean
+1. **Toolchain housekeeping**：3 个新 rustc 1.96 lint 在 `yanshi-tracing` / `yanshi-tools` / `yanshi-rag` 触发；批量修复 `manual_char_comparison` / `derive Default` / `collapsible_if` 让 `clippy --all-targets` 再次 clean
 2. **`provider_consistency` bench/integration `thinking` 字段 init sweep**：让所有 `ProviderRequest` 构造点显式 `thinking: None`（或 `Default::default()`）
-3. **`agentflow doctor` fresh-VM smoke 修补**：dress rehearsal 暴露的 F4（fresh host warning）已在 release notes 写 runbook；可考虑把 runbook 步骤变成 `doctor --bootstrap` 的可执行自检
+3. **`yanshi doctor` fresh-VM smoke 修补**：dress rehearsal 暴露的 F4（fresh host warning）已在 release notes 写 runbook；可考虑把 runbook 步骤变成 `doctor --bootstrap` 的可执行自检
 4. **OTLP first-party transport**（R28 / Q2.3.3 deferred）：HTTP/gRPC + TLS + auth 仍待，操作员仍需 BYO；若 v1.0 GA 前能 ship 会显著降低 observability 接入门槛
 5. **Web UI 产品化进一步规划**：debugger-only 已 pin，但 P10.17 阶段揭示 UI 是新用户 onboarding 关键面；可基于 RC 反馈决定是否启动"运营仪表盘"路线（运行成本 / retry rates / policy decisions / worker utilization）
 
@@ -471,7 +471,7 @@
 6. **Plugin runtime WASM 选项**：subprocess JSON-RPC 已是稳定 v1，WASM 作为 v2 候选；`docs/ROADMAP_v2.md` 已留 Theme
 7. **Worker 第一方 TLS / mTLS**：当前依赖 reverse proxy + sidecar；若客户有强需求可内置
 8. **DashScope/DeepSeek/MiniMax dedicated provider 模块**：仅在 vendor 出现 wire 分歧时再做
-9. **`agentflow-rag` cloud KMS + envelope re-keying + multi-user encryption**：v2 Theme B 已留
+9. **`yanshi-rag` cloud KMS + envelope re-keying + multi-user encryption**：v2 Theme B 已留
 10. **Slash-command 生态 / TUI 形态**（Harness H6）：按个案 promote
 
 ### 6.3 文档维护
@@ -498,7 +498,7 @@
 
 ## 8. 最终结论
 
-AgentFlow 在 18 天内完成了一次**深审驱动的全面硬化**，并切下 **v1.0.0-rc.1 标签**。代码层从"v1.0.0-rc.1 候选窗口完全打开"过渡到"**v1.0.0-rc.1 已签，全部生产阻断性 finding 全部 closed，进入 RC 反馈轮**"。
+Yanshi 在 18 天内完成了一次**深审驱动的全面硬化**，并切下 **v1.0.0-rc.1 标签**。代码层从"v1.0.0-rc.1 候选窗口完全打开"过渡到"**v1.0.0-rc.1 已签，全部生产阻断性 finding 全部 closed，进入 RC 反馈轮**"。
 
 **确认对齐项目主题**：
 
@@ -521,7 +521,7 @@ AgentFlow 在 18 天内完成了一次**深审驱动的全面硬化**，并切�
 
 **下一个评估窗口建议**：v1.0.0-rc.1 远程推送 + RC 反馈 2-3 周后，或 v1.0 GA 前。届时关注：
 
-1. RC release 反馈：fresh-host onboarding 摩擦（`AGENTFLOW_API_TOKEN` + provider keys + Postgres 初次部署）
+1. RC release 反馈：fresh-host onboarding 摩擦（`YANSHI_API_TOKEN` + provider keys + Postgres 初次部署）
 2. 9 provider nightly 长期运行：vendor-side model 弃用频次（决定 `xtask refresh-live-models` 是否要进 CI 触发自动 PR）
 3. Harness Mode 长会话稳定性（H6 advanced compatibility 是否有 promote-worthy 项浮现）
 4. Web UI 在运营场景的进一步反馈（debugger-only RFC 是否需要升级 product 定位）
@@ -535,24 +535,24 @@ AgentFlow 在 18 天内完成了一次**深审驱动的全面硬化**，并切�
 > 主要参考：
 >
 > - **代码**：
->   - `agentflow-core/src/{flow,scheduler,value,expression,shutdown,robustness,plugin/*}.rs`
->   - `agentflow-agents/src/{runtime,react/agent,plan_execute,reflection,supervisor/{handoff,blackboard,debate},eval/*}.rs`
->   - `agentflow-harness/src/{lib,runtime,events,tasks,hooks_runtime,approval_providers,tracing_bridge,execution_trace_sink}.rs`
->   - `agentflow-tools/src/{tool,policy,sandbox/{macos,linux,noop},builtin/{shell,http,file}}.rs`
->   - `agentflow-llm/src/{tool_calling,thinking,modality_dispatch,providers/{openai,anthropic,google,moonshot,stepfun,openai_asr,mod}}.rs`
->   - `agentflow-server/src/{lib,auth,runs,skills,events_stream,ui,cleanup,tenant,harness*,scheduler/{distributed,grpc},metrics}.rs`
->   - `agentflow-db/src/{database,repo}.rs` + `migrations/000{1..6}_*.sql`
->   - `agentflow-worker/src/{lib,protocol,runtime,admission}.rs`
->   - `agentflow-ui/src/{main,pages/*,lib/*,components/*,schemas,eventFilter,preferences,usePreferenceSync}.{ts,tsx}`
->   - `agentflow-rag/src/{eval/{metrics,runner,baseline,dense,hybrid},chunking/recursive,loaders/{pdf,html}}.rs`
->   - `agentflow-memory/src/{layer,age_encrypted_preference_store,sqlite/*}.rs`
+>   - `yanshi-core/src/{flow,scheduler,value,expression,shutdown,robustness,plugin/*}.rs`
+>   - `yanshi-agents/src/{runtime,react/agent,plan_execute,reflection,supervisor/{handoff,blackboard,debate},eval/*}.rs`
+>   - `yanshi-harness/src/{lib,runtime,events,tasks,hooks_runtime,approval_providers,tracing_bridge,execution_trace_sink}.rs`
+>   - `yanshi-tools/src/{tool,policy,sandbox/{macos,linux,noop},builtin/{shell,http,file}}.rs`
+>   - `yanshi-llm/src/{tool_calling,thinking,modality_dispatch,providers/{openai,anthropic,google,moonshot,stepfun,openai_asr,mod}}.rs`
+>   - `yanshi-server/src/{lib,auth,runs,skills,events_stream,ui,cleanup,tenant,harness*,scheduler/{distributed,grpc},metrics}.rs`
+>   - `yanshi-db/src/{database,repo}.rs` + `migrations/000{1..6}_*.sql`
+>   - `yanshi-worker/src/{lib,protocol,runtime,admission}.rs`
+>   - `yanshi-ui/src/{main,pages/*,lib/*,components/*,schemas,eventFilter,preferences,usePreferenceSync}.{ts,tsx}`
+>   - `yanshi-rag/src/{eval/{metrics,runner,baseline,dense,hybrid},chunking/recursive,loaders/{pdf,html}}.rs`
+>   - `yanshi-memory/src/{layer,age_encrypted_preference_store,sqlite/*}.rs`
 > - **测试**：
->   - `agentflow-llm/tests/{provider_consistency,provider_consistency_live,thinking_*}.rs`
->   - `agentflow-server/tests/{harness_routes,harness_approval_routes,harness_live_executor,harness_full_stack_e2e,tenant_boundary_*,e2e_runs}.rs`
->   - `agentflow-tools/tests/{sandbox_macos,sandbox_linux,shell_interpretation}.rs`
->   - `agentflow-worker/tests/{resource_limits,failure_domains,gRPC_auth}.rs`
+>   - `yanshi-llm/tests/{provider_consistency,provider_consistency_live,thinking_*}.rs`
+>   - `yanshi-server/tests/{harness_routes,harness_approval_routes,harness_live_executor,harness_full_stack_e2e,tenant_boundary_*,e2e_runs}.rs`
+>   - `yanshi-tools/tests/{sandbox_macos,sandbox_linux,shell_interpretation}.rs`
+>   - `yanshi-worker/tests/{resource_limits,failure_domains,gRPC_auth}.rs`
 > - **文档**：
->   - `docs/audit/{README,agentflow-*}.md`（16 个深度审计报告）
+>   - `docs/audit/{README,yanshi-*}.md`（16 个深度审计报告）
 >   - `docs/{HARNESS_MODE,LLM_PROVIDERS_MATRIX,CLI_JSON_OUTPUT,MEMORY_LAYERING,STABILITY,CURRENT_STATUS,API_COMPATIBILITY,RAG_EVAL,TOOL_PERMISSIONS,RELEASE_NOTES_v1.0.0-rc.1,ROADMAP_v2,H6_PROMOTION_CRITERIA,LLM_PROVIDER_MODULE_PROMOTION}.md`
 >   - `RoadMap.md` / `TODOs.md` / `CLAUDE.md` / `CHANGELOG.md` / `AGENTS.md`
 > - **CI**：
