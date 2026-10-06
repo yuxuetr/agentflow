@@ -39,7 +39,7 @@ When one provider has issues, you can easily switch to another:
 |----------|---------------|---------------------|
 | OpenAI | `gpt-4o-mini`, `gpt-3.5-turbo` | `OPENAI_API_KEY` |
 | DeepSeek | `deepseek-chat`, `deepseek-coder` | `DEEPSEEK_API_KEY` |
-| Moonshot | `moonshot-v1-8k`, `moonshot-v1-32k` | `MOONSHOT_API_KEY` |
+| Moonshot | `kimi-k2.6` | `MOONSHOT_API_KEY` |
 | Qwen | `qwen-plus`, `qwen-turbo` | `DASHSCOPE_API_KEY` |
 | StepFun | `step-2-mini`, `step-1-mini` | `STEP_API_KEY` |
 | Zhipu | `glm-4`, `glm-3-turbo` | `ZHIPU_API_KEY` |

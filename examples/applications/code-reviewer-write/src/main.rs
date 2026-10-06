@@ -169,7 +169,7 @@ struct Args {
 fn parse_args() -> Result<Args> {
   let mut commit: Option<String> = None;
   let mut ledger: Option<PathBuf> = None;
-  let mut model: String = "moonshot-v1-128k".to_string();
+  let mut model: String = "kimi-k2.6".to_string();
   let mut auto_approve = false;
   let mut prefetch_diff = false;
   let mut it = std::env::args().skip(1);
@@ -206,7 +206,7 @@ fn print_help() {
      FLAGS:\n  \
        --commit <ref>      git commit / ref to review (required)\n  \
        --ledger <path>     where the review JSON gets written (default: /tmp/pr-review-ledger.json)\n  \
-       --model <name>      LLM model (default: moonshot-v1-128k)\n  \
+       --model <name>      LLM model (default: kimi-k2.6)\n  \
        --auto-approve      bypass interactive approval (CI smoke; defaults to interactive CLI prompt)\n  \
        --prefetch-diff     run `git show` outside the agent, inline the diff into the prompt,\n  \
                            and register only FileTool. Isolates the file:write approval path\n  \

@@ -250,7 +250,7 @@ fn parse_args() -> Result<Args> {
   let mut max_results: u32 = 30;
   let mut output: Option<PathBuf> = None;
   let mut state_path: Option<PathBuf> = None;
-  let mut model: String = "moonshot-v1-128k".to_string();
+  let mut model: String = "kimi-k2.6".to_string();
 
   let mut it = std::env::args().skip(1);
   while let Some(flag) = it.next() {
@@ -296,7 +296,7 @@ fn print_help() {
        --max-results <N>    How many recent papers to fetch (default: 30; arxiv max: 2000)\n  \
        --output <path>      Where to write the markdown briefing (default: /tmp/arxiv-briefing.md)\n  \
        --state <path>       SQLite file for seen-papers dedup (default: ~/.agentflow/state/research-assistant.db)\n  \
-       --model <name>       LLM model for the briefing call (default: moonshot-v1-128k)\n  \
+       --model <name>       LLM model for the briefing call (default: kimi-k2.6)\n  \
        -h, --help           Show this help\n\
      \n\
      ENV:\n  \

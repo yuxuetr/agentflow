@@ -130,7 +130,7 @@ fn print_help() {
        --output <path>     Output audio path (default: /tmp/episode.wav). SRT is written alongside.\n  \
        --segments <N>      Approx number of dialogue segments to generate (default: 10).\n  \
        --tts <backend>     TTS provider: minimax (default) / edge (free) / openai. Also via PODCAST_TTS env.\n  \
-       --model <name>      LLM model (default: moonshot-v1-128k). Examples: moonshot-v1-32k, kimi-k2.6.\n  \
+       --model <name>      LLM model (default: kimi-k2.6). Examples: kimi-k2.6, gpt-4o-mini.\n  \
        -h, --help          Show this help.\n\
      \n\
      ENV:\n  \

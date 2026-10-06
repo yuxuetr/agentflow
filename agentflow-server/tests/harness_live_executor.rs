@@ -90,7 +90,7 @@ async fn live_executor_runs_moonshot_session_end_to_end() {
             "workspace_root": workspace.path().display().to_string(),
             "profile": "local",
             "runtime_kind": "react",
-            "model": "moonshot-v1-auto",
+            "model": "kimi-k2.6",
             "tenant_id": tenant,
           }))
           .unwrap(),

@@ -42,7 +42,7 @@ test.describe('P-H.5 slice 3 — /ui/harness/sessions', () => {
     await page.getByTestId('harness-new-tenant').fill(`e2e-${Date.now()}`);
     await page.getByTestId('harness-new-profile').selectOption('local');
     await page.getByTestId('harness-new-runtime').selectOption('react');
-    await page.getByTestId('harness-new-model').fill('moonshot-v1-auto');
+    await page.getByTestId('harness-new-model').fill('kimi-k2.6');
     await page.getByTestId('harness-new-workspace').fill('/tmp');
     await page.getByTestId('harness-new-prompt').fill('Reply with a one-word answer.');
 

@@ -314,9 +314,9 @@ models:
     temperature: 0.5
     max_tokens: 4096
 
-  moonshot-v1-8k:
+  kimi-k2.6:
     vendor: moonshot
-    temperature: 0.7
+    temperature: 1.0
     max_tokens: 8192
     supports_streaming: true
 
@@ -441,8 +441,8 @@ for model in models {
 - Environment: `GOOGLE_API_KEY` or `GEMINI_API_KEY`
 
 ### Moonshot
-- Models: moonshot-v1-8k, moonshot-v1-32k, moonshot-v1-128k,
-  kimi-k2-0711-preview, kimi-k2.5, kimi-k2.6
+- Models: kimi-k2-0711-preview, kimi-k2.5, kimi-k2.6 (the `moonshot-v1-*`
+  family was retired upstream on 2026-08-31 and removed from the registry)
 - Features: Streaming, Chinese and English, long context (up to 128k tokens)
 - Environment: `MOONSHOT_API_KEY` or `MOONSHOT_KEY`
 - **kimi-k2.6 quirk (F-A7-5)**: only accepts `temperature: 1.0`.

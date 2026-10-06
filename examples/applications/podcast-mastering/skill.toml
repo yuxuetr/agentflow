@@ -61,7 +61,7 @@ role = """
 """
 
 [model]
-name           = "moonshot-v1-128k"
+name           = "kimi-k2.6"
 max_iterations = 12
 budget_tokens  = 40000
 

@@ -81,16 +81,16 @@ nodes:
 
         # Step 2: actual LLM translation. `prompt` is the rendered
         # template from step 1. Model + temperature + max_tokens
-        # configured here. Lower temperature for translation
-        # determinism.
+        # configured here. kimi-k2.6 rejects any temperature other
+        # than 1.0 (F-A7-5), so determinism comes from the prompt.
         - id: "translate_one"
           type: "llm"
           dependencies: ["build_prompt"]
           input_mapping:
             prompt: "{{ nodes.build_prompt.outputs.output }}"
           parameters:
-            model: "moonshot-v1-128k"
-            temperature: 0.2
+            model: "kimi-k2.6"
+            temperature: 1.0
             max_tokens: 1024
 
   # Fan-in: a small summary so the run produces a single human-readable

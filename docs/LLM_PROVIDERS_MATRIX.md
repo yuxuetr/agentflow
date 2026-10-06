@@ -165,7 +165,7 @@ never silently truncate.
 | Anthropic | `claude-3-opus-20240229` | 200K | `best_effort` (offline only) |
 | Google | `gemini-1.5-flash`, `gemini-1.5-pro` | 1M | `tested` (offline; live nightly) |
 | Google | `gemini-2.0-flash`, `gemini-2.0-flash-exp` | 1M | `best_effort` (offline only) |
-| Moonshot | `moonshot-v1-8k`, `moonshot-v1-32k`, `moonshot-v1-128k` | 8K / 32K / 128K | `tested` (live + offline) |
+| Moonshot | `kimi-k2.6` (`moonshot-v1-*` retired 2026-08-31) | — | `tested` (live + offline) |
 | StepFun | `step-1-8k`, `step-1-128k`, `step-1v-8k`, `step-2-16k` | 8K – 128K | `tested` (live + offline) |
 | GLM | `glm-4.5`, `glm-4.5-flash`, `glm-4.5v` | 128K | `tested` (live + offline, vision opt-in) |
 | Mock | `mock-runtime-*`, `mock-*` | configurable per test | n/a |
@@ -371,7 +371,7 @@ Behavior of the harness:
    and legacy `~/.agentflow/models.yaml` are loaded through the same resolver
    used by CLI and server code.
 3. Uses minimum-cost defaults per provider (`gpt-4o-mini`,
-   `claude-3-5-haiku-20241022`, `gemini-1.5-flash`, `moonshot-v1-8k`,
+   `claude-3-5-haiku-20241022`, `gemini-1.5-flash`, `kimi-k2.6`,
    `step-1-8k`); each is overridable via
    `AGENTFLOW_LIVE_<PROVIDER>_TEXT_MODEL`. The older
    `AGENTFLOW_LIVE_<PROVIDER>_MODEL` form remains accepted for compatibility.

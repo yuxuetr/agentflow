@@ -60,7 +60,8 @@ const REFRESH_LIVE_MODELS_PROBES: &[LiveModelProbe] = &[
   LiveModelProbe {
     name: "moonshot",
     key_envs: &["MOONSHOT_API_KEY"],
-    default_text_model: "moonshot-v1-8k",
+    // The moonshot-v1-* lineage was retired (404 since 2026-08-31).
+    default_text_model: "kimi-k2.6",
     endpoint: LiveModelsEndpoint::OpenAICompat("https://api.moonshot.cn/v1/models"),
   },
   LiveModelProbe {

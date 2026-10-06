@@ -220,11 +220,7 @@ impl LLMProvider for MoonshotProvider {
   }
 
   fn supported_models(&self) -> Vec<String> {
-    vec![
-      "moonshot-v1-8k".to_string(),
-      "moonshot-v1-32k".to_string(),
-      "moonshot-v1-128k".to_string(),
-    ]
+    vec!["kimi-k2.6".to_string()]
   }
 }
 
@@ -503,9 +499,8 @@ mod tests {
   fn test_supported_models() {
     let provider = MoonshotProvider::new("test-key", None).unwrap();
     let models = provider.supported_models();
-    assert!(models.contains(&"moonshot-v1-8k".to_string()));
-    assert!(models.contains(&"moonshot-v1-32k".to_string()));
-    assert!(models.contains(&"moonshot-v1-128k".to_string()));
+    assert!(models.contains(&"kimi-k2.6".to_string()));
+    assert!(!models.iter().any(|m| m.starts_with("moonshot-v1")));
   }
 
   /// P-LLM2.5 regression: Moonshot speaks the identical OpenAI-compatible

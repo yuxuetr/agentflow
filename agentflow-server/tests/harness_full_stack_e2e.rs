@@ -97,7 +97,7 @@ async fn full_stack_e2e_submit_stream_history_resume() {
             "workspace_root": workspace.path().display().to_string(),
             "profile": "local",
             "runtime_kind": "react",
-            "model": "moonshot-v1-auto",
+            "model": "kimi-k2.6",
             "tenant_id": tenant,
           }))
           .unwrap(),

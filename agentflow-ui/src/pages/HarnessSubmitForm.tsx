@@ -22,7 +22,7 @@ import { readStorage, writeStorage } from '../lib/storage';
 
 const harnessFormStarterPrompt = '请用一句话总结当前工作区。';
 const harnessFormStarterWorkspace = '/tmp';
-const harnessFormStarterModel = 'moonshot-v1-auto';
+const harnessFormStarterModel = 'kimi-k2.6';
 
 export function HarnessSubmitForm({
   apiToken,
@@ -230,7 +230,7 @@ export function HarnessSubmitForm({
               data-testid="harness-new-model"
               value={model}
               onChange={(event) => setModel(event.target.value)}
-              placeholder="moonshot-v1-auto"
+              placeholder="kimi-k2.6"
             />
           </label>
           <label className="harness-grow">

@@ -108,8 +108,8 @@ nodes:
           input_mapping:
             prompt: "{{ nodes.build_prompt.outputs.output }}"
           parameters:
-            model: "moonshot-v1-128k"
-            temperature: 0.2
+            model: "kimi-k2.6"
+            temperature: 1.0
             max_tokens: 2048
 
         - id: "write_translation"

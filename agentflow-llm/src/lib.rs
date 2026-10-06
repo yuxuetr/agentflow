@@ -346,7 +346,7 @@ impl AgentFlow {
   ///
   /// Example:
   /// ```ignore
-  /// let is_valid = AgentFlow::validate_model("moonshot-v1-8k", "moonshot").await?;
+  /// let is_valid = AgentFlow::validate_model("kimi-k2.6", "moonshot").await?;
   /// println!("Model is valid: {}", is_valid);
   /// ```
   pub async fn validate_model(model_name: &str, vendor: &str) -> Result<bool> {

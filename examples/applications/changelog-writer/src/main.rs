@@ -10,7 +10,7 @@
 //!    captures stdout. Pure Rust, no agent involved. Validates the
 //!    "shell out from inside a node" pattern.
 //! 2. `ClassifyAndRenderNode` — single LLM call (Moonshot
-//!    `moonshot-v1-128k`) with a strict prompt that takes raw `git log`
+//!    `kimi-k2.6`) with a strict prompt that takes raw `git log`
 //!    output and returns categorized markdown. No tool calling, no
 //!    ReAct loop; one prompt, one response.
 //!
@@ -227,7 +227,7 @@ struct Args {
 fn parse_args() -> Result<Args> {
   let mut range: Option<String> = None;
   let mut output: Option<PathBuf> = None;
-  let mut model: String = "moonshot-v1-128k".to_string();
+  let mut model: String = "kimi-k2.6".to_string();
 
   let mut it = std::env::args().skip(1);
   while let Some(flag) = it.next() {
@@ -260,7 +260,7 @@ fn print_help() {
      FLAGS:\n  \
        --range <git-range>  Git range string passed verbatim to `git log` (required)\n  \
        --output <path>      Write changelog to this file (default: stdout)\n  \
-       --model <name>       LLM model (default: moonshot-v1-128k)\n  \
+       --model <name>       LLM model (default: kimi-k2.6)\n  \
        -h, --help           Show this help\n\
      \n\
      ENV:\n  \

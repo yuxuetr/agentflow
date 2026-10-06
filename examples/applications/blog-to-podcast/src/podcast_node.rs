@@ -93,7 +93,7 @@ impl PodcastNodeConfig {
       llm_base_url: "https://api.moonshot.cn/v1".into(),
       // Stable canonical name on Moonshot; 128k context handles any
       // realistic blog without truncation. Override via --model.
-      llm_model: "moonshot-v1-128k".into(),
+      llm_model: "kimi-k2.6".into(),
     }
   }
 
@@ -105,8 +105,8 @@ impl PodcastNodeConfig {
     self
   }
 
-  /// Override the LLM model name. Useful for swapping between Moonshot
-  /// models (`moonshot-v1-128k` / `moonshot-v1-32k` / `kimi-k2.6` / …).
+  /// Override the LLM model name. Useful for swapping to any
+  /// registry model (`kimi-k2.6`, `gpt-4o-mini`, …).
   pub fn with_llm_model(mut self, model: impl Into<String>) -> Self {
     self.llm_model = model.into();
     self
