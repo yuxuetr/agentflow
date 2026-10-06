@@ -26,4 +26,4 @@ tokio = { workspace = true, features = ["sync"] }
 jsonschema = { version = "0.17", default-features = false }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
