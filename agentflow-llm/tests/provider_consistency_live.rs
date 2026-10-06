@@ -798,7 +798,10 @@ where
     // "no longer available to new users" per the API; `gemini-2.5-flash`
     // is the current cheap-tier model.
     "google" => live_text_model(provider_name, "gemini-2.5-flash"),
-    "moonshot" => live_text_model(provider_name, "moonshot-v1-8k"),
+    // The whole `moonshot-v1-*` lineage disappeared from Moonshot's
+    // `/v1/models` on 2026-08-31 (404 `resource_not_found_error`);
+    // `kimi-k2.6` is the cheapest chat model still listed.
+    "moonshot" => live_text_model(provider_name, "kimi-k2.6"),
     // The whole step-1-*/step-2-* lineage was retired from StepFun's
     // `/v1/models` (confirmed 404 `model_invalid`); step-3.5-flash is the
     // current text-reasoning default.
@@ -806,13 +809,19 @@ where
     other => panic!("unknown provider in live harness: {other}"),
   };
 
-  let response = tokio::time::timeout(
-    Duration::from_secs(30),
-    provider.execute(&provider_request(&model)),
-  )
-  .await
-  .unwrap_or_else(|_| panic!("{provider_name}: live request timed out after 30s"))
-  .unwrap_or_else(|e| panic!("{provider_name}: live request failed: {e}"));
+  let mut request = provider_request(&model);
+  // Kimi K2.x rejects any temperature other than 1 with a 400 (the
+  // registry pins `kimi-k2.6` to `temperature: 1.0` for the same reason).
+  if model.starts_with("kimi-") {
+    request
+      .parameters
+      .insert("temperature".to_string(), json!(1.0));
+  }
+
+  let response = tokio::time::timeout(Duration::from_secs(30), provider.execute(&request))
+    .await
+    .unwrap_or_else(|_| panic!("{provider_name}: live request timed out after 30s"))
+    .unwrap_or_else(|e| panic!("{provider_name}: live request failed: {e}"));
 
   assert_text_non_empty(&response.content);
   assert_usage_populated(&response.usage, provider_name);
