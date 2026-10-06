@@ -15,7 +15,7 @@ async-trait = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
-jsonschema = "0.17"
+jsonschema = { version = "0.17", default-features = false }
 # `SandboxBackend::wrap_command` takes `&mut tokio::process::Command` — the
 # contract trait itself references this type, so `tokio` (process only; no
 # concrete backend spawns anything from this crate) is a real, non-dev

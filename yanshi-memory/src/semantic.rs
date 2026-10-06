@@ -141,10 +141,8 @@ impl SemanticMemory {
 
   /// Decode a BLOB back into a `Vec<f32>`.
   fn blob_to_vec(bytes: &[u8]) -> Vec<f32> {
-    bytes
-      .chunks_exact(4)
-      .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-      .collect()
+    let (chunks, _) = bytes.as_chunks::<4>();
+    chunks.iter().map(|c| f32::from_le_bytes(*c)).collect()
   }
 
   /// Cosine similarity in \[−1, 1\].  Returns `0.0` on zero-magnitude or

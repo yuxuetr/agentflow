@@ -103,7 +103,6 @@ urlencoding = "2.1"
 
 [dev-dependencies]
 tokio-test = "0.4"
-wiremock = "0.5"
 tempfile = "3.3"
 # P10.2.1: per-node latency benches sit alongside the existing
 # scheduler benches under benches/. `async_tokio` lets each

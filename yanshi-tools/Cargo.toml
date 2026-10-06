@@ -24,7 +24,7 @@ tokio = { workspace = true, features = ["full"] }
 reqwest = { workspace = true }
 tracing = "0.1"
 url = "2.5"
-jsonschema = "0.17"
+jsonschema = { version = "0.17", default-features = false }
 tempfile = "3"
 sha2 = "0.10"
 # S3.2: RLIMIT_CPU (+ RLIMIT_AS/RLIMIT_NPROC on macOS) via `setrlimit` in

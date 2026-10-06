@@ -324,8 +324,10 @@ pub async fn dispatch(args: WorkflowArgs) -> anyhow::Result<()> {
         }
       } else {
         let input_pairs = input
-          .chunks_exact(2)
-          .map(|chunk| (chunk[0].clone(), chunk[1].clone()))
+          .as_chunks::<2>()
+          .0
+          .iter()
+          .map(|[key, value]| (key.clone(), value.clone()))
           .collect();
         run::execute(
           workflow_file,
