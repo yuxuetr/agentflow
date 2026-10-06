@@ -2,7 +2,7 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Documentation](https://img.shields.io/badge/docs-available-green.svg)](docs/)
+[![Documentation](https://img.shields.io/badge/docs-manual-green.svg)](https://yuxuetr.github.io/agentflow/)
 
 > **A modular Rust agent framework for deterministic DAG workflows, agent-native execution loops, Skills, MCP tools, memory, tracing, and checkpointed recovery.**
 

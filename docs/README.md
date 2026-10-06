@@ -7,6 +7,10 @@ phase reports, old TODO trackers, implementation summaries, and stale backups
 have been removed from the active docs tree so this directory stays focused on
 working references.
 
+The curated manual built from this directory is published at
+<https://yuxuetr.github.io/agentflow/> (table of contents:
+[SUMMARY.md](SUMMARY.md); build locally with `mdbook build site`).
+
 ## Start Here
 
 - [CURRENT_STATUS.md](CURRENT_STATUS.md): current authoritative project status,
@@ -41,7 +45,7 @@ Live at the repository root:
 
 - [`RoadMap.md`](../RoadMap.md): N1–N10 status, including the closed N8/N9
   foundations and the N10 plugin, distributed, Web UI, and marketplace base.
-- [`TODOs.md`](../TODOs.md): active task queue derived from the evaluation and roadmap.
+- `TODOs.md` (maintainer-local, gitignored): active task queue derived from the evaluation and roadmap.
 
 Archived under `docs/archive/`:
 

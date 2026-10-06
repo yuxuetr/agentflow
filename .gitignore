@@ -16,6 +16,8 @@
 
 # Rust build artifacts
 target/
+# mdBook output (`mdbook build site`)
+/site/book/
 Cargo.lock
 
 # Frontend dependencies

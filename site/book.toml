@@ -1,0 +1,24 @@
+# AgentFlow manual. Build locally with `mdbook build site` (output in
+# site/book/) or preview with `mdbook serve site`; CI publishes it to GitHub
+# Pages via .github/workflows/docs.yml.
+
+[book]
+title = "AgentFlow Manual"
+description = "User and operator manual for AgentFlow, a Rust framework for DAG workflows and agent-native loops."
+language = "en"
+# Pages are written to be read on GitHub too, so they stay in docs/; the table
+# of contents is docs/SUMMARY.md.
+src = "../docs"
+
+[build]
+build-dir = "book"
+# A typo in SUMMARY.md must fail the build, not silently create an empty page.
+create-missing = false
+
+[preprocessor.repo-links]
+command = "python3 repo_links.py"
+
+[output.html]
+site-url = "/agentflow/"
+git-repository-url = "https://github.com/yuxuetr/agentflow"
+edit-url-template = "https://github.com/yuxuetr/agentflow/edit/main/docs/{path}"

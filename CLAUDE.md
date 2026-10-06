@@ -211,6 +211,10 @@ See `RoadMap.md` for the full plan; `docs/archive/PROJECT_EVALUATION_2026-05-19.
 
 ## File Organization
 
+### Documentation Site
+- `docs/` — all docs; `docs/SUMMARY.md` is the mdBook table of contents (only listed pages are published)
+- `site/book.toml` + `site/repo_links.py` — mdBook config + preprocessor that rewrites links leaving the book to GitHub URLs and fails on links to missing files; `.github/workflows/docs.yml` builds on every PR and deploys `main` to GitHub Pages (<https://yuxuetr.github.io/agentflow/>)
+
 ### Configuration Files
 - `Cargo.toml` — workspace configuration
 - `agentflow-cli/examples/workflows/` — example workflow definitions

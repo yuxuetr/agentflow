@@ -13,6 +13,7 @@ Last audited: 2026-05-14.
 |------|---------|---------------------------|---------|
 | `.github/workflows/quality.yml` | `push` to `main`/`master`, `pull_request`, `workflow_dispatch`, tag `v*` | Yes (`release-gate` job) | Format / clippy / per-crate tests / doc tests / curated feature checks / example smoke. |
 | `.github/workflows/llm-live.yml` | Daily cron (09:30 UTC) + `workflow_dispatch` | No — non-deterministic, costs money | Cross-provider live LLM smoke against the real OpenAI / Anthropic / Google / Moonshot / StepFun endpoints. |
+| `.github/workflows/docs.yml` | `push` to `main`, `pull_request`, `workflow_dispatch` | No | Builds the mdBook manual (`mdbook build site`) and, on `main`, deploys it to GitHub Pages. The build fails on any relative link in a chapter that points at a missing file (`site/repo_links.py`), which is why it runs on every PR rather than only on `docs/**` changes. |
 
 ### `quality.yml` jobs
 
