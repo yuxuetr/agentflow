@@ -110,7 +110,7 @@ contracts.
 
 ## Active Work
 
-The short-term execution queue remains in [`TODOs.md`](../TODOs.md). As of
+The short-term execution queue remains in `TODOs.md` (maintainer-local, gitignored). As of
 this update, **every segment through V has closed** — H, P-A, S, L, R, T,
 and U are archived to `docs/archive/`; V is closed but not yet archived
 (its full item-by-item record is still in `TODOs.md`). The most recent
@@ -163,4 +163,4 @@ The ongoing documentation-convergence convention:
 - [`PROJECT_EVALUATION_2026-05-01.md`](archive/PROJECT_EVALUATION_2026-05-01.md):
   historical module-by-module evaluation that informed the P0-P4 task queue.
 - [`RoadMap.md`](../RoadMap.md): roadmap and future direction.
-- [`TODOs.md`](../TODOs.md): active execution queue and task completion record.
+- `TODOs.md` (maintainer-local, gitignored): active execution queue and task completion record.

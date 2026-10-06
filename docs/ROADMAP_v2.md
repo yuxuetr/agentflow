@@ -377,7 +377,7 @@ When a v2 idea sharpens into something actionable:
 
 - [`RoadMap.md`](../RoadMap.md) — v1 direction + Later Tracks
   prose (`Later Tracks` items mirror the themes here).
-- [`TODOs.md`](../TODOs.md) — active execution queue. The
+- `TODOs.md` (maintainer-local, gitignored) — active execution queue. The
   current P10 segment is the v1.0-rc.1 → v1.0 hardening arc;
   P11+ slots are reserved for promoted v2 items.
 - [`docs/STABILITY.md`](STABILITY.md) — wire-shape promises

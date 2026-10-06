@@ -347,6 +347,7 @@ data:
       - id: extract_data
         type: Custom
         # ... workflow definition
+```
 
 ## Complete Deployment Example
 

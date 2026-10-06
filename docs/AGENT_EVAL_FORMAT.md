@@ -272,7 +272,7 @@ machine-readable envelope.
 | `skipped` | Case was filtered out (`--filter`, `--skill`, manifest gate, etc.). Skipped cases do not count toward pass/fail. |
 
 `stop_reason` values map 1:1 to `AgentStopReason` variants (see
-[`agentflow-agents/src/runtime.rs`](../agentflow-agents/src/runtime.rs))
+[`agentflow-agent-spi/src/runtime.rs`](../agentflow-agent-spi/src/runtime.rs))
 plus the new `CostLimitExceeded` value introduced by the eval
 harness when `cost_limit_usd` is crossed.
 
@@ -407,7 +407,7 @@ See `docs/STABILITY.md` for tier definitions.
 - `docs/AGENT_RUNTIME.md` — `AgentStep`, `AgentStopReason`,
   `RuntimeLimits` reference.
 - `docs/STABILITY.md` — what "stable" means for the assertion DSL.
-- [`agentflow-agents/src/runtime.rs`](../agentflow-agents/src/runtime.rs) —
+- [`agentflow-agent-spi/src/runtime.rs`](../agentflow-agent-spi/src/runtime.rs) —
   source of truth for `AgentStopReason` and `RuntimeLimits`.
 - [`agentflow-rag/src/eval/`](../agentflow-rag/src/eval/) — implementation
   reference for the JSONL + manifest + runner pattern.

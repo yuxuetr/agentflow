@@ -151,7 +151,7 @@ Real-time resource usage tracking and monitoring.
 - Fast mode for performance-critical scenarios
 
 **Code Added:** 581 lines
-**Documentation:** [RESOURCE_MANAGEMENT.md](./RESOURCE_MANAGEMENT.md) (650+ lines)
+**Documentation:** [RESOURCE_MANAGEMENT.md](archive/RESOURCE_MANAGEMENT_2026-08-12-pre-w5.3.md) (650+ lines)
 
 **Example:**
 ```rust
@@ -312,7 +312,7 @@ Special thanks to the Rust community for excellent libraries (tokio, serde, this
 ### Core Guides
 - [RETRY_MECHANISM.md](./RETRY_MECHANISM.md) - Retry configuration
 - [WORKFLOW_DEBUGGING.md](./WORKFLOW_DEBUGGING.md) - Debug tools
-- [RESOURCE_MANAGEMENT.md](./RESOURCE_MANAGEMENT.md) - Resource limits
+- [RESOURCE_MANAGEMENT.md](archive/RESOURCE_MANAGEMENT_2026-08-12-pre-w5.3.md) - Resource limits
 - [MIGRATION_GUIDE_v0.2.0.md](./MIGRATION_GUIDE_v0.2.0.md) - Upgrade guide
 
 ### Examples

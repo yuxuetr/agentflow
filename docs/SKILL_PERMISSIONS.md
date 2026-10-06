@@ -7,11 +7,11 @@ at runtime. The model complements the existing `ToolPermission` /
 
 ## Capabilities vs. Permissions
 
-[`ToolPermission`](../agentflow-tools/src/tool.rs) is a **declarative** label
+[`ToolPermission`](../agentflow-tool/src/tool.rs) is a **declarative** label
 attached to tool metadata. It is suitable for human inspection and prompt
 descriptions, but is too coarse-grained to drive OS-level enforcement.
 
-[`Capability`](../agentflow-tools/src/capability.rs) is the **runtime-facing**
+[`Capability`](../agentflow-tool/src/capability.rs) is the **runtime-facing**
 primitive. Each variant is intended to map onto sandbox profiles
 (`sandbox-exec` rules on macOS, seccomp filters / mount namespaces on Linux):
 

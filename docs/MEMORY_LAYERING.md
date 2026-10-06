@@ -16,7 +16,7 @@ conflate but have very different lifetime, retrieval, and privacy
 requirements. This document is the v1 boundary contract between those
 four kinds so that:
 
-1. Implementations of [`MemoryStore`](../agentflow-memory/src/store.rs)
+1. Implementations of [`MemoryStore`](../agentflow-store-spi/src/store.rs)
    stay focused on one layer at a time.
 2. Agents (`ReActAgent`, `PlanExecuteAgent`, supervisors) get a
    deterministic precedence when more than one layer can answer the
@@ -149,7 +149,7 @@ grace window — active facts are never touched, even at a zero cutoff.
 
 ## Layer trait surface
 
-The existing [`MemoryStore`](../agentflow-memory/src/store.rs)
+The existing [`MemoryStore`](../agentflow-store-spi/src/store.rs)
 trait covers the Session layer well today. P4.7 extends the trait
 surface conservatively: rather than adding methods to `MemoryStore`
 (which would force every backend to stub the methods it doesn't
@@ -397,7 +397,7 @@ See `docs/STABILITY.md` for the stability tier definitions.
 - `docs/AGENT_RUNTIME.md` — how the agent loop consumes memory.
 - `docs/RAG_EVAL.md` — the eval harness for the authored corpus.
 - `docs/AGENT_SDK.md` — `MemorySummaryBackend` extension trait.
-- [`agentflow-memory/src/store.rs`](../agentflow-memory/src/store.rs) —
+- [`agentflow-store-spi/src/store.rs`](../agentflow-store-spi/src/store.rs) —
   the trait this document extends.
 - [`agentflow-memory/src/semantic.rs`](../agentflow-memory/src/semantic.rs) —
   the current `SemanticMemory` implementation.

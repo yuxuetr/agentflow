@@ -425,7 +425,7 @@ Before deploying v0.2.0 to production:
 
 - [RETRY_MECHANISM.md](./RETRY_MECHANISM.md) - Retry configuration guide
 - [WORKFLOW_DEBUGGING.md](./WORKFLOW_DEBUGGING.md) - Debugging tools guide
-- [RESOURCE_MANAGEMENT.md](./RESOURCE_MANAGEMENT.md) - Resource management guide
+- [RESOURCE_MANAGEMENT.md](archive/RESOURCE_MANAGEMENT_2026-08-12-pre-w5.3.md) - Resource management guide
 - [RELEASE_NOTES_v0.2.0.md](./RELEASE_NOTES_v0.2.0.md) - Complete changelog
 
 ---

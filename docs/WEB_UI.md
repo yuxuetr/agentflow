@@ -48,7 +48,7 @@ is the kind of drift this decision exists to prevent.
   `agentflow harness replay --speed 2x` from P10.10.2).
 - Trace compare polish (better diffs, more event types covered).
 - Long-run perf polish — including the
-  [P10.17.3 server-side `?filter=` pre-filter](../TODOs.md)
+  P10.17.3 server-side `?filter=` pre-filter
   for runs with >10k events.
 - Preference UI wiring to `/v1/preferences` (P10.17.2) so
   per-user prefs sync across browsers.

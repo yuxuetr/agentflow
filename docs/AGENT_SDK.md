@@ -79,9 +79,9 @@ pub trait AgentRuntime: Send {
 ```
 
 **What it does.** Owns one full agent invocation. The runtime consumes an
-[`AgentContext`](../agentflow-agents/src/runtime.rs) (session id, input, model,
+[`AgentContext`](../agentflow-agent-spi/src/runtime.rs) (session id, input, model,
 persona, limits, cancellation token) and returns a structured
-[`AgentRunResult`](../agentflow-agents/src/runtime.rs) (answer, stop reason,
+[`AgentRunResult`](../agentflow-agent-spi/src/runtime.rs) (answer, stop reason,
 step trace, event stream).
 
 **Contract.** Implementations MUST:

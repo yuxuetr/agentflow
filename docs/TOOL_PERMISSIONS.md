@@ -335,7 +335,7 @@ the integration tests in `agentflow-tools/tests/sandbox_macos.rs` and
 The subprocess plugin runtime in `agentflow-core::plugin` reuses the same
 backends (`MacosSandboxExecBackend`, `LinuxSeccompBackend`,
 `NoopSandboxBackend`) through a thin adapter (`OsSandboxPluginPreparer`,
-in `agentflow-cli/src/executor/plugin.rs`). The adapter translates a
+in `agentflow-config/src/executor/plugin.rs`). The adapter translates a
 plugin manifest's `[plugin.capabilities]` block into the same
 `Vec<Capability> + SandboxScope` pair that built-in tools use, then calls
 `SandboxBackend::wrap_command` on the spawn `Command`. See
@@ -391,7 +391,7 @@ Behavioral rules:
 The install-time policy above gates *whether* a plugin is allowed onto
 disk. P5.4 extends the same per-profile defaults to *how* the plugin is
 spawned by the workflow runner. The decision lives in
-[`agentflow-cli/src/executor/plugin.rs::select_preparer`](../agentflow-cli/src/executor/plugin.rs)
+[`agentflow-config/src/executor/plugin.rs::select_preparer`](../agentflow-config/src/executor/plugin.rs)
 and is consulted lazily by `PluginWorkflowNode::ensure_loaded` before
 the host subprocess is started.
 
@@ -403,7 +403,7 @@ the host subprocess is started.
 
 Behavioral rules:
 
-- The active [`SecurityProfile`](../agentflow-tools/src/security_profile.rs)
+- The active [`SecurityProfile`](../agentflow-tool/src/security_profile.rs)
   is resolved from `AGENTFLOW_SECURITY_PROFILE` (defaults to `local`),
   matching the install path.
 - `AGENTFLOW_PLUGIN_SANDBOX=1` is the legacy force-on flag. Under `dev`
@@ -428,5 +428,5 @@ The two policy gates (install + spawn) draw from the same
 `PluginPolicy::for_profile` defaults, so a plugin denied at install
 under `production` is also denied at spawn — the dual gate is defense
 in depth, not divergence. Unit tests in
-`agentflow-cli/src/executor/plugin.rs::tests` cover the full
+`agentflow-config/src/executor/plugin.rs::tests` cover the full
 5-row × 4-flag-combo matrix.
